@@ -1,0 +1,7 @@
+error: announce: `Greet!` was invoked with no continuation; expected `Greet! { [Greet!, next!, ..] .. }`
+ --> tests/ui/no_continuation.rs:1:1
+  |
+1 | announce_test_defs::kinds::Greet! { [announce_test_defs::kinds::Greet!] }
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the macro `announce_test_defs::kinds::Greet` (in Nightly builds, run with -Z macro-backtrace for more info)

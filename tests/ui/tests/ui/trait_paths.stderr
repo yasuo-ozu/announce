@@ -1,0 +1,17 @@
+error: announce: trait paths must be absolute (`::core::fmt::Display`, `crate::Base`, `?::core::marker::Sized`); a repeater only covers types, not traits
+ --> tests/ui/trait_paths.rs:5:16
+  |
+5 | pub trait Sub: Base {}
+  |                ^^^^
+
+error: announce: trait paths must be absolute (`::core::fmt::Display`, `crate::Base`, `?::core::marker::Sized`); a repeater only covers types, not traits
+  --> tests/ui/trait_paths.rs:10:16
+   |
+10 |     fn show<T: std::fmt::Display>(&self, t: T);
+   |                ^^^^^^^^^^^^^^^^^
+
+error: announce: trait paths must be absolute (`::core::fmt::Display`, `crate::Base`, `?::core::marker::Sized`); a repeater only covers types, not traits
+  --> tests/ui/trait_paths.rs:14:24
+   |
+14 | pub struct Unsized<T: ?Sized>(pub ::std::boxed::Box<T>);
+   |                        ^^^^^

@@ -1,0 +1,19 @@
+[package]
+name = "announce-macros"
+description = "Proc macros of announce (use the `announce` crate instead)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { workspace = true, features = ["visit", "visit-mut"] }
+proc-macro2.workspace = true
+template-quote.workspace = true
+announce-helper.workspace = true
+type-leak = "0.7"

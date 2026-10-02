@@ -1,0 +1,20 @@
+[workspace]
+members = ["announce", "announce-macros", "announce-helper", "announce-std", "tests/defs", "tests/user", "tests/derive"]
+exclude = ["tests/ui"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.71"
+license = "MIT"
+authors = ["Yasuo Ozu <yasuo@ozu.email>"]
+repository = "https://github.com/yasuo-ozu/ozu"
+
+[workspace.dependencies]
+syn = { version = "2.0.100", features = ["full", "extra-traits"] }
+proc-macro2 = "1"
+template-quote = "0.4"
+announce = { path = "announce", version = "0.1.0" }
+announce-macros = { path = "announce-macros", version = "0.1.0" }
+announce-helper = { path = "announce-helper", version = "0.1.0" }

@@ -1,0 +1,7 @@
+error: announce: a transformer must come after the definition it transforms
+ --> tests/ui/gather_loop.rs:5:1
+  |
+5 | gathered! { [gathered!] (::announce::signature_only) G }
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the macro `::announce::signature_only` (in Nightly builds, run with -Z macro-backtrace for more info)

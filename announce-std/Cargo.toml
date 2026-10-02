@@ -1,0 +1,16 @@
+[package]
+name = "announce-std"
+description = "announce trampolines for std/core traits"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[features]
+default = ["std"]
+std = []
+
+[dependencies]
+announce.workspace = true

@@ -1,0 +1,7 @@
+error: announce: malformed trampoline input to `Greet!`; expected `Greet! { [Greet!, next!, ..] .. }` (optionally preceded by a global options group `(..)`), where each list element is `path::to::macro!` or `#[derive(path)]`/`#[attr]` optionally followed by a name
+ --> tests/ui/malformed.rs:1:1
+  |
+1 | announce_test_defs::kinds::Greet! { not a list }
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the macro `announce_test_defs::kinds::Greet` (in Nightly builds, run with -Z macro-backtrace for more info)

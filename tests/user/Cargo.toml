@@ -1,0 +1,16 @@
+[package]
+name = "announce-test-user"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.71"
+publish = false
+
+[features]
+# The consumer enables `x`; the definitions crate does not (cfg test).
+default = ["x"]
+x = []
+
+[dependencies]
+announce.workspace = true
+announce-test-defs = { path = "../defs" }
+announce-test-derive = { path = "../derive" }

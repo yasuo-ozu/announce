@@ -1,0 +1,13 @@
+error: announce: a transformer cannot be the last element of the continuation list
+ --> tests/ui/transformer_misuse.rs:2:1
+  |
+2 | announce_test_defs::kinds::Greet! { [announce_test_defs::kinds::Greet!, ::announce::signature_only!] }
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the macro `::announce::signature_only` which comes from the expansion of the macro `announce_test_defs::kinds::Greet` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: `signature_only` is not a definition-side option: transformers are chosen by the caller, e.g. `F! { [F!, ::announce::signature_only!, callback!] .. }`
+ --> tests/ui/transformer_misuse.rs:5:22
+  |
+5 | #[announce::announce(signature_only = true)]
+  |                      ^^^^^^^^^^^^^^

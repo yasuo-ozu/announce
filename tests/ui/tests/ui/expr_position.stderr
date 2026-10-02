@@ -1,0 +1,18 @@
+error: announce: the derive/attribute route (`#[derive(..)]`/`#[attr]` in the list) emits items and cannot be used in expression position (`(expr)`)
+ --> tests/ui/expr_position.rs:5:13
+  |
+5 |       let _ = announce_test_defs::kinds::Greet! {
+  |  _____________^
+6 | |         (expr) [announce_test_defs::kinds::Greet!, #[derive(::announce_test_defs::conflict::Parse)] N, cb!]
+7 | |     };
+  | |_____^
+  |
+  = note: this error originates in the macro `announce_test_defs::kinds::Greet` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: unused macro definition: `cb`
+ --> tests/ui/expr_position.rs:1:14
+  |
+1 | macro_rules! cb { ($($t:tt)*) => { 0 }; }
+  |              ^^
+  |
+  = note: `#[warn(unused_macros)]` (part of `#[warn(unused)]`) on by default

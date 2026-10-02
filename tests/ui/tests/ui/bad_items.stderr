@@ -1,0 +1,17 @@
+error: #[announce] supports struct, enum, union, trait, type alias and inline mod items
+ --> tests/ui/bad_items.rs:2:1
+  |
+2 | fn f() {}
+  | ^^^^^^^^^
+
+error: unknown announce option; expected one of `macro_name`, `export_name`, `mock`, `repeater`, `allow_primitive`, `allow_std_prelude`, `crate`, `emit_item`, `marker`, `meta` (a bare path is a check)
+ --> tests/ui/bad_items.rs:4:22
+  |
+4 | #[announce::announce(macro_nam = X)]
+  |                      ^^^^^^^^^
+
+error: #[announce] supports only inline modules (`mod m { .. }`), not `mod m;`
+ --> tests/ui/bad_items.rs:8:1
+  |
+8 | mod m;
+  | ^^^^^^
