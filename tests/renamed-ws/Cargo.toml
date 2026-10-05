@@ -1,0 +1,10 @@
+[package]
+name = "announce-test-renamed-ws"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.71"
+publish = false
+
+[dependencies]
+# Rename inherited from [workspace.dependencies] (`ann-ws = { package = "announce", .. }`).
+ann-ws.workspace = true

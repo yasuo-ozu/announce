@@ -52,9 +52,11 @@ impl Default for Options {
 
 impl Options {
     pub fn krate(&self) -> Path {
+        // `crate = ..` wins; otherwise the name the caller's Cargo.toml gives
+        // the `announce` dependency (renames included), else `::announce`.
         self.krate
             .clone()
-            .unwrap_or_else(|| syn::parse_quote!(::announce))
+            .unwrap_or_else(crate::cratepath::default_crate_path)
     }
 }
 

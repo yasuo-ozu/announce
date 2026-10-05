@@ -1,5 +1,5 @@
 [workspace]
-members = ["announce", "announce-macros", "announce-helper", "announce-std", "tests/defs", "tests/user", "tests/derive"]
+members = ["announce", "announce-macros", "announce-helper", "announce-std", "tests/defs", "tests/user", "tests/derive", "tests/renamed", "tests/renamed-ws"]
 exclude = ["tests/ui"]
 resolver = "2"
 
@@ -12,6 +12,8 @@ authors = ["Yasuo Ozu <yasuo@ozu.email>"]
 repository = "https://github.com/yasuo-ozu/ozu"
 
 [workspace.dependencies]
+# Renamed form, used by tests/renamed-ws (workspace-inherited rename).
+ann-ws = { package = "announce", path = "announce", version = "0.1.0" }
 syn = { version = "2.0.100", features = ["full", "extra-traits"] }
 proc-macro2 = "1"
 template-quote = "0.4"

@@ -42,7 +42,11 @@
 //!
 //! - `macro_name = Ident`: name of the emitted macro (default: the item's).
 //! - `export_name = Ident`: name of the hidden `#[macro_export]` macro.
-//! - `crate = path`: path to this crate for generated code (default `::announce`).
+//! - `crate = path`: path to this crate for generated code. By default it is
+//!   read from the caller's `Cargo.toml`, so a renamed dependency
+//!   (`ann = { package = "announce", .. }`, also workspace-inherited) works
+//!   without this option; it falls back to `::announce`. Library wrappers that
+//!   re-export announce pass their re-export here.
 //! - `repeater = crate::path::Repeater`: required when the item has types that do
 //!   not resolve outside this crate (relative paths such as `Local`). Your
 //!   trait `pub trait Repeater<const ID: u64, const I: usize, G: ?Sized> { type Type: ?Sized; }`

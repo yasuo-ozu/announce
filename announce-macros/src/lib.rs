@@ -1,6 +1,7 @@
 //! Proc macros behind [`announce`](https://docs.rs/announce). Use them through the
 //! `announce` crate; the paths here are not a stable interface.
 
+mod cratepath;
 mod generate;
 mod leak;
 mod options;
