@@ -79,19 +79,16 @@
 //! A bang chain expands hop by hop into the final callback's output, so the
 //! first call can be anywhere the callback's output fits:
 //!
-//! | position | plain payload | payload containing `$` | derive/attribute route |
-//! |---|---|---|---|
-//! | item / statement | yes | yes | yes |
-//! | expression | yes | with the global option `(expr)` | no (error with `(expr)`) |
-//! | type, pattern | yes | no | no |
+//! | position | bang chain (any payload) | derive/attribute route |
+//! |---|---|---|
+//! | item / statement | yes | yes |
+//! | expression, type, pattern | yes | no |
 //!
 //! A payload containing `$` (e.g. a module holding a `macro_rules!`) is
-//! un-escaped by helper `macro_rules!` items at each hop. In expression
-//! position, pass `(expr)` so the helpers are wrapped in blocks:
-//! `F! { (expr) [F!, cb!] REST }` (forwarded by every hop). Type and pattern
-//! positions allow neither items nor blocks, so `$` payloads cannot be used
-//! there. The derive/attribute route emits an item (the dummy enum) and has
-//! no expression form.
+//! un-escaped by the trampoline itself (it re-invokes itself once with a `$`
+//! argument), so no helper items are emitted. The derive/attribute route emits
+//! an item (the dummy enum) and has no expression form; the global option
+//! `(expr)` turns that into a clear error and otherwise has no effect.
 //!
 //! # Several announcements of one item
 //!

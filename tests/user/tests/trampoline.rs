@@ -475,3 +475,22 @@ fn options_are_forwarded() {
     };
     assert_eq!(norm(o), "expr,my_opt(1)");
 }
+
+// `$`-payloads no longer emit helper items: they work in type position and in
+// expression position without `(expr)`.
+macro_rules! dollar_ty_cb {
+    ($($t:tt)*) => { u64 };
+}
+type DollarInTypePosition = ::announce_test_defs::kinds::with_macro! { [::announce_test_defs::kinds::with_macro!, dollar_ty_cb!] };
+
+#[test]
+fn dollar_payloads_in_any_position() {
+    let x: DollarInTypePosition = 5;
+    assert_eq!(x, 5u64);
+    let m: &str = ::announce_test_defs::kinds::with_macro! { [::announce_test_defs::kinds::with_macro!, expr_cb!] };
+    assert!(norm(m).contains("macro_rules!sum{($($x:expr),*)=>{0$(+$x)*};}"), "{}", m);
+    let both = ::announce_test_defs::kinds::with_macro! {
+        [::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro2!, expr_two!]
+    };
+    assert!(norm(both[1]).contains("modwith_macro{"));
+}

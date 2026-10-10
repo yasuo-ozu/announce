@@ -31,10 +31,10 @@ pub fn hex(random: u64) -> String {
     format!("{:016x}", random)
 }
 
-/// Escapes every `$` as `$__announce_d`, recursively (DESIGN.md section 4: the
+/// Escapes every `$` as `$__dollar`, recursively (DESIGN.md section 4: the
 /// payload is un-escaped by a short-lived `macro_rules!` at each hop).
 fn escape_dollar(ts: TokenStream, found: &mut bool) -> TokenStream {
-    let d = Ident::new("__announce_d", Span::call_site());
+    let d = Ident::new("__dollar", Span::call_site());
     let mut out = Vec::new();
     for tt in ts {
         match tt {
@@ -73,8 +73,8 @@ fn crate_to_dollar_crate(ts: TokenStream) -> TokenStream {
                 let prev = i.checked_sub(1).and_then(|j| tts.get(j));
                 let prev2 = i.checked_sub(2).and_then(|j| tts.get(j));
                 let after_in_or_sep = match prev {
-                    // `pub(in crate::m)`, and an escaped `$crate` (`$ __announce_d crate`, AUDIT #2)
-                    Some(TokenTree::Ident(p)) => p == "in" || p == "__announce_d",
+                    // `pub(in crate::m)`, and an escaped `$crate` (`$ __dollar crate`, AUDIT #2)
+                    Some(TokenTree::Ident(p)) => p == "in" || p == "__dollar",
                     // `a::crate` (a path separator), but not `x: crate::T` (AUDIT #1)
                     Some(TokenTree::Punct(p)) if p.as_char() == ':' => matches!(
                         prev2,
@@ -210,68 +210,35 @@ fn marker_impl(item: &Item, opts: &Options, krate: &syn::Path) -> TokenStream {
 }
 
 /// The fixed arm set of DESIGN.md section 4.1.
-/// One payload the generated macro can pass on, with its global-options
-/// pattern (none are defined at the moment, see `arms`).
+/// What the generated macro passes on: META and the (escaped) payload.
 pub struct Variant {
-    /// Pattern for the global options group (empty: no group).
-    pub opts_pat: TokenStream,
-    /// Options group forwarded to the next continuation.
-    pub opts_out: TokenStream,
     pub meta: TokenStream,
     pub payload: TokenStream,
-    pub needs_unescape: bool,
-    /// Global option `(expr)`: the caller is in expression position, so the
-    /// `$` helpers are wrapped in blocks and the derive route is an error.
-    pub expr: bool,
+    /// The payload contains `$`, escaped as `$__dollar`.
+    pub needs_dollar: bool,
 }
 
+/// The arms that pass the definition on, for every (head shape × next
+/// shape) (DESIGN.md section 4.1).
+///
+/// A payload containing `$` is escaped as `$__dollar`, and the arms that pass
+/// it on require a leading `@__announce_dollar { $ }`: `$__dollar:tt` binds a
+/// real `$`, so substituting it un-escapes the payload in place. The caller
+/// does not write the prefix: a bang-head call re-invokes the trampoline
+/// once through its own path (the head) with the prefix added, and
+/// `announce_helper::redirect` adds it for the derive route. No helper items
+/// are emitted, so the expansion is a single macro call in every position
+/// (DESIGN.md section 4.6). Payloads without `$` accept the prefix optionally
+/// and ignore it.
 fn variant_arms(fallback: &Ident, v: &Variant) -> TokenStream {
-    let Variant { opts_pat, opts_out, meta, payload, needs_unescape, expr } = v;
-    // AUDIT #3: a payload containing `$` is escaped (`$__announce_d`). It is
-    // un-escaped by two helpers so that the payload and REST (which may
-    // contain real `$(..)*` from earlier entries or user code) only ever
-    // appear as macro *input*, never inside a macro definition:
-    // `__announce_tmp` binds `$__announce_d = $` and defines
-    // `__announce_tmp2`, which receives `{payload} {rest}` as input.
-    let (pl, rs) = if *needs_unescape {
-        (
-            quote! { $__announce_d($__announce_d __announce_p)* },
-            quote! { $__announce_d($__announce_d __announce_r)* },
-        )
+    let Variant { meta, payload, needs_dollar } = v;
+    let prefix = if *needs_dollar {
+        quote! { @__announce_dollar { $__dollar:tt } }
     } else {
-        (payload.clone(), quote! { $($r)* })
+        quote! { $( @__announce_dollar { $__announce_ignored:tt } )? }
     };
-    // In expression position (`(expr)`), each level that defines a helper is
-    // wrapped in a block: a block is an expression and may contain items.
-    let block = |ts: TokenStream| -> TokenStream {
-        if *expr {
-            quote! { { #ts } }
-        } else {
-            ts
-        }
-    };
-    let wrap = |body: TokenStream| -> TokenStream {
-        if *needs_unescape {
-            let inner = block(quote! {
-                macro_rules! __announce_tmp2 {
-                    ({ $__announce_d($__announce_d __announce_p:tt)* } { $__announce_d($__announce_d __announce_r:tt)* }) => {
-                        #body
-                    };
-                }
-                __announce_tmp2! { { #payload } $__announce_rest }
-            });
-            block(quote! {
-                macro_rules! __announce_tmp {
-                    ($__announce_rest:tt $__announce_d:tt) => { #inner };
-                }
-                __announce_tmp! { { $($r)* } $ }
-            })
-        } else {
-            body
-        }
-    };
-    let derive_in_expr = "announce: the derive/attribute route (`#[derive(..)]`/`#[attr]` in the list) \
-                          emits items and cannot be used in expression position (`(expr)`)";
+    let opts_pat = quote! { $( ( $($__announce_o:tt)* ) )? };
+    let opts_out = quote! { $( ( $($__announce_o)* ) )? };
     let heads: Vec<(TokenStream, TokenStream)> = vec![
         (
             quote! { $($hp:ident)? $(:: $hs:ident)* ! },
@@ -284,65 +251,59 @@ fn variant_arms(fallback: &Ident, v: &Variant) -> TokenStream {
     ];
     let mut out = TokenStream::new();
     for (hpat, key) in &heads {
-        let bang = wrap(quote! {
+        let bang = quote! {
             $($np)? $(:: $ns)* ! {
                 #opts_out
                 [ $($np)? $(:: $ns)* ! $($tail)* ]
-                #key => [ #meta ] { #pl }
-                #rs
+                #key => [ #meta ] { #payload }
+                $($r)*
             }
-        });
-        let named = if *expr {
-            quote! { compile_error! { #derive_in_expr } }
-        } else { wrap(quote! {
+        };
+        let named = quote! {
             #[$($na)*]
             #[allow(dead_code, non_camel_case_types)]
             enum $nid {
                 __AnnouncePayload = (stringify! {
                     #opts_out
                     [ #[$($na)*] $nid $(, $($tail)*)? ]
-                    #key => [ #meta ] { #pl }
-                    #rs
+                    #key => [ #meta ] { #payload }
+                    $($r)*
                 }, 0).1
             }
-        }) };
-        let anon = if *expr {
-            quote! { compile_error! { #derive_in_expr } }
-        } else { wrap(quote! {
+        };
+        let anon = quote! {
             #[$($na)*]
             #[allow(dead_code, non_camel_case_types)]
             enum #fallback {
                 __AnnouncePayload = (stringify! {
                     #opts_out
                     [ #[$($na)*] #fallback $($tail)* ]
-                    #key => [ #meta ] { #pl }
-                    #rs
+                    #key => [ #meta ] { #payload }
+                    $($r)*
                 }, 0).1
             }
-        }) };
+        };
         out.extend(quote! {
-            (#opts_pat [ #hpat , $($np:ident)? $(:: $ns:ident)* ! $($tail:tt)* ] $($r:tt)*) => { #bang };
-            (#opts_pat [ #hpat , #[$($na:tt)*] $nid:ident $(, $($tail:tt)*)? ] $($r:tt)*) => { #named };
-            (#opts_pat [ #hpat , #[$($na:tt)*] $($tail:tt)* ] $($r:tt)*) => { #anon };
+            (#prefix #opts_pat [ #hpat , $($np:ident)? $(:: $ns:ident)* ! $($tail:tt)* ] $($r:tt)*) => { #bang };
+            (#prefix #opts_pat [ #hpat , #[$($na:tt)*] $nid:ident $(, $($tail:tt)*)? ] $($r:tt)*) => { #named };
+            (#prefix #opts_pat [ #hpat , #[$($na:tt)*] $($tail:tt)* ] $($r:tt)*) => { #anon };
         });
     }
     out
 }
 
-/// The fixed arm set of DESIGN.md section 4.1, per payload variant, plus the
-/// global-options arms of section 4.5.
+/// The fixed arm set of DESIGN.md section 4.1, plus error arms.
 fn arms(self_name: &str, fallback: &Ident, plain: &Variant) -> TokenStream {
     let mut out = TokenStream::new();
-    let expr = Variant {
-        // `expr` must be the first option; the others are forwarded.
-        opts_pat: quote! { (expr $(, $($__announce_eo:tt)*)?) },
-        opts_out: quote! { (expr $(, $($__announce_eo)*)?) },
-        meta: plain.meta.clone(),
-        payload: plain.payload.clone(),
-        needs_unescape: plain.needs_unescape,
-        expr: true,
-    };
-    out.extend(variant_arms(fallback, &expr));
+    let any_prefix = quote! { $( @__announce_dollar { $__announce_ignored:tt } )? };
+    // The derive/attribute route emits an item (the dummy enum): an error in
+    // expression position (`(expr)`, section 4.6). Payload-free arms.
+    let derive_in_expr = "announce: the derive/attribute route (`#[derive(..)]`/`#[attr]` in the list) \
+                          emits items and cannot be used in expression position (`(expr)`)";
+    out.extend(quote! {
+        (#any_prefix (expr $($__announce_eo:tt)*) [ $($hp:ident)? $(:: $hs:ident)* ! , #[$($na:tt)*] $($tail:tt)* ] $($r:tt)*) => { compile_error! { #derive_in_expr } };
+        (#any_prefix (expr $($__announce_eo:tt)*) [ #[$($ha:tt)*] $($hid:ident)? , #[$($na:tt)*] $($tail:tt)* ] $($r:tt)*) => { compile_error! { #derive_in_expr } };
+    });
     out.extend(variant_arms(fallback, plain));
     let no_cont = format!(
         "announce: `{0}!` was invoked with no continuation; expected `{0}! {{ [{0}!, next!, ..] .. }}`",
@@ -355,8 +316,24 @@ fn arms(self_name: &str, fallback: &Ident, plain: &Variant) -> TokenStream {
         self_name
     );
     out.extend(quote! {
-        ($( ($($o:tt)*) )? [ $($hp:ident)? $(:: $hs:ident)* ! $(,)? ] $($r:tt)*) => { compile_error! { #no_cont } };
-        ($( ($($o:tt)*) )? [ #[$($ha:tt)*] $($hid:ident)? $(,)? ] $($r:tt)*) => { compile_error! { #no_cont } };
+        (#any_prefix $( ($($o:tt)*) )? [ $($hp:ident)? $(:: $hs:ident)* ! $(,)? ] $($r:tt)*) => { compile_error! { #no_cont } };
+        (#any_prefix $( ($($o:tt)*) )? [ #[$($ha:tt)*] $($hid:ident)? $(,)? ] $($r:tt)*) => { compile_error! { #no_cont } };
+    });
+    if plain.needs_dollar {
+        let no_dollar = format!(
+            "announce: `{0}!` carries `$` tokens and was invoked through the derive/attribute route \
+             without the `@__announce_dollar {{ $ }}` prefix; route it with `announce_helper::redirect`",
+            self_name
+        );
+        out.extend(quote! {
+            // Re-invoke through the head path, adding a real `$` (see `variant_arms`).
+            ($( ($($o:tt)*) )? [ $($hp:ident)? $(:: $hs:ident)* ! $($l:tt)* ] $($r:tt)*) => {
+                $($hp)? $(:: $hs)* ! { @__announce_dollar { $ } $( ($($o)*) )? [ $($hp)? $(:: $hs)* ! $($l)* ] $($r)* }
+            };
+            ($( ($($o:tt)*) )? [ #[$($ha:tt)*] $($l:tt)* ] $($r:tt)*) => { compile_error! { #no_dollar } };
+        });
+    }
+    out.extend(quote! {
         ($($t:tt)*) => { compile_error! { #malformed } };
     });
     out
@@ -404,19 +381,12 @@ pub fn trampoline(
         meta_items.push(extra_meta);
     }
     let meta = crate_to_dollar_crate(quote! { #(#meta_items),* });
-    let mut needs_unescape = false;
-    let payload = crate_to_dollar_crate(escape_dollar(payload, &mut needs_unescape));
+    let mut needs_dollar = false;
+    let payload = crate_to_dollar_crate(escape_dollar(payload, &mut needs_dollar));
     // Global options other than a leading `expr` are not interpreted by the
     // trampoline; they are forwarded unchanged (a namespace for helpers, e.g.
     // `gather`'s bookkeeping; AUDIT 3 #9).
-    let plain = Variant {
-        opts_pat: quote! { $( ( $($__announce_o:tt)* ) )? },
-        opts_out: quote! { $( ( $($__announce_o)* ) )? },
-        meta,
-        payload,
-        needs_unescape,
-        expr: false,
-    };
+    let plain = Variant { meta, payload, needs_dollar };
     let arms = arms(&macro_name.to_string(), &fallback, &plain);
     quote! {
         #[doc(hidden)]

@@ -497,6 +497,16 @@ pub struct Input {
 
 impl Parse for Input {
     fn parse(input: ParseStream) -> Result<Self> {
+        // A `@__announce_dollar { $ }` prefix is meant for trampolines; skip
+        // it if a callback receives it.
+        if input.peek(Token![@]) {
+            let fork = input.fork();
+            let _: Token![@] = fork.parse()?;
+            if fork.parse::<Ident>().is_ok_and(|i| i == "__announce_dollar") {
+                let _g: proc_macro2::Group = fork.parse()?;
+                syn::parse::discouraged::Speculative::advance_to(input, &fork);
+            }
+        }
         let options = if input.peek(syn::token::Paren) {
             let o;
             syn::parenthesized!(o in input);
@@ -785,7 +795,12 @@ pub fn payload(item: TokenStream) -> Option<TokenStream> {
 /// ```
 pub fn redirect(item: TokenStream, target: &Path) -> Option<TokenStream> {
     let body = payload(item)?;
-    Some(quote! { #target ! { #body } })
+    // A trampoline whose payload contains `$` needs a real `$` from its
+    // caller (`@__announce_dollar { $ }`, DESIGN.md section 4); the others
+    // ignore it. The derive route cannot re-invoke the trampoline itself, so
+    // the prefix is always added here.
+    let dollar = proc_macro2::Punct::new('$', proc_macro2::Spacing::Alone);
+    Some(quote! { #target ! { @__announce_dollar { #dollar } #body } })
 }
 
 /// What a definition-side check macro receives: `(ARGS), ITEM`.

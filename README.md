@@ -50,8 +50,8 @@ announce, because the generated macros are plain `macro_rules!`.
   crate docs).
 - Relative trait paths in a definition (supertraits, bounds) are errors: write
   them absolutely (`::core::fmt::Display`, `crate::Base`).
-- Any position: a chain expands into the final callback's output; a payload
-  containing `$` in expression position needs `F! { (expr) [F!, cb!] }`.
+- Any position (item, expression, type, pattern): a chain expands into the
+  final callback's output, also when the definition contains `$`.
 - Checks run at the definition site: `#[announce(my_lib::no_tuple_structs)]`
   invokes `my_lib::no_tuple_structs! { (), ITEM }` where the item is defined,
   so errors surface there and not in a downstream expansion.
