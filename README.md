@@ -71,6 +71,38 @@ announce, because the generated macros are plain `macro_rules!`.
 
 MSRV: Rust 1.71.
 
+## Related crates
+
+- **[macro_magic](https://crates.io/crates/macro_magic)** uses the same
+  underlying idea: `#[export_tokens]` records an item in a `macro_rules!`
+  callback, and proc macros wrapped in `#[import_tokens_attr]` /
+  `#[import_tokens_proc]` receive the tokens of an item named by path. announce
+  builds on that pattern and differs in:
+  - **Continuation lists:** a call names any number of definitions and
+    transformers, `[A!, B!, ::announce::signature_only!, cb!]`, and the callback
+    runs once with all of them. In macro_magic, a proc macro imports the tokens
+    of one item.
+  - **Definition-side processing:** nested `#[cfg]`/`#[cfg_attr]` are evaluated
+    in the defining crate, `crate::` becomes `$crate::`, `$` in the item is
+    escaped, and checks (`#[announce(my_lib::check)]`) report errors at the
+    definition. macro_magic forwards the item's tokens as written.
+  - **Type context:** relative types are rejected or carried through a repeater
+    table (`repeater =`, `TypeLeak::apply`), so the definition resolves in the
+    consuming crate.
+  - **Plain protocol:** callers and callbacks need no dependency on announce;
+    callbacks are ordinary `macro_rules!` or proc macros that parse a documented
+    wire format (`announce-helper` is optional).
+  - **Extras:** `meta =` for consumers, routing through derive or attribute
+    macros when the name is taken, `mock =` and announced std traits
+    (`announce-std`), and an error naming the missing `#[announce]` when a
+    callee is not a trampoline.
+- **[reify_types](https://crates.io/crates/reify_types)** takes a different
+  route: `#[derive(Reify)]` generates `fn reify() -> syn::DeriveInput` for a
+  struct or enum, so its definition is available when compiled code *runs*
+  (build tools, code generators, tests). A proc macro cannot call that function
+  during expansion, and traits, type aliases and modules are not covered.
+  announce delivers definitions to macros at *compile time* instead.
+
 ## Layout
 
 - `DESIGN.md`: the detailed design, decisions and verified facts.
