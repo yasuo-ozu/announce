@@ -52,6 +52,54 @@ fn announce_impl(attr: TokenStream2, item: TokenStream2) -> syn::Result<TokenStr
     })
 }
 
+/// Announces a struct, enum or union like `#[announce]`, for an item the user
+/// already emits: generates the trampoline and implements `Announce`. Options
+/// go in a helper attribute, `#[announce(..)]` (same options as the attribute
+/// macro, except `mock` and `emit_item`). See the `announce` crate docs.
+#[proc_macro_derive(Announce, attributes(announce))]
+pub fn derive_announce(input: TokenStream) -> TokenStream {
+    match derive_announce_impl(input.into()) {
+        Ok(ts) => ts.into(),
+        Err(e) => e.to_compile_error().into(),
+    }
+}
+
+fn derive_announce_impl(input: TokenStream2) -> syn::Result<TokenStream2> {
+    let mut item: syn::Item = syn::parse2(input)?;
+    let attrs = match &mut item {
+        syn::Item::Struct(s) => &mut s.attrs,
+        syn::Item::Enum(e) => &mut e.attrs,
+        syn::Item::Union(u) => &mut u.attrs,
+        other => {
+            return Err(syn::Error::new_spanned(other, "`#[derive(Announce)]` supports struct, enum and union items"))
+        }
+    };
+    let mut opts = options::Options::default();
+    let mut seen = false;
+    for a in attrs.iter().filter(|a| a.path().is_ident("announce")) {
+        if seen {
+            return Err(syn::Error::new_spanned(a, "announce: only one `#[announce(..)]` helper attribute is allowed"));
+        }
+        seen = true;
+        if let syn::Meta::List(l) = &a.meta {
+            opts = syn::parse2(l.tokens.clone())?;
+        }
+    }
+    attrs.retain(|a| !a.path().is_ident("announce"));
+    for key in ["mock", "emit_item"] {
+        if opts.given.iter().any(|g| g == key) {
+            return Err(syn::Error::new(
+                Span::call_site(),
+                format!("`{}` does not apply to `#[derive(Announce)]`: the item is emitted as written", key),
+            ));
+        }
+    }
+    // The derive input is already cfg-evaluated by rustc.
+    opts.emit_item = false;
+    opts.derived = true;
+    generate::generate(item, &opts, random_u64())
+}
+
 #[doc(hidden)]
 #[proc_macro_attribute]
 pub fn remove(_attr: TokenStream, _item: TokenStream) -> TokenStream {

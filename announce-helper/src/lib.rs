@@ -9,7 +9,7 @@
 //! - [`transformer!`] / [`Input::forward_transformed`] write transformers: list
 //!   elements that rewrite the newest entry (e.g. [`signature_only`]).
 //! - [`CheckInput`] parses what a definition-side check receives.
-//! - [`check_type`] / [`check_trait`] emit the best-effort `announce::Marker` check.
+//! - [`check_type`] / [`check_trait`] emit the best-effort `announce::Announce` check.
 
 mod kv;
 #[doc(hidden)]
@@ -824,19 +824,19 @@ impl Parse for CheckInput {
     }
 }
 
-/// Best-effort check that `ty` has an `#[announce]` definition (`ty: Marker`).
+/// Best-effort check that `ty` has an `#[announce]` definition (`ty: Announce`).
 /// `krate` is the consumer's path to the `announce` crate.
 pub fn check_type(krate: &Path, ty: &syn::Type) -> TokenStream {
     quote! {
         const _: () = {
-            fn __announce_chk<__AnnounceT: ?::core::marker::Sized + #krate::Marker>() {}
+            fn __announce_chk<__AnnounceT: ?::core::marker::Sized + #krate::Announce>() {}
             let _ = __announce_chk::<#ty>;
         };
     }
 }
 
 /// Best-effort check that the trait at `path` has an `#[announce]` definition
-/// (`dyn path: Marker`). Only meaningful for simple dyn-compatible traits.
+/// (`dyn path: Announce`). Only meaningful for simple dyn-compatible traits.
 pub fn check_trait(krate: &Path, path: &Path) -> TokenStream {
     check_type(krate, &syn::parse_quote!(dyn #path))
 }

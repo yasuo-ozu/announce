@@ -128,7 +128,7 @@ fn trait_is_simple_dyn(t: &syn::ItemTrait) -> bool {
         })
     }
     let mentions_self = |ts: TokenStream| mentions(ts, "Self");
-    // Any generic parameter, lifetimes included (AUDIT #4: `impl Marker for
+    // Any generic parameter, lifetimes included (AUDIT #4: `impl Announce for
     // dyn L` does not compile for `trait L<'a>`).
     if !t.generics.params.is_empty()
         || t.generics.where_clause.is_some()
@@ -181,11 +181,11 @@ fn trait_is_simple_dyn(t: &syn::ItemTrait) -> bool {
 }
 
 fn marker_impl(item: &Item, opts: &Options, krate: &syn::Path) -> TokenStream {
-    // `emit_item = false` (announcing from a derive) defaults to no marker:
-    // the one who emits the item owns its `Marker` impl, so a second
-    // announcement cannot conflict with it (AUDIT #25).
-    let wanted = opts.marker.unwrap_or(opts.emit_item);
-    if !wanted || opts.mock.is_some() {
+    // `#[derive(Announce)]` always implements it. `emit_item = false` means
+    // the item is emitted (and its `Announce` impl owned) by someone else, so
+    // a second announcement cannot conflict with it (AUDIT #25). A mock is a
+    // stand-in, not the real item.
+    if opts.mock.is_some() || !(opts.derived || opts.emit_item) {
         return TokenStream::new();
     }
     match item {
@@ -199,17 +199,16 @@ fn marker_impl(item: &Item, opts: &Options, krate: &syn::Path) -> TokenStream {
             ident, generics, ..
         }) => {
             let (ig, tg, wc) = generics.split_for_impl();
-            quote! { impl #ig #krate::Marker for #ident #tg #wc {} }
+            quote! { impl #ig #krate::Announce for #ident #tg #wc {} }
         }
-        Item::Trait(t) if opts.marker == Some(true) || trait_is_simple_dyn(t) => {
+        Item::Trait(t) if trait_is_simple_dyn(t) => {
             let ident = &t.ident;
-            quote! { impl #krate::Marker for dyn #ident {} }
+            quote! { impl #krate::Announce for dyn #ident {} }
         }
         _ => TokenStream::new(),
     }
 }
 
-/// The fixed arm set of DESIGN.md section 4.1.
 /// What the generated macro passes on: META and the (escaped) payload.
 pub struct Variant {
     pub meta: TokenStream,
@@ -351,14 +350,11 @@ pub fn trampoline(
 ) -> TokenStream {
     let h = hex(random);
     let macro_name = opts.macro_name.clone().unwrap_or_else(|| ident.clone());
-    let hidden = opts
-        .export_name
-        .clone()
-        .unwrap_or_else(|| {
-            // `r#match` is not usable inside a longer identifier (AUDIT #5).
-            let bare = syn::ext::IdentExt::unraw(ident);
-            Ident::new(&format!("__announce_{}_{}", bare, h), Span::call_site())
-        });
+    // `r#match` is not usable inside a longer identifier (AUDIT #5).
+    let hidden = Ident::new(
+        &format!("__announce_{}_{}", syn::ext::IdentExt::unraw(ident), h),
+        Span::call_site(),
+    );
     let fallback = Ident::new(&format!("__AnnounceTrampoline_{}", h), Span::call_site());
     let export = matches!(vis, Visibility::Public(_));
 

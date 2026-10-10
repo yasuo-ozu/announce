@@ -106,7 +106,7 @@ pub fn no_tuple(input: TokenStream) -> TokenStream {
     }
 }
 
-/// `check_marker!(path)`: best-effort announce::Marker check for a type.
+/// `check_marker!(path)`: best-effort announce::Announce check for a type.
 #[proc_macro]
 pub fn check_marker(input: TokenStream) -> TokenStream {
     let ty: syn::Type = match syn::parse(input) {

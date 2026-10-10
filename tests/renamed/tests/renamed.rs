@@ -5,7 +5,7 @@ mod a { ::announce_test_renamed::Plain! { [::announce_test_renamed::Plain!, capt
 mod b { ::announce_test_renamed::WithRepeater! { [::announce_test_renamed::WithRepeater!, capture!] } }
 mod c { ::announce_test_renamed::MarkedMock! { [::announce_test_renamed::MarkedMock!, capture!] } }
 
-fn assert_marker<T: ?Sized + ann::Marker>() {}
+fn assert_marker<T: ?Sized + ann::Announce>() {}
 
 #[test]
 fn renamed_dependency_works() {

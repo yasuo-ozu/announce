@@ -494,3 +494,22 @@ fn dollar_payloads_in_any_position() {
     };
     assert!(norm(both[1]).contains("modwith_macro{"));
 }
+
+mod derive_announce_m {
+    ::announce_test_defs::markers::Derived! { [::announce_test_defs::markers::Derived!, capture!] }
+    pub mod e {
+        ::announce_test_defs::markers::DerivedEnum! { [::announce_test_defs::markers::DerivedEnum!, capture!] }
+    }
+}
+
+#[test]
+fn derive_announce() {
+    fn is_announced<T: ?Sized + announce::Announce>() {}
+    is_announced::<announce_test_defs::markers::Derived>();
+    is_announced::<announce_test_defs::markers::DerivedEnum>();
+    let out = norm(derive_announce_m::OUT);
+    // The helper attribute and the cfg'd-out field are gone; META is kept.
+    assert!(out.contains("=>[$crate::info(1)]{#[doc=") && out.ends_with("pubstructDerived{puba:u8,}}"), "{}", out);
+    assert!(!out.contains("Debug") && !out.contains("#[announce(meta"), "{}", out);
+    assert!(norm(derive_announce_m::e::OUT).contains("pubenumDerivedEnum"));
+}

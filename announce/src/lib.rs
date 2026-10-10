@@ -65,7 +65,7 @@
 //! - `emit_item = false`: do not re-emit the item itself, only the
 //!   trampoline. For a derive that wants to announce its input: emit
 //!   `#[announce(emit_item = false, ..)] #input` from the derive.
-//! - `marker = true|false`: force or suppress the [`Marker`] impl.
+//! - `marker = true|false`: force or suppress the [`Announce`] impl.
 //! - `meta = path(args)`: metadata for consumers. Listed in the entry's META
 //!   like a check, but never invoked. May be given more than once.
 //! - `path` / `path(args)`: a check. `path! { (args), ITEM }` is invoked at the
@@ -93,10 +93,10 @@
 //! # Several announcements of one item
 //!
 //! Each announcement re-exports a macro under a name and, when it emits the
-//! item, implements [`Marker`]. A second announcement of the same item (for
+//! item, implements [`Announce`]. A second announcement of the same item (for
 //! example `#[announce]` plus a library derive that announces its input with
 //! `emit_item = false`) must use a different `macro_name`; `emit_item = false`
-//! implies `marker = false`, so the `Marker` impls do not conflict.
+//! implies `marker = false`, so the `Announce` impls do not conflict.
 //!
 //! # Libraries with their own type-context handling
 //!
@@ -128,7 +128,7 @@
 //!   repeater table is built. **The library is responsible** for every path in
 //!   the copy resolving where its callbacks use it.
 //! - `emit_item = false` is required: the real item is emitted separately (so
-//!   it is not wrapped for users), and no `Marker` is implemented for it.
+//!   it is not wrapped for users), and no `Announce` is implemented for it.
 //! - The callback receives `mod MyTrait { <item> }` and unwraps it (the only
 //!   item of the module). cfgs are evaluated and `crate::` paths rewritten as
 //!   for any payload.
@@ -151,6 +151,7 @@
 #![no_std]
 
 pub use announce_macros::announce;
+pub use announce_macros::Announce;
 
 /// Transformer: strips the newest entry's item down to its signatures.
 /// Put it in the continuation list right after the definition:
@@ -158,9 +159,9 @@ pub use announce_macros::announce;
 pub use announce_macros::signature_only;
 
 /// Implemented by `#[announce]` for its structs, enums and unions, and for traits
-/// that are certainly dyn-compatible (`impl Marker for dyn Trait`).
+/// that are certainly dyn-compatible (`impl Announce for dyn Trait`).
 ///
-/// Consumers may check `T: Marker` next to a trampoline call to get a clearer
+/// Consumers may check `T: Announce` next to a trampoline call to get a clearer
 /// error when the callee is not `#[announce]` (best-effort; see
 /// `announce_helper::check_type` / `check_trait`).
 #[cfg_attr(
@@ -171,7 +172,7 @@ pub use announce_macros::signature_only;
         note = "add `#[announce]` to its definition; for std/core items use the `announce-std` crate"
     )
 )]
-pub trait Marker {}
+pub trait Announce {}
 
 #[doc(hidden)]
 pub mod __private {

@@ -173,8 +173,22 @@ pub mod markers {
         type Out;
     }
 
-    #[announce(marker = false)]
-    pub struct NoMarker;
+    /// The derive form: the item is emitted as written, options go in the
+    /// `#[announce(..)]` helper (with the `announce` attribute macro also in scope).
+    #[derive(::announce::Announce, Debug)]
+    #[announce(meta = crate::info(1))]
+    pub struct Derived {
+        pub a: u8,
+        #[cfg(any())]
+        pub gone: u8,
+    }
+
+    /// Derive without options.
+    #[derive(::announce::Announce)]
+    pub enum DerivedEnum {
+        A,
+        B(u8),
+    }
 }
 
 /// A `$crate` path inside a continuation list, as a library's
@@ -314,7 +328,7 @@ pub mod allow_opts {
 pub mod audit_high {
     use super::announce;
 
-    /// Lifetime-generic trait: no `Marker` impl (it would not compile).
+    /// Lifetime-generic trait: no `Announce` impl (it would not compile).
     #[announce]
     pub trait Life<'a> {
         fn f(&self) -> &'a str;

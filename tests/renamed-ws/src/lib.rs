@@ -15,6 +15,6 @@ macro_rules! capture {
 }
 pub mod check { crate::ViaWorkspace! { [crate::ViaWorkspace!, capture!] } }
 
-fn _assert_marker<T: ?Sized + ann_ws::Marker>() {}
+fn _assert_marker<T: ?Sized + ann_ws::Announce>() {}
 const _: fn() = _assert_marker::<ViaWorkspace>;
 const _: fn() = _assert_marker::<dyn MarkedWs>;

@@ -4,7 +4,7 @@ error[E0277]: `Plain` is not marked `#[announce]`
 2 | announce_test_derive::check_marker!(Plain);
   |                                     ^^^^^ no `#[announce]` trampoline for this item
   |
-help: the trait `Marker` is not implemented for `Plain`
+help: the trait `Announce` is not implemented for `Plain`
  --> tests/ui/not_announced.rs:1:1
   |
 1 | pub struct Plain;

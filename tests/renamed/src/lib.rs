@@ -9,7 +9,7 @@ pub struct Plain {
     pub a: u8,
 }
 
-/// The `Marker` impl and the capture derive must resolve through `::ann`.
+/// The `Announce` impl and the capture derive must resolve through `::ann`.
 #[ann::announce]
 pub trait Marked {
     fn f(&self) -> u8;

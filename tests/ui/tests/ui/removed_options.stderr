@@ -1,0 +1,19 @@
+error: `export_name` was removed: the hidden macro name is generated; use `macro_name = ..` to choose the public name
+ --> tests/ui/removed_options.rs:1:22
+  |
+1 | #[announce::announce(export_name = Hidden)]
+  |                      ^^^^^^^^^^^
+
+error: `marker` was removed: the `Announce` impl follows the item (none with `emit_item = false` or `mock`); use `#[derive(Announce)]` to announce a struct, enum or union and implement it
+ --> tests/ui/removed_options.rs:4:22
+  |
+4 | #[announce::announce(marker = false)]
+  |                      ^^^^^^
+
+error: `emit_item` does not apply to `#[derive(Announce)]`: the item is emitted as written
+ --> tests/ui/removed_options.rs:8:10
+  |
+8 | #[derive(announce::Announce)]
+  |          ^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the derive macro `announce::Announce` (in Nightly builds, run with -Z macro-backtrace for more info)
