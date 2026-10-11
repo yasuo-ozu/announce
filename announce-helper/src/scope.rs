@@ -1,12 +1,9 @@
-//! Generic-parameter bookkeeping shared by `#[announce(repeater = ..)]` (which
-//! builds the table) and [`TypeLeak::apply`](crate::TypeLeak::apply) (which
-//! uses it), so both sides compute the same `G` for every interned type.
+//! Internal: generic-parameter bookkeeping shared by `#[announce(repeater = ..)]`
+//! and [`TypeLeak::apply`](crate::TypeLeak::apply).
 //!
-//! An interned type's `G` is the tuple of the generic parameters **it
-//! mentions**, from any scope of the item (the item itself, a method, a
-//! generic associated type), in order of first appearance: type parameters as
-//! themselves, lifetimes as `&'a ()`, `usize` consts as `[(); N]`. A type that
-//! mentions no parameter has `G = ()`.
+//! The `G` of a type is the tuple of the generic parameters it mentions, in
+//! order of first appearance. Type parameters are themselves, lifetimes are
+//! `&'a ()`, consts are `[(); N]`. `()` if there are none.
 
 use proc_macro2::{TokenStream, TokenTree};
 use syn::{GenericParam, Item, Type};

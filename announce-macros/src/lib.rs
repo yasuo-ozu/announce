@@ -19,7 +19,231 @@ fn random_u64() -> u64 {
     h.finish()
 }
 
-/// Emits a trampoline macro for the annotated item. See the `announce` crate docs.
+/// Announces an item: lets macros in any crate read its definition.
+///
+/// `#[announce]` keeps the item as written and emits a `macro_rules!` with the
+/// item's name next to it. Calling that macro passes the item, as tokens, to a
+/// callback macro. It works on a struct, enum, union, trait, type alias and
+/// inline `mod`.
+///
+/// ```ignore
+/// #[announce::announce]
+/// pub trait Greet { fn hi(&self) -> &'static str; }
+///
+/// // In any crate: pass the definition of `Greet` to `my_callback!`.
+/// path::to::Greet! { [path::to::Greet!, my_callback!] REST }
+/// ```
+///
+/// `my_callback!` receives the definition, and `REST` unchanged:
+///
+/// ```text
+/// my_callback! {
+///     [my_callback!]
+///     path::to::Greet! => [META] { pub trait Greet { fn hi(&self) -> &'static str; } }
+///     REST
+/// }
+/// ```
+///
+/// `META` is the list of what the definer attached: checks, `meta` entries and
+/// so on. It is empty without options. In the item, `#[cfg]` is already
+/// evaluated in the defining crate and `crate::` reads `$crate::`. The
+/// `announce` crate docs show how to chain several definitions into one callback.
+///
+/// # Options
+///
+/// Options go in the attribute, separated by commas:
+/// `#[announce(macro_name = Name, my_lib::check)]`.
+///
+/// - `macro_name = Ident`: name of the emitted macro. Default: the item's name.
+///   Use it when a derive or attribute macro owns that name, or to announce an
+///   item twice.
+/// - `crate = path`: path to the `announce` crate in generated code. Optional:
+///   it is read from the caller's `Cargo.toml`, so a renamed dependency works.
+/// - `meta = path(args)`: metadata for consumers. It is added to `META` as
+///   `path(args)` and never called. May repeat. `(args)` is optional.
+/// - `path` or `path(args)`, without `=`: a check. It runs at the definition,
+///   as `path! { (args), ITEM }` (`()` for a bare `path`), so its
+///   `compile_error!` shows up where the item is defined, not where it is used.
+///   It is also listed in `META`.
+/// - `mock = path`: the item is a stand-in for the item at `path` (this is how
+///   `announce-std` announces std items). It is kept in a hidden module, so it
+///   is still type-checked, and `META` gets `mock(path)`.
+/// - `repeater = crate::Repeater`: lets the item use types that do not resolve
+///   in other crates. See [Type context](#type-context).
+/// - `allow_primitive = bool`: primitive types (`u8`, `bool`, `str`, ...) need
+///   no repeater. Default: `true`.
+/// - `allow_std_prelude = bool`: bare std prelude names (`String`, `Vec<u8>`,
+///   `Option<T>`, `Clone`, ...) need no repeater. Default: `false`.
+/// - `emit_item = bool`: with `false`, only the macro is emitted, not the item.
+///   Default: `true`.
+///
+/// ```ignore
+/// #[announce(macro_name = ParseAnnounce, meta = my_lib::info(version = 1))]
+/// pub trait Parse { /* .. */ }
+///
+/// // Runs `my_lib::no_tuple! { (named), struct S { .. } }` next to the item.
+/// #[announce(my_lib::no_tuple(named))]
+/// pub struct S { pub a: u8 }
+/// ```
+///
+/// # Type context
+///
+/// The item's tokens are used again in another crate, so every path in them has
+/// to mean the same thing there. `#[announce]` checks this at the definition and
+/// reports an error at the path that would not resolve. Most items need nothing.
+///
+/// ## What resolves everywhere
+///
+/// These need no action:
+///
+/// - primitive types (`u8`, `bool`, `str`, ...), unless `allow_primitive = false`;
+/// - `crate::..` paths (the callback sees `$crate::..`), `$crate::..` paths and
+///   absolute `::..` paths such as `::std::vec::Vec<u8>` or `::core::fmt::Display`;
+/// - the item's own generic parameters, and the generic parameters of its methods
+///   and generic associated types;
+/// - `Self`, and associated types of `Self` or of a parameter (`Self::Out`,
+///   `T::Output`);
+/// - std prelude names (`String`, `Vec<u8>`, `Option<T>`, `Clone`, ...), only with
+///   `allow_std_prelude = true`. This goes by the bare name, with or without
+///   generic arguments. It is off by default, because the caller's prelude may
+///   differ.
+///
+/// A type built only from these is fine too: `(u8, bool)`, `&'static str`,
+/// `[u8; 4]`, `fn(u8) -> bool`, `::std::boxed::Box<T>`.
+///
+/// Everything else is relative: `Local` imported by a `use`, `super::X`, and also
+/// `std::vec::Vec<u8>` without the leading `::`. A bare `Vec<u8>` is relative
+/// unless `allow_std_prelude = true`.
+///
+/// ## Relative types: `repeater`
+///
+/// A relative type is an error ("this type does not resolve outside the defining
+/// crate"), unless the definer gives a `repeater`. The repeater is a trait of the
+/// defining crate that carries the types to the callback. It must have exactly
+/// this shape:
+///
+/// ```text
+/// pub trait Repeater<const ID: u64, const I: usize, G: ?Sized> { type Type: ?Sized; }
+/// ```
+///
+/// Write it as `crate::path::to::Repeater` in the option, and make it `pub` so
+/// callers can reach it as `$crate::path::to::Repeater`. It has to be a trait of
+/// the defining crate: announce implements it for `()`, and the orphan rule allows
+/// that only for a local trait. A `repeater` works on a struct, enum, union and
+/// trait.
+///
+/// ```ignore
+/// mod inner { pub struct Local(pub u8); }
+/// use inner::Local;
+///
+/// pub trait Repeater<const ID: u64, const I: usize, G: ?Sized> { type Type: ?Sized; }
+///
+/// // `Local` and `Vec<T>` are relative here.
+/// #[announce(repeater = crate::Repeater)]
+/// pub struct Holder<T> { pub a: Local, pub b: Vec<T>, pub c: u8 }
+/// ```
+///
+/// The item is announced as written. For each relative type, announce emits an
+/// impl of the repeater for `()` next to the item. The impl has only the generic
+/// parameters that the type mentions, with their own bounds:
+///
+/// ```text
+/// impl crate::Repeater<ID, 0, ()> for () { type Type = Local; }
+/// impl<T> crate::Repeater<ID, 1, (T,)> for () { type Type = Vec<T>; }
+/// ```
+///
+/// `ID` is a number chosen for the item. `META` gets one more element:
+///
+/// ```text
+/// type_leak(repeater = $crate::Repeater, id = ID, generics = [(), (T,)], types = [Local, Vec<T>])
+/// ```
+///
+/// `types` lists the relative types. `generics[i]` is the tuple of the generic
+/// parameters that `types[i]` mentions, in order of first use: a type parameter
+/// as itself (`T`), a lifetime as `&'a ()`, a const as `[(); N]`, and `()` if
+/// there are none. Pair `generics[i]` with `types[i]`, and do not rely on the order
+/// of the list. With a `repeater`, `META` always has `type_leak(..)`, with empty
+/// lists when no type needed it.
+///
+/// A callback resolves the types with `announce_helper`. `Entry::type_leak()`
+/// reads the `META` element, and `TypeLeak::apply` rewrites every listed type in
+/// an item to `<() as $crate::Repeater<ID, I, G>>::Type`:
+///
+/// ```ignore
+/// for entry in input.entries_in_order() {
+///     let mut item = entry.item()?;           // the definition, as written
+///     if let Some(tl) = entry.type_leak()? {  // `None` without a repeater
+///         tl.apply(&mut item);
+///     }
+///     // emit `item`
+/// }
+/// ```
+///
+/// `Holder` then reads:
+///
+/// ```text
+/// pub struct Holder<T> {
+///     pub a: <() as $crate::Repeater<ID, 0, ()>>::Type,
+///     pub b: <() as $crate::Repeater<ID, 1, (T,)>>::Type,
+///     pub c: u8,
+/// }
+/// ```
+///
+/// That resolves in any crate, because `$crate` is the defining crate. `TypeLeak`
+/// also has `lookup` (the index of a type) and `projection` (the tokens for an
+/// index) for a callback that rewrites in its own way.
+///
+/// ## Errors a repeater does not fix
+///
+/// A repeater carries types only. The rest must resolve by itself:
+///
+/// - **Trait paths**: supertraits, bounds in generics and `where` clauses, and
+///   `impl` and `dyn` bounds must be absolute. `trait Sub: Base` is an error; write
+///   `crate::Base`. `T: std::fmt::Display` is an error too; write
+///   `::core::fmt::Display`. Write `?Sized` as `?::core::marker::Sized`. With
+///   `allow_std_prelude = true`, bare prelude traits (`Clone`, `Send`, `?Sized`,
+///   ...) pass.
+/// - **Value paths** in array lengths, enum discriminants, const generic arguments
+///   and const defaults must be absolute (`crate::N`), start with `Self::`, or be a
+///   const parameter. `[u8; N]` with a const parameter `N` is fine; `[u8; N]` with
+///   a relative constant `N` is an error.
+/// - **Type aliases** must use absolute paths on the right-hand side, and take no
+///   `repeater`. `type A = Option<Local>` is an error; write
+///   `::core::option::Option<crate::Local>`.
+/// - **A reference with an elided lifetime to a relative type**, such as `&Local`,
+///   cannot be carried. Name the lifetime (`&'a Local`, with a `repeater`) or write
+///   `&crate::Local`.
+/// - A relative type that mentions a higher-ranked lifetime (`for<'b> Fn(&'b
+///   Local)`) cannot be carried either; write it with absolute paths. Higher-ranked
+///   bounds in code that is already absolute are fine.
+/// - A relative type may mention a const parameter only if it is a `usize`.
+///
+/// ## What is not checked
+///
+/// - Bodies of provided trait methods. `fn g(&self) -> u8 { helper() }` passes,
+///   but a callback that re-emits the body needs `helper` to resolve.
+///   `signature_only!` replaces such bodies.
+/// - Attribute arguments, such as `#[serde(with = "m")]`. They are neither
+///   checked nor rewritten.
+///
+/// ## Inline modules
+///
+/// Inline modules are not analysed, and a `repeater` on one is an error. A library
+/// that handles the paths itself announces a copy wrapped in a `mod` of the same
+/// name, with `emit_item = false`, so that only the trampoline is emitted. The
+/// `announce` crate docs show this pattern.
+///
+/// # The `Announce` impl
+///
+/// `#[announce]` also implements the `Announce` trait, so a consumer can ask
+/// for a clear error when an item is not announced. It does so for structs,
+/// enums and unions, and for `dyn Trait` of simple dyn-compatible traits (no
+/// generics, `&self` or `&mut self` methods only, at most `Send` and `Sync` as
+/// supertraits). With `emit_item = false` or `mock` there is no impl.
+///
+/// For a struct, enum or union you write yourself, derive it instead:
+/// [`#[derive(Announce)]`](derive@Announce) emits the item as written. Options
+/// go in an `#[announce(..)]` helper attribute, except `mock` and `emit_item`.
 #[proc_macro_attribute]
 pub fn announce(attr: TokenStream, item: TokenStream) -> TokenStream {
     match announce_impl(attr.into(), item.into()) {
@@ -52,10 +276,16 @@ fn announce_impl(attr: TokenStream2, item: TokenStream2) -> syn::Result<TokenStr
     })
 }
 
-/// Announces a struct, enum or union like `#[announce]`, for an item the user
-/// already emits: generates the trampoline and implements `Announce`. Options
-/// go in a helper attribute, `#[announce(..)]` (same options as the attribute
-/// macro, except `mock` and `emit_item`). See the `announce` crate docs.
+/// Announces a struct, enum or union as written, and implements `Announce` for it.
+///
+/// Options go in a helper attribute, `#[announce(..)]`. They are the options of
+/// the `#[announce]` attribute, except `mock` and `emit_item`.
+///
+/// ```ignore
+/// #[derive(announce::Announce)]
+/// #[announce(macro_name = PointAnnounce)]
+/// pub struct Point { pub x: i32 }
+/// ```
 #[proc_macro_derive(Announce, attributes(announce))]
 pub fn derive_announce(input: TokenStream) -> TokenStream {
     match derive_announce_impl(input.into()) {
@@ -107,11 +337,49 @@ pub fn remove(_attr: TokenStream, _item: TokenStream) -> TokenStream {
 }
 
 announce_helper::transformer! {
-    /// Transformer that strips the newest entry's item down to signatures:
-    /// provided trait methods and fns in modules get a placeholder body
-    /// `{ ::core::unimplemented!() }` (bodies of fns returning `impl Trait`
-    /// are kept). Use it in the continuation list, right after the
-    /// definition: `F! { [F!, ::announce::signature_only!, callback!] .. }`.
+    /// Transformer that strips the newest entry's item down to signatures.
+    ///
+    /// Put it in the list right after the definition. The callback then gets
+    /// the definition with the function bodies replaced, not the code itself.
+    ///
+    /// ```text
+    /// Item! { [Item!, ::announce::signature_only!, cb!] REST }
+    /// ```
+    ///
+    /// For a trait `Greet` and a module `util`, the callback gets the second
+    /// form instead of the first:
+    ///
+    /// ```text
+    /// // before
+    /// pub trait Greet {
+    ///     fn name(&self) -> u32;
+    ///     fn hi(&self) -> u32 { 42 }
+    /// }
+    /// pub mod util {
+    ///     pub fn plain() -> u32 { 7 }
+    ///     pub const fn zero() -> u32 { 0 }
+    ///     pub fn evens() -> impl Iterator<Item = u32> { (0..4).step_by(2) }
+    /// }
+    ///
+    /// // after
+    /// pub trait Greet {
+    ///     fn name(&self) -> u32;
+    ///     fn hi(&self) -> u32 { ::core::unimplemented!() }
+    /// }
+    /// pub mod util {
+    ///     pub fn plain() -> u32 { ::core::unimplemented!() }
+    ///     pub const fn zero() -> u32 { 0 }                                   // kept: const fn
+    ///     pub fn evens() -> impl Iterator<Item = u32> { (0..4).step_by(2) } // kept: impl Trait
+    /// }
+    /// ```
+    ///
+    /// Provided trait methods, fns in modules and methods in their impl blocks
+    /// get the body `{ ::core::unimplemented!() }`. Required trait methods stay
+    /// as they are, so a callback can still tell them from provided ones. The
+    /// body of a `const fn` and of a fn returning `impl Trait` is kept, because
+    /// a placeholder would not compile there if the callback emits the item.
+    /// Structs, enums, unions and type aliases are unchanged. To write your own
+    /// transformer, see `announce_helper::signature_only`.
     pub fn signature_only(entry) {
         let mut item: syn::Item = syn::parse2(entry.item.clone())?;
         announce_helper::signature_only(&mut item);

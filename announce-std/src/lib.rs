@@ -1,11 +1,9 @@
-//! announce mocks of std/core traits.
+//! Announced copies of std/core traits, so they can be passed to proc macros.
 //!
-//! Each `pub trait X` here is a copy of the real trait marked
-//! `#[announce(mock = ::core::path::X)]`: invoking `announce_std::path::X!` passes the
-//! copy onward, with `mock(::core::path::X)` in the entry META so consumers
-//! implement the real trait. The copy itself is only type-checked in a hidden
-//! module; except for traits whose name is also a derive macro (`Debug`,
-//! `Clone`, `Hash`, ...), the real trait is re-exported under the same path.
+//! `announce_std::iter::Iterator! { [announce_std::iter::Iterator!, cb!] }`
+//! passes a copy of `Iterator` to `cb!`. META holds `mock(::core::iter::Iterator)`:
+//! implement that real trait, not the copy. In the type namespace
+//! `announce_std::iter::Iterator` is the real trait, so it works in bounds too.
 //!
 //! ```
 //! macro_rules! show {
@@ -18,16 +16,13 @@
 //! // The type namespace holds the real trait:
 //! fn _f(_: &dyn announce_std::iter::Iterator<Item = u8>) {}
 //! ```
-
 //!
-//! **Compiler versions.** For traits whose name is also a derive macro
-//! (`Debug`, `Hash`, `PartialEq`, `Eq`, `PartialOrd`, `Ord`, `Clone`, `Copy`,
-//! `Default`), the type namespace holds the real trait from rustc 1.94 on. On
-//! older compilers it holds a blanket subtrait with the same name
-//! (`pub trait Debug: ::core::fmt::Debug {}` implemented for every
-//! `T: ::core::fmt::Debug`): it works in **bounds**, but it is a different
-//! trait, so `impl announce_std::fmt::Debug for X` does not implement the real
-//! one there. Write impls against the real path (the `mock(..)` META).
+//! **Old compilers.** `Debug`, `Hash`, `PartialEq`, `Eq`, `PartialOrd`, `Ord`,
+//! `Clone`, `Copy` and `Default` are also derive macro names. Before rustc 1.94
+//! their type-namespace item is a blanket subtrait instead of the real trait.
+//! It works in bounds, but `impl announce_std::fmt::Debug for X` does not
+//! implement the real `Debug`. Write impls against the real path from
+//! `mock(..)`.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 #![allow(clippy::all)]

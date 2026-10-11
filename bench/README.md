@@ -46,7 +46,7 @@ tokens.
 |---|---|
 | src tok | tokens of the definer's `lib.rs` as written (with the `#[announce]` attributes) |
 | plain exp tok | tokens of `-Zunpretty=expanded` of the `plain_*` crate (includes ~17 tokens of std prelude boilerplate) |
-| announce exp tok | tokens of `-Zunpretty=expanded` of the `def_*` crate: the items plus the generated `macro_rules!` trampolines (and `Marker` impls etc.). Each trampoline has one arm per routing case and each arm holds a copy of the item, so this grows as roughly 1200 + 7 x item tokens per definition (the item plus 6 copies; structs, at the time of writing) |
+| announce exp tok | tokens of `-Zunpretty=expanded` of the `def_*` crate: the items plus the generated `macro_rules!` trampolines (and `Announce` impls etc.). Each trampoline has one arm per routing case and each arm holds a copy of the item, so this grows as roughly 1200 + 7 x item tokens per definition (the item plus 6 copies; structs, at the time of writing) |
 | cb item tok | sum of the `ITEM` payload tokens the callback received (same for chain and K calls) |
 | cb input tok (chain) | all tokens the callback received in the single chain call (list, entry keys, META, items, REST) |
 | cb input tok (K calls) | the same, summed over the K separate calls |

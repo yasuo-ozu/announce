@@ -4,8 +4,8 @@ pub struct NoPrim {
     pub a: u8,
 }
 
-// `allow_std_prelude = true` accepts prelude names without generic arguments
-// only (type-leak 0.7); `Vec<u8>` is still reported.
+// `allow_std_prelude = true` accepts prelude names, also with generic
+// arguments (`Vec<u8>`): no error here.
 #[announce::announce(allow_std_prelude = true)]
 pub struct PreludeGeneric {
     pub v: Vec<u8>,

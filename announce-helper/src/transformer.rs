@@ -1,16 +1,13 @@
-//! Transformers: continuations that rewrite the newest entry and forward.
+//! Transformers: list elements that rewrite the newest entry and forward.
 //!
-//! A transformer is chosen by the *caller*, as an element of the
-//! continuation list right after the definition it should rewrite:
+//! The caller places a transformer right after the definition it rewrites:
 //!
 //! ```text
 //! Partly! { [Partly!, my_lib::public_fields!, cb!] REST }
 //! ```
 //!
-//! `Partly!` hands its entry to `public_fields!`, which rewrites the newest
-//! entry (payload and/or META) and forwards to `cb!`. The definer writes a
-//! plain `#[announce]`; each consumer decides what to apply. A transformer
-//! runs at the call site, like every other continuation.
+//! `public_fields!` rewrites the newest entry (item and/or META) and forwards
+//! to `cb!`. The definer writes a plain `#[announce]`.
 
 use crate::{Entry, Input};
 use proc_macro2::TokenStream;
@@ -18,14 +15,13 @@ use syn::{Error, Item, Result};
 use template_quote::quote;
 
 impl Input {
-    /// The newest entry, i.e. the one a transformer rewrites.
+    /// The newest entry, the one a transformer rewrites.
     pub fn newest(&self) -> Option<&Entry> {
         self.entries.first()
     }
 
-    /// For a transformer: forwards to the next continuation with the newest
-    /// entry replaced by `entry`. Errors when there is no entry to transform
-    /// or no continuation after the transformer.
+    /// For a transformer: forwards to the next element with the newest entry
+    /// replaced by `entry`. Errors if there is no entry or no next element.
     pub fn forward_transformed(&self, entry: Entry) -> Result<TokenStream> {
         if self.entries.is_empty() {
             return Err(Error::new(
@@ -45,9 +41,9 @@ impl Input {
     }
 }
 
-/// Defines a transformer: a `#[proc_macro]` that receives the newest entry
-/// as `$entry: announce_helper::Entry`, returns the rewritten
-/// `syn::Result<Entry>`, and forwards it to the next continuation.
+/// Defines a transformer: a `#[proc_macro]` that gets the newest entry as
+/// `announce_helper::Entry`, returns the rewritten `syn::Result<Entry>`, and
+/// forwards it to the next list element.
 ///
 /// ```ignore
 /// announce_helper::transformer! {
@@ -89,16 +85,17 @@ macro_rules! transformer {
     };
 }
 
-/// Strips an item down to its signatures, for [`signature_only`] and custom
-/// transformers:
-/// - provided trait methods get a placeholder body `{ ::core::unimplemented!() }`,
-///   so consumers can still tell them from required ones;
-/// - fns inside a module get the same placeholder body;
-/// - bodies of fns returning `impl Trait` and of `const fn`s are kept, because
-///   a placeholder would not type-check or const-evaluate there if the
-///   payload is re-emitted.
+/// Strips an item down to its signatures. The `signature_only!` transformer
+/// uses it; custom transformers can too.
 ///
-/// Recurses into nested modules, traits and impls inside a module.
+/// - Provided trait methods, fns in modules and methods in impl blocks get the
+///   body `{ ::core::unimplemented!() }`. Required trait methods are unchanged.
+/// - Bodies of `const fn`s and of fns returning `impl Trait` are kept, because
+///   a placeholder would not compile there.
+/// - Structs, enums, unions and type aliases are unchanged.
+///
+/// It recurses into nested modules; a module's traits, impls and fns are
+/// handled as above.
 ///
 /// [`signature_only`]: https://docs.rs/announce/latest/announce/macro.signature_only.html
 pub fn signature_only(item: &mut Item) {

@@ -1,31 +1,23 @@
 //! Deterministic numbering for [`type_leak`] (feature `type-leak`).
 //!
-//! `type_leak::Referrer` numbers the leaked types in `HashSet` order, which
-//! differs between macro invocations. A definer and a consumer that both run
-//! the leaker on the same item therefore disagree on the indices, and the
-//! indices have to be shipped in META. [`StableReferrer`] renumbers the types
-//! by their token text, so both sides compute the same indices independently.
+//! `type_leak::Referrer` numbers types in an order that changes between macro
+//! invocations. [`StableReferrer`] numbers them by token text instead, so a
+//! definer and a consumer get the same indices.
 //!
-//! **Only when both sides see the same tokens.** An attribute on the
-//! definition sees the item *before* cfg evaluation and before announce
-//! rewrites `crate::` to `$crate::`. A consumer sees the evaluated,
-//! rewritten payload. type-leak interns `crate::X` but not `$crate::X`, so the
-//! two lists (and the indices) can differ silently. Run both sides on the
-//! same token stream (e.g. both on the entry payload), or ship the indices in
-//! `meta =`. [`normalize_crate`] turns `$crate::` back into `crate::` in an
-//! item received through a trampoline, so the leaker treats both sides alike.
+//! Both sides must see the same tokens. A definer sees the item before `#[cfg]`
+//! evaluation and before `crate::` becomes `$crate::`. Run both sides on the
+//! entry payload, and call [`normalize_crate`] on it first.
 //!
-//! (With `#[announce(repeater = ..)]`, the definer builds the table and the
-//! callback only applies it (`TypeLeak::apply`), so no recomputation is
-//! needed at all.)
+//! With `#[announce(repeater = ..)]` none of this is needed: the definer builds
+//! the table and the callback applies it with `TypeLeak::apply`.
 
 use proc_macro2::TokenStream;
 use syn::Type;
 use template_quote::ToTokens;
 
-/// Rewrites a path-leading `$crate` to `crate` everywhere in `item`, undoing
-/// announce's `crate::` → `$crate::` rewrite before running a
-/// `type_leak::Leaker` on a received payload (AUDIT #23).
+/// Rewrites a path-leading `$crate` to `crate` everywhere in `item`. This undoes
+/// announce's `crate::` to `$crate::` rewrite, before you run a
+/// `type_leak::Leaker` on a received payload.
 pub fn normalize_crate(item: &mut syn::Item) {
     struct V;
     impl syn::visit_mut::VisitMut for V {
@@ -57,7 +49,7 @@ impl StableReferrer {
         StableReferrer { inner: referrer, order }
     }
 
-    /// The leaked types, in stable order: `types()[i]` has index `i`.
+    /// The leaked types in stable order: `types()[i]` has index `i`.
     pub fn types(&self) -> &[Type] {
         &self.order
     }
@@ -90,8 +82,8 @@ impl StableReferrer {
         self.inner.expand(ty, Self::stable_fn(&self.order, f))
     }
 
-    /// `Referrer::into_visitor` with stable indices: rewrites every leaked
-    /// type in an item (respecting generic shadowing, as type-leak does).
+    /// `Referrer::into_visitor` with stable indices: rewrites every leaked type
+    /// in an item.
     pub fn visit_item_mut(&self, item: &mut syn::Item, f: impl FnMut(Type, usize) -> Type) {
         let mut v = self.inner.clone().into_visitor(Self::stable_fn(&self.order, f));
         syn::visit_mut::VisitMut::visit_item_mut(&mut v, item);

@@ -1,15 +1,15 @@
-//! Helpers for proc-macro crates that start, receive or redirect
-//! [`announce`](https://docs.rs/announce) trampolines.
+//! Helpers for proc-macro crates that use [`announce`](https://docs.rs/announce)
+//! trampolines.
 //!
-//! - [`ContList::invoke`] starts a trampoline from a proc macro.
-//! - [`Input`] parses what a callback receives
-//!   (`[list] ENTRY* REST`), and [`Input::forward`] continues the chain.
-//! - [`redirect`] lets an announce-aware derive or attribute forward a trampoline
-//!   routed through it to the renamed `#[announce(macro_name = ..)]` macro.
-//! - [`transformer!`] / [`Input::forward_transformed`] write transformers: list
-//!   elements that rewrite the newest entry (e.g. [`signature_only`]).
-//! - [`CheckInput`] parses what a definition-side check receives.
-//! - [`check_type`] / [`check_trait`] emit the best-effort `announce::Announce` check.
+//! - Receive: [`callback!`] defines a callback that parses its [`Input`].
+//!   [`Input::forward`] continues the chain. [`Input::gather`] asks for more
+//!   definitions first.
+//! - Start: [`ContList::invoke`] calls a trampoline from a proc macro.
+//! - Redirect: [`redirect`] forwards a derive or attribute to a renamed trampoline.
+//! - Transform: [`transformer!`] defines a list element that rewrites the newest entry.
+//! - Check: [`CheckInput`] parses a definition-side check. [`check_type`] and
+//!   [`check_trait`] test for `announce::Announce`.
+//! - Read META: [`Entry::find_meta`] and [`KvArgs`] parse `key = value` lists.
 
 mod kv;
 #[doc(hidden)]
@@ -44,8 +44,8 @@ pub fn gensym(prefix: &str) -> Ident {
 pub enum Cont {
     /// `path::to::mac!`
     Bang(Path),
-    /// `#[derive(path)] Name` or `#[attr(..)] Name`. The name is the dummy
-    /// enum that carries the payload; [`ContList::invoke`] fills it in.
+    /// `#[derive(path)] Name` or `#[attr(..)] Name`. `Name` is the dummy enum
+    /// that carries the payload; [`ContList::invoke`] fills it in.
     Attr {
         attr: Attribute,
         name: Option<Ident>,
@@ -53,8 +53,7 @@ pub enum Cont {
 }
 
 impl Cont {
-    /// `path!`. Generic arguments are dropped (`Enum<A>` becomes `Enum!`),
-    /// since macro paths cannot carry them.
+    /// `path!`. Generic arguments are dropped: `Enum<A>` becomes `Enum!`.
     pub fn bang(mut path: Path) -> Self {
         for seg in &mut path.segments {
             seg.arguments = syn::PathArguments::None;
@@ -70,9 +69,8 @@ impl Cont {
         }
     }
 
-    /// The macro path: `path` of `path!`, the derive path of
-    /// `#[derive(path)]` (the first one of `#[derive(a, b)]`), or the
-    /// attribute path.
+    /// The macro path: `path` of `path!`, the first path of `#[derive(path)]`,
+    /// or the attribute path.
     pub fn path(&self) -> Path {
         match self {
             Cont::Bang(p) => p.clone(),
@@ -134,9 +132,8 @@ impl Parse for Cont {
 }
 
 impl Cont {
-    /// The comparison key: the tokens without the random dummy name of an
-    /// attribute continuation (AUDIT #12), and with generic arguments of a
-    /// bang path dropped.
+    /// The comparison key: the tokens without the dummy name of an attribute
+    /// continuation.
     fn eq_key(&self) -> String {
         match self {
             Cont::Bang(_) => self.to_token_stream().to_string(),
@@ -145,8 +142,7 @@ impl Cont {
     }
 }
 
-/// Continuations compare by their tokens (spans and the dummy name of an
-/// attribute continuation ignored), so a consumer can deduplicate keys.
+/// Continuations compare by tokens, ignoring spans and the dummy name.
 impl PartialEq for Cont {
     fn eq(&self, other: &Self) -> bool {
         self.eq_key() == other.eq_key()
@@ -202,8 +198,8 @@ impl FromIterator<Cont> for ContList {
 }
 
 impl ContList {
-    /// Gives every attribute continuation a random dummy name, so that two
-    /// trampolines in one module never collide (DESIGN.md section 5).
+    /// Gives every attribute continuation a random dummy name, so two
+    /// trampolines in one module never collide.
     pub fn name_dummies(&mut self) {
         for c in &mut self.0 {
             if let Cont::Attr { name, .. } = c {
@@ -214,13 +210,12 @@ impl ContList {
         }
     }
 
-    /// Invokes the head with `[self] body`. `body` is `ENTRY* REST`.
+    /// Invokes the head with `[self] body`, where `body` is `ENTRY* REST`.
     pub fn invoke(&self, body: TokenStream) -> TokenStream {
         self.invoke_with_options(None, body)
     }
 
-    /// Like [`invoke`](Self::invoke), with a global options group, e.g.
-    /// `Some(quote!(expr))` for `(expr) [..] ..` (DESIGN.md §4.6).
+    /// Like [`invoke`](Self::invoke), with a global options group `(options) [..] ..`.
     pub fn invoke_with_options(&self, options: Option<&TokenStream>, body: TokenStream) -> TokenStream {
         let opts = options.map(|o| quote! { ( #o ) });
         let in_expr = options.is_some_and(|o| {
@@ -245,7 +240,7 @@ impl ContList {
     }
 }
 
-/// One `META` element: a check `path` / `path(args)`, or `mock(path)`.
+/// One `META` element: `path` or `path(args)`.
 #[derive(Clone, Debug)]
 pub struct Meta {
     /// `path` of `path(args)`.
@@ -255,20 +250,18 @@ pub struct Meta {
 }
 
 impl Meta {
-    /// Parses the parenthesised args, e.g. with a `Punctuated<syn::MetaNameValue, Token![,]>`
-    /// parser for `key = value` lists: `meta.parse_args_with(Punctuated::parse_terminated)`.
+    /// Parses the args with `parser`.
     pub fn parse_args_with<P: syn::parse::Parser>(&self, parser: P) -> Result<P::Output> {
         parser.parse2(self.args.clone().unwrap_or_default())
     }
 
-    /// The args as a typed [`KvArgs`] list (`key = <any tokens>`, flags,
-    /// `key = [..]` lists). Absent args give an empty list.
+    /// The args as a [`KvArgs`] list. Absent args give an empty list.
     pub fn kv(&self) -> Result<KvArgs> {
         self.parse_args_with(KvArgs::parse)
     }
 
-    /// `key = value, ..` args as name/value pairs (values must be expressions;
-    /// use [`kv`](Self::kv) for types and lists).
+    /// The args as `key = value` pairs. Values must be expressions; use
+    /// [`kv`](Self::kv) for types and lists.
     pub fn name_values(&self) -> Result<Vec<syn::MetaNameValue>> {
         let p: Punctuated<syn::MetaNameValue, Token![,]> =
             self.parse_args_with(Punctuated::parse_terminated)?;
@@ -300,28 +293,25 @@ impl ToTokens for Meta {
     }
 }
 
-/// Type-leak information of an entry announced with `#[announce(repeater = ..)]`
-/// (see [`Entry::type_leak`]). The payload is the original item; `types[I]`
-/// resolves from any crate as `<() as REPEATER<ID, I, GENERICS>>::Type`, where
-/// GENERICS is the tuple of the item's generic parameters (`T`, `&'a ()`,
-/// `[(); N]`) in declaration order. [`apply`](Self::apply) rewrites an item
-/// accordingly.
+/// Type table of an entry announced with `#[announce(repeater = ..)]`, from
+/// [`Entry::type_leak`].
+///
+/// The payload is the original item. Type `types[I]` resolves from any crate as
+/// `<() as REPEATER<ID, I, G>>::Type`, where `G` is `generics[I]`.
+/// [`apply`](Self::apply) rewrites an item that way.
 #[derive(Clone, Debug)]
 pub struct TypeLeak {
-    /// The repeater trait path as tokens, e.g. `$crate::Repeater` (resolves in the
-    /// defining crate). Kept as tokens because `$crate` is not a `syn::Path`
-    /// segment outside a macro expansion.
+    /// The repeater trait path as tokens, e.g. `$crate::Repeater`. Tokens, not a
+    /// `syn::Path`, because `$crate` is not a path segment for syn.
     pub repeater: TokenStream,
     /// The definition's table id.
     pub id: syn::LitInt,
-    /// `generics[i]`: the generic parameters that `types[i]` mentions (from
-    /// any scope of the item: the item, a method, a generic associated type),
-    /// in order of first appearance, encoded as a tuple type (`T`, `&'a ()`,
-    /// `[(); N]`). `()` for a type that mentions none.
+    /// `generics[i]`: the generic parameters that `types[i]` mentions, in order
+    /// of first appearance, as a tuple type. Type parameters appear as
+    /// themselves, lifetimes as `&'a ()`, consts as `[(); N]`. `()` if none.
     pub generics: Vec<syn::Type>,
-    /// `types[i]` is the original type behind projection index `i`, as the
-    /// definer wrote it (for identification and diagnostics; relative paths
-    /// in it do not resolve at the caller).
+    /// `types[i]`: the original type behind index `i`, as the definer wrote it.
+    /// Relative paths in it do not resolve at the caller.
     pub types: Vec<syn::Type>,
 }
 
@@ -331,13 +321,9 @@ impl TypeLeak {
         self.types.iter().position(|t| t == ty)
     }
 
-    /// Rewrites every interned type in `item` (typically the entry's payload)
-    /// to its projection `<() as REPEATER<ID, I, generics[I]>>::Type`, so the
-    /// item resolves from any crate. Matching follows type-leak: a whole type
-    /// equal to `types[I]` is replaced (otherwise its parts are visited), and
-    /// inside a fn whose own generic parameter is named like an interned type,
-    /// that type is not replaced. The parameters named in `generics[I]` are in
-    /// scope wherever `types[I]` occurs, so the projection is valid there.
+    /// Rewrites every type of `types` in `item` (usually the entry's payload) to
+    /// its projection, so the item resolves from any crate. A fn generic
+    /// parameter named like a listed type shadows it.
     pub fn apply(&self, item: &mut syn::Item) {
         use syn::visit_mut::VisitMut;
         struct V<'a> {
@@ -397,7 +383,7 @@ impl TypeLeak {
 pub struct Entry {
     /// The continuation that produced this entry, as written in the list.
     pub key: Cont,
-    /// The META elements (checks, `meta =`, `mock(..)`, `type_leak(..)`).
+    /// The META elements: checks, `meta =`, `mock(..)`, `type_leak(..)`.
     pub meta: Vec<Meta>,
     /// The raw item tokens.
     pub item: TokenStream,
@@ -409,7 +395,7 @@ impl Entry {
         syn::parse2(self.item.clone())
     }
 
-    /// The `mock(path)` META, when the item is an announce-std style copy.
+    /// The `mock(path)` META, if the item is a copy of a std trait.
     pub fn mock(&self) -> Option<Path> {
         self.meta
             .iter()
@@ -417,17 +403,16 @@ impl Entry {
             .and_then(|m| syn::parse2(m.args.clone()?).ok())
     }
 
-    /// The first META element whose last path segment is `name`, e.g. to read
-    /// the args of a `#[announce(meta = lib::info(..))]` or of a check.
+    /// The first META element whose last path segment is `name`. Use it to read
+    /// a `meta = lib::info(..)` or a check.
     pub fn find_meta(&self, name: &str) -> Option<&Meta> {
         self.meta
             .iter()
             .find(|m| m.path.segments.last().is_some_and(|s| s.ident == name))
     }
 
-    /// The `type_leak(repeater = .., id = .., generics = .., types = [..])` META
-    /// of an entry announced with `repeater = ..`. Unknown keys are ignored, so
-    /// newer announce versions can add information.
+    /// The `type_leak(..)` META of an entry announced with `repeater = ..`.
+    /// Unknown keys are ignored.
     pub fn type_leak(&self) -> Result<Option<TypeLeak>> {
         let m = match self.find_meta("type_leak") {
             Some(m) => m,
@@ -445,9 +430,8 @@ impl Entry {
         Ok(Some(t))
     }
 
-    /// Whether META lists a check whose last path segment is `name`. The path
-    /// is copied as the definer wrote it, so only the last segment is
-    /// compared (DESIGN.md section 6).
+    /// Whether META lists a check whose last path segment is `name`. Only the
+    /// last segment is compared, since the path is as the definer wrote it.
     pub fn has_check(&self, name: &str) -> bool {
         self.meta
             .iter()
@@ -482,10 +466,8 @@ impl ToTokens for Entry {
 /// What a callback receives: `(OPTIONS)? [list] ENTRY* REST`.
 #[derive(Clone, Debug)]
 pub struct Input {
-    /// The global options group, e.g. `expr` for `(expr) [..]`. Options other
-    /// than a leading `expr` are forwarded unchanged by every hop.
-    /// Forwarded unchanged by [`forward`](Self::forward), [`fetch`](Self::fetch)
-    /// and [`gather`](Self::gather).
+    /// The global options group `(..)`. [`forward`](Self::forward),
+    /// [`fetch`](Self::fetch) and [`gather`](Self::gather) pass it on unchanged.
     pub options: Option<TokenStream>,
     /// The continuation list; its head is the callback itself.
     pub list: ContList,
@@ -559,9 +541,8 @@ impl Input {
         self.entries.iter().rev()
     }
 
-    /// Fetches more definitions and comes back: invokes `new[0]` with list
-    /// `[new.., <this whole list, head included>]` and the same entries and
-    /// rest. The callback is therefore invoked again with the new entries in
+    /// Fetches more definitions, then calls this callback again. It invokes
+    /// `new[0]` with the list `[new.., <this list>]`; the new entries arrive in
     /// front of the old ones.
     pub fn fetch(&self, new: impl IntoIterator<Item = Cont>) -> TokenStream {
         let list: ContList = new.into_iter().chain(self.list.0.iter().cloned()).collect();
@@ -569,7 +550,7 @@ impl Input {
         list.invoke_with_options(self.options.as_ref(), quote! { #(#entries)* #rest })
     }
 
-    /// Whether the global options group contains `name` (e.g. `"type_leak"`).
+    /// Whether the global options group contains the ident `name`.
     pub fn has_option(&self, name: &str) -> bool {
         self.options.as_ref().is_some_and(|o| {
             o.clone()
@@ -625,11 +606,11 @@ impl Input {
         self.entries.iter().find(|e| path_key(&e.key.path()) == want)
     }
 
-    /// "Give me the definitions of these, then call me again": returns
-    /// [`Gather::Ready`] with one entry per requested continuation (in the
-    /// requested order) when all are present, and otherwise
-    /// [`Gather::Fetch`] with the tokens that fetch the missing ones and
-    /// re-invoke this callback.
+    /// "Give me these definitions, then call me again."
+    ///
+    /// Returns [`Gather::Ready`] with one entry per requested continuation, in
+    /// order, when all are present. Otherwise it returns [`Gather::Fetch`]:
+    /// tokens that fetch the missing ones and call this callback again.
     ///
     /// ```ignore
     /// let entries = match input.gather(needed) {
@@ -679,8 +660,8 @@ impl Input {
         Gather::Fetch(list.invoke_with_options(Some(&opts), quote! { #(#entries)* #rest }))
     }
 
-    /// Continues the chain: drops the head and invokes the next element with
-    /// the same entries and rest. `None` when this was the last element.
+    /// Continues the chain: drops the head and invokes the next element. `None`
+    /// if the head was the last element.
     pub fn forward(&self) -> Option<TokenStream> {
         if self.list.0.len() < 2 {
             return None;
@@ -730,8 +711,8 @@ pub mod __private {
 /// }
 /// ```
 ///
-/// The facade crate still has to re-export the callback (e.g. under
-/// `__private`) so that generated code can name it.
+/// The facade crate must re-export the callback (e.g. under `__private`) so
+/// that generated code can name it.
 #[macro_export]
 macro_rules! callback {
     ($(#[$m:meta])* $vis:vis fn $name:ident ($input:ident) $body:block) => {
@@ -751,10 +732,8 @@ macro_rules! callback {
     };
 }
 
-/// Extracts the trampoline payload from the dummy enum an attribute
-/// continuation receives: `enum N { __AnnouncePayload = (stringify!{..}, 0).1 }`.
-/// The tokens are taken from the unexpanded `stringify!`, so spans, hygiene
-/// and `$crate` survive.
+/// Extracts the trampoline payload from the dummy enum that a derive or
+/// attribute continuation receives. Spans, hygiene and `$crate` survive.
 pub fn payload(item: TokenStream) -> Option<TokenStream> {
     let di: syn::DeriveInput = syn::parse2(item).ok()?;
     let syn::Data::Enum(e) = di.data else {
@@ -779,10 +758,11 @@ pub fn payload(item: TokenStream) -> Option<TokenStream> {
     Some(m.mac.tokens.clone())
 }
 
-/// For an announce-aware derive or attribute: if `item` is a trampoline dummy,
-/// returns `target! { payload }`, where `target` is the absolute path of the
-/// `#[announce(macro_name = ..)]` macro. Choosing a path that is valid at the
-/// user's site is the caller's responsibility (DESIGN.md section 5).
+/// For a derive or attribute whose name clashes with a trampoline: if `item` is
+/// a trampoline dummy, returns `target! { payload }`.
+///
+/// `target` is the absolute path of the `#[announce(macro_name = ..)]` macro.
+/// Pick a path that is valid at the user's site.
 ///
 /// ```ignore
 /// #[proc_macro_derive(Parse)]
@@ -803,7 +783,7 @@ pub fn redirect(item: TokenStream, target: &Path) -> Option<TokenStream> {
     Some(quote! { #target ! { @__announce_dollar { #dollar } #body } })
 }
 
-/// What a definition-side check macro receives: `(ARGS), ITEM`.
+/// What a definition-side check receives: `(ARGS), ITEM`.
 pub struct CheckInput {
     /// The check's arguments, `(ARGS)`.
     pub args: TokenStream,
@@ -824,8 +804,8 @@ impl Parse for CheckInput {
     }
 }
 
-/// Best-effort check that `ty` has an `#[announce]` definition (`ty: Announce`).
-/// `krate` is the consumer's path to the `announce` crate.
+/// Best-effort check that `ty` is announced (`ty: Announce`). `krate` is the
+/// consumer's path to the `announce` crate.
 pub fn check_type(krate: &Path, ty: &syn::Type) -> TokenStream {
     quote! {
         const _: () = {
@@ -835,8 +815,8 @@ pub fn check_type(krate: &Path, ty: &syn::Type) -> TokenStream {
     }
 }
 
-/// Best-effort check that the trait at `path` has an `#[announce]` definition
-/// (`dyn path: Announce`). Only meaningful for simple dyn-compatible traits.
+/// Best-effort check that the trait at `path` is announced (`dyn path: Announce`).
+/// Only meaningful for simple dyn-compatible traits.
 pub fn check_trait(krate: &Path, path: &Path) -> TokenStream {
     check_type(krate, &syn::parse_quote!(dyn #path))
 }
