@@ -1,32 +1,35 @@
-use std::process::Command;
-
 // Version-gated mocks: traits that are newer than the MSRV (1.57), or that changed
-// after it. `announce_std_rust_1_N` is set from rustc 1.N on.
-const VERSIONS: &[u32] = &[61, 64, 80, 81, 94];
+// after it. `announce_std_rust_1_N` is set from rustc 1.N on; the sources gate on it
+// with a plain `#[cfg(..)]`. The compiler version is decided by the `rustversion`
+// attributes below, not by parsing `rustc --version`.
+macro_rules! gates {
+    ($($v:tt),* $(,)?) => {
+        fn main() {
+            println!("cargo:rerun-if-changed=build.rs");
+            $({
+                #[rustversion::since($v)]
+                fn on(cfg: &str) {
+                    println!("cargo:rustc-cfg={}", cfg);
+                }
+                #[rustversion::before($v)]
+                fn on(_: &str) {}
+                // `rustc-check-cfg` is known from cargo 1.80 on; older cargo warns about it.
+                #[rustversion::since(1.80)]
+                fn check(cfg: &str) {
+                    println!("cargo:rustc-check-cfg=cfg({})", cfg);
+                }
+                #[rustversion::before(1.80)]
+                fn check(_: &str) {}
 
-fn main() {
-    println!("cargo:rerun-if-changed=build.rs");
-    let rustc = std::env::var("RUSTC").unwrap_or_else(|_| "rustc".into());
-    let minor = Command::new(rustc)
-        .arg("--version")
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .and_then(|v| {
-            // `rustc 1.83.0 (..)`, `rustc 1.84.0-nightly (..)`.
-            let mut it = v.split_whitespace().nth(1)?.split('.');
-            let major: u32 = it.next()?.parse().ok()?;
-            let minor: u32 = it.next()?.parse().ok()?;
-            Some(if major > 1 { u32::MAX } else { minor })
-        })
-        // Unknown compiler version: assume a current one (AUDIT #17).
-        .unwrap_or(u32::MAX);
-    for v in VERSIONS {
-        if minor >= 80 {
-            println!("cargo:rustc-check-cfg=cfg(announce_std_rust_1_{})", v);
+                // `1.61` -> `announce_std_rust_1_61`
+                let cfg = format!("announce_std_rust_{}", stringify!($v).replace('.', "_"));
+                check(&cfg);
+                on(&cfg);
+            })*
         }
-        if minor >= *v {
-            println!("cargo:rustc-cfg=announce_std_rust_1_{}", v);
-        }
-    }
+    };
 }
+
+// The only place that names the versions. Every `announce_std_rust_1_N` used in
+// `src/` must be listed here (`tools/gen_std.py` is not kept in sync with it).
+gates![1.61, 1.64, 1.80, 1.81, 1.94];

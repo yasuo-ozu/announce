@@ -23,6 +23,11 @@
 //! It works in bounds, but `impl announce_std::fmt::Debug for X` does not
 //! implement the real `Debug`. Write impls against the real path from
 //! `mock(..)`.
+//!
+//! **Version gates.** Mocks of traits newer than the MSRV (1.57), or changed
+//! after it, are gated with `#[cfg(announce_std_rust_1_N)]`. `build.rs` sets
+//! that cfg on rustc 1.N and later, using `rustversion` attributes
+//! (`Termination` 1.61, `IntoFuture` 1.64, and the 1.80, 1.81 and 1.94 variants).
 
 #![cfg_attr(not(feature = "std"), no_std)]
 #![allow(clippy::all)]
