@@ -134,23 +134,40 @@ All options are listed in the
 
 ## Performance
 
-Measured with `bench/run.py` (median of 5 runs, x86_64). S is the number of
-methods per trait, K the number of definitions passed to one callback. Token
-counts are of the expanded crate; times are rebuilds of that crate alone.
+Measured with the criterion benchmark in `bench/` (run `cargo bench --offline`
+inside `bench/`; the full table is `bench/RESULTS.md`), on traits, with rustc
+1.101 nightly on x86_64 and cargo's dev profile. S is the number of methods per
+trait, K the number of definitions passed to one callback, which only consumes
+its input. Sizes are of the `.rmeta` files cargo writes: item definitions and
+`macro_rules!` bodies live in the metadata. Build times are the median rebuild
+of that crate alone (10 samples, on a shared machine, so rough).
 
-| S | K | plain tokens | announced tokens | callback receives | plain build | announced build | calling crate |
+Lines: color = S (darker is larger), solid = announced or one chain, dashed =
+plain or K separate calls. Both axes are logarithmic. Made with
+`bench/plot.py --svg bench/plots`.
+
+<img src="bench/plots/defining-rmeta.svg" alt="Defining crate: .rmeta size against K" width="49%"> <img src="bench/plots/defining-time.svg" alt="Defining crate: rebuild time against K" width="49%">
+<img src="bench/plots/calling-rmeta.svg" alt="Calling crate: .rmeta size against K" width="49%"> <img src="bench/plots/calling-time.svg" alt="Calling crate: rebuild time against K" width="49%">
+
+| S | K | definer, plain | definer, announced | calling crate, one chain | calling crate, K calls | definer build, plain / announced | calling crate build, one chain |
 |---:|---:|---:|---:|---:|---:|---:|---:|
-| 1 | 1 | 48 | 1,335 | 37 | 165 ms | 125 ms | 154 ms |
-| 100 | 64 | 83,487 | 660,063 | 84,169 | 225 ms | 907 ms | 283 ms |
-| 1000 | 16 | 208,095 | 1,475,439 | 208,249 | 412 ms | 1,965 ms | 364 ms |
-| 1000 | 64 | 832,287 | 5,901,663 | 832,969 | 1,821 ms | 8,417 ms | 1,328 ms |
+| 1 | 1 | 2.5 KiB | 13.3 KiB | 3.2 KiB | 3.2 KiB | 53 / 91 ms | 84 ms |
+| 10 | 16 | 42 KiB | 303 KiB | 4.5 KiB | 10.2 KiB | 86 / 135 ms | 74 ms |
+| 200 | 16 | 865 KiB | 3,081 KiB | 4.6 KiB | 10.2 KiB | 148 / 1,045 ms | 207 ms |
+| 200 | 96 | 5,562 KiB | 19,045 KiB | 12.0 KiB | 47.6 KiB | 816 / 3,940 ms | 405 ms |
 
-- Each definition adds about 1,200 tokens plus about 7 times the item to the
-  defining crate (the generated macro holds 6 copies of the item). Build time
-  stays close to the plain crate except for very large definitions.
-- The callback receives only the item plus about 11 tokens per definition.
-- The calling crate stays near its baseline until the definitions reach about
-  100,000 tokens.
+- The definer's `.rlib` is 2.4 KiB with or without `#[announce]`, because
+  definitions contain no code. The trampoline is metadata: about 11 KiB per
+  definition plus about 4 times the metadata of the item itself.
+- A calling crate's `.rlib` stays 2.4 KiB. Its `.rmeta` does not depend on S and
+  grows by about 0.1 KiB per definition in one chain and about 0.5 KiB per
+  separate call.
+- An executable that uses both crates is as large as an empty program (4,495
+  KiB in the dev profile, 332 KiB stripped) at every point measured: the
+  trampolines do not reach it.
+- Rebuilding the announced definer costs tens of milliseconds more than the
+  plain one for small definitions and several times as much at S = 200, K = 96;
+  the calling crate stays within a few hundred milliseconds there.
 
 ## Related crates
 

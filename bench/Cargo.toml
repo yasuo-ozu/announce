@@ -1,0 +1,17 @@
+[package]
+name = "announce-bench"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Criterion benchmark: compile time and artifact sizes of #[announce]"
+
+[dev-dependencies]
+criterion = { version = "0.5.1", default-features = false, features = ["cargo_bench_support", "html_reports", "plotters"] }
+serde_json = "1"
+
+[[bench]]
+name = "compile"
+harness = false
+
+# Standalone: not a member of the repository workspace.
+[workspace]

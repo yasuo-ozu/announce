@@ -1,25 +1,64 @@
 # announce benchmark
 
-Measures how token counts and compile wall time of `#[announce]` grow with
+A [criterion](https://crates.io/crates/criterion) benchmark of the cost of
+`#[announce]`: the artifact sizes (`.rlib`, `.rmeta`, executable) and the
+rebuild time of the defining crate and of the calling crate, as functions of
 
 - **S**, the definition size (fields per struct, or methods per trait), and
 - **K**, the number of definitions referenced at once in one chain
   `D0! { [D0!, D1!, .., D{K-1}!, ::bench_cb::count!] all }`.
 
 ```sh
-python3 bench/run.py --quick          # S in {1,10}, K in {1,4}, 1 run (~30 s)
-python3 bench/run.py                  # S in {1,10,100,1000}, K in {1,4,16,64}, structs and traits, 3 runs (~3-5 min)
-python3 bench/run.py --sizes 1,100 --counts 8 --kinds struct,trait --runs 5
-python3 bench/run.py --help
+cd bench
+cargo bench --offline                                  # the default grid, see below
+ANNOUNCE_BENCH_QUICK=1 cargo bench --offline           # S in {1,10}, K in {1,4}: about 1 min
+ANNOUNCE_BENCH_SIZES=100 ANNOUNCE_BENCH_COUNTS=8,64 ANNOUNCE_BENCH_KINDS=struct,trait cargo bench --offline
+# the large grid (structs and traits, S up to 1000, K up to 128; about 30 minutes):
+ANNOUNCE_BENCH_KINDS=struct,trait ANNOUNCE_BENCH_SIZES=1,10,100,1000 ANNOUNCE_BENCH_COUNTS=1,2,4,8,16,32,64,128 cargo bench --offline
+cargo bench --offline -- 'definer_announce/trait'      # criterion's own filter (a regex on the id)
+cargo bench --offline -- --test                        # one rebuild per benchmark, no statistics
+ANNOUNCE_BENCH_NO_TIMING=1 cargo bench --offline       # artifact sizes only, no criterion run
 ```
 
-Python 3 standard library only; cargo runs with `--offline`. The generated
-crates live in `target/bench/ws` (a standalone cargo workspace with its own
-`[workspace]`, so it never joins the repository workspace; `announce` and
-`announce-helper` are path dependencies on this checkout), the build directory
-is `target/bench/target` and is deleted at the end unless `--keep` is given.
-Results go to `target/bench/results.{csv,json}`; the Markdown table goes to
-stdout, progress to stderr. Latest recorded run: [RESULTS.md](RESULTS.md).
+`bench/` is a standalone cargo package (its own `[workspace]`, not a member of
+the repository workspace), so run cargo from inside `bench/`. Criterion owns
+the command line, so the grid is configured with environment variables:
+
+| variable | default | meaning |
+|---|---|---|
+| `ANNOUNCE_BENCH_SIZES` | `1,10,100,200` | S values |
+| `ANNOUNCE_BENCH_COUNTS` | `1,2,4,8,16,32,48,64,96` | K values |
+| `ANNOUNCE_BENCH_KINDS` | `trait` | definition kinds, `struct` and/or `trait` |
+| `ANNOUNCE_BENCH_QUICK` | unset | `1`: default S = `1,10` and K = `1,4` (explicit variables still win) |
+| `ANNOUNCE_BENCH_SAMPLES` | `10` | criterion samples per benchmark (criterion's minimum is 10) |
+| `ANNOUNCE_BENCH_NO_TIMING` | unset | `1`: only build every crate once and report the sizes |
+| `ANNOUNCE_BENCH_KEEP` | unset | `1`: keep the generated crates and their build directory |
+| `ANNOUNCE_BENCH_REPO` | the parent of `bench/` | checkout of `announce`, `announce-helper` and the `Cargo.lock` to benchmark, e.g. a `git archive` of a commit |
+| `ANNOUNCE_BENCH_REV` | `git rev-parse` of the checkout | revision to print in the report, for a checkout without `.git` |
+
+The default grid is traits only, S in {1, 10, 100, 200} and K in {1, 2, 4, 8,
+16, 32, 48, 64, 96}: 36 points, each with four timed crates, 10 samples per
+benchmark. It takes about 13 minutes (see [RESULTS.md](RESULTS.md)). The large
+grid in the example above (structs too, S up to 1000, K up to 128) takes about
+30 minutes; the points with S = 1000 and K >= 64 are more than half of that.
+Everything runs offline against the cargo cache; the generated crates depend on
+`announce` and `announce-helper` by path.
+
+## Where the results go
+
+All paths are below `bench/target/` (or `$CARGO_TARGET_DIR`).
+
+| file | content |
+|---|---|
+| `criterion/<group>/<kind>/<param>/new/estimates.json` | criterion's estimates (ns) per benchmark; `<param>` is `s<S>_k<K>` |
+| `criterion/announce-sizes.csv` | artifact sizes in bytes, one row per grid point |
+| `criterion/announce-sizes.md` | the same, as Markdown tables in KiB |
+| `criterion/announce-report.md` | sizes and rebuild times side by side (what [RESULTS.md](RESULTS.md) is made from); also printed at the end of the run |
+| `announce-bench/{ws,target}` | the generated crates and their build directory; deleted at the end of the run unless `ANNOUNCE_BENCH_KEEP=1` |
+
+The report only contains rebuild times written during the current run
+(estimates of earlier runs are ignored), so a filtered run reports only what it
+ran. The size table has a row for every crate that was built.
 
 ## What is generated, per grid point (kind, S, K)
 
@@ -28,47 +67,87 @@ stdout, progress to stderr. Latest recorded run: [RESULTS.md](RESULTS.md).
 | `def_*` | K items `#[::announce::announce] pub struct Di { pub f0: u32, .. }` (or `pub trait Di { fn m0(&self, x: u32) -> u32; .. }`) |
 | `plain_*` | the same items without `#[announce]` (reference) |
 | `use_chain_*` | one chain over all K definitions, ending in `::bench_cb::count!` |
-| `use_sep_*` | K separate calls `Di! { [Di!, ::bench_cb::count!] ci }` (skip with `--no-separate`) |
+| `use_calls_*` | K separate calls `Di! { [Di!, ::bench_cb::count!] ci }` |
 
-`bench_cb::count!` is a proc macro that parses its input with
-`announce_helper::Input` and emits `ENTRIES`, `INPUT_TOKENS` and `ITEM_TOKENS`
-constants. Each user crate `const`-asserts `ENTRIES == K` and has a tiny bin
-that prints the constants. `tokcount` counts tokens of Rust source with
-`proc_macro2::TokenStream::from_str` (exact lexing, not an approximation).
+`bench_cb::count!` is a proc macro callback. It parses its whole input with
+`announce_helper::Input` (so it consumes every entry) and emits one constant,
+`ENTRIES`; each user crate `const`-asserts `ENTRIES == K`. Each user crate also
+has a tiny executable that prints `ENTRIES` and the size of the first
+definition (`size_of::<Di>()`, or of a `&dyn Di`), so that the user crate and
+the definer are linked into it.
 
-Token counts are token trees counted recursively: a group `(..)`, `[..]`,
-`{..}` counts as 1 plus its contents; `::` and `=>` count as 2 punctuation
-tokens.
+## Benchmarks (criterion groups)
 
-## Columns
+Each benchmark is `<group>/<kind>/s<S>_k<K>`. One iteration touches the
+crate's `lib.rs` and times `cargo build --offline -p <crate> --lib` (wall
+time, spawn included; dependencies are already built, `CARGO_INCREMENTAL=0`).
+The first call builds the crate and its dependencies and measures the sizes,
+outside the timed part. Sampling is `Flat` with 10 samples of one rebuild each
+(plus one untimed warm-up rebuild). The benchmarks run point by point (the four
+crates of one grid point one after the other), so that they are measured under
+similar load.
+
+| group | crate rebuilt |
+|---|---|
+| `definer_plain` | `plain_*` |
+| `definer_announce` | `def_*` |
+| `user_chain` | `use_chain_*` |
+| `user_calls` | `use_calls_*` |
+| `baseline/empty_lib_start`, `baseline/empty_lib_end` | an empty library, for the fixed cargo and rustc start-up cost; measured before and after the grid, so a drift of the machine's load shows |
+
+## Columns (all builds use cargo's dev profile)
+
+Sizes are bytes of the files in cargo's build directory, shown as KiB (1024
+bytes). They are not timings: each is measured once, after the crate was built
+for the first time. They are deterministic; after the timed rebuilds the
+benchmark checks that the `.rlib` and `.rmeta` sizes did not change and the
+report says so.
 
 | column | meaning |
 |---|---|
-| src tok | tokens of the definer's `lib.rs` as written (with the `#[announce]` attributes) |
-| plain exp tok | tokens of `-Zunpretty=expanded` of the `plain_*` crate (includes ~17 tokens of std prelude boilerplate) |
-| announce exp tok | tokens of `-Zunpretty=expanded` of the `def_*` crate: the items plus the generated `macro_rules!` trampolines (and `Announce` impls etc.). Each trampoline has one arm per routing case and each arm holds a copy of the item, so this grows as roughly 1200 + 7 x item tokens per definition (the item plus 6 copies; structs, at the time of writing) |
-| cb item tok | sum of the `ITEM` payload tokens the callback received (same for chain and K calls) |
-| cb input tok (chain) | all tokens the callback received in the single chain call (list, entry keys, META, items, REST) |
-| cb input tok (K calls) | the same, summed over the K separate calls |
-| plain def ms / announce def ms | wall time of rebuilding only the definer crate (`cargo build -p X --lib` after touching its `lib.rs`; deps already built) |
-| user chain ms / user K calls ms | wall time of rebuilding only the user crate, its definer and `bench_cb` already built |
-
-Times are the median of `--runs` runs (default 3) and include the fixed cargo
-and rustc start-up cost: the run header reports the rebuild time of an empty
-lib crate as a baseline to subtract mentally.
+| plain / announce rlib, rmeta | `lib<crate>-<hash>.rlib` and `.rmeta` of `plain_*` and of `def_*` (definition side) |
+| chain / K calls rlib, rmeta | the same for `use_chain_*` and `use_calls_*` (calling side) |
+| chain / K calls exe | the executable of that user crate (dev profile: unoptimized, with debuginfo) |
+| exe stripped | the same executable after `strip -o` (the size with `strip = true`) |
+| plain / announce rebuild ms | criterion median of the rebuild of `plain_*` / `def_*` in ms, with the half-width of its 95% confidence interval (`±`). The median, because a few rebuilds are slowed by other load |
+| chain / K calls rebuild ms | the same for `use_chain_*` / `use_calls_*` |
 
 ## Caveats
 
-- `-Zunpretty=expanded` is unstable: the script sets `RUSTC_BOOTSTRAP=1`
-  (needed on a stable toolchain). Its pretty-printed output is re-lexed, so
-  the counts are those of the printed form, not of rustc's internal streams.
-- The expansion count of `def_*` is measured on the definer only; trampoline
-  expansion happens in the user crate and is captured by the user timings and
-  the callback-side counts.
-- Wall times are noisy (other load, CPU frequency, file system cache) and
-  machine-specific; compare columns within one run, not across machines.
-  `CARGO_INCREMENTAL=0` is set so that the rebuild redoes expansion each time.
-- The user crates set `#![recursion_limit = "1024"]`: a chain over K
-  definitions nests about one macro expansion per hop.
+- Where things live. Item definitions and `macro_rules!` bodies are metadata,
+  so the six copies of each item inside the generated trampoline show up in the
+  definer's `.rmeta`. On the toolchain used (recent nightly cargo) rustc is run
+  with `-C embed-metadata=no`, so the `.rlib` holds only compiled code, not
+  metadata: it stays the size of an empty object for definitions without code,
+  and the on-disk size of a library is rlib + rmeta.
+- The executable mostly reflects runtime code (the dev-profile `std` and its
+  debuginfo). Trampolines and definitions without functions are not in it, so
+  it should not depend on S, K or `#[announce]`; it is reported to show that.
+- The callback emits only a constant. The calling-side sizes therefore measure
+  what the protocol itself leaves in the user crate; a real callback that
+  re-emits or implements the definitions adds its own output on top.
+- Rebuild times are noisy (other load, CPU frequency, file system cache) and
+  machine-specific; compare columns within one run, and rows of one point
+  rather than far apart rows. The empty-crate benchmarks give the fixed cost of
+  one cargo invocation (cargo reads the manifests of all generated crates
+  on each call, which is part of it). Criterion prints
+  `Warning: Unable to complete 10 samples in 1.0ms` for every benchmark: the
+  warm-up and target times are set to their minimum (1 ms), so that criterion
+  runs one warm-up rebuild and then exactly one rebuild per sample. This is
+  expected.
+- A chain over K definitions nests about K macro expansions, and rustc's
+  default recursion limit is 128. The user crates set no limit for K <= 100
+  (K = 96 and 120 build without one); for K > 100 the generator adds
+  `#![recursion_limit = "512"]` (K = 128 fails without it).
 - Definitions use only primitive field types (`u32`), so no `repeater` / type
   leak information is involved.
+- The generated workspace copies the repository's `Cargo.lock`, to use only
+  crate versions that are in the offline cache.
+
+## Plots
+
+`python3 plot.py` (standard library only) reads the results of the last
+`cargo bench` and writes `target/criterion/announce-plots.html`: rebuild time
+and `.rmeta` size against K, with one line per S for plain vs announced
+(defining crate) and one chain vs K separate calls (calling crate). Criterion's
+own HTML reports are in `target/criterion/report/index.html`.
