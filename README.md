@@ -54,7 +54,7 @@ pub struct Point { pub x: i32, pub y: i32 }
 | crate | use it to |
 |---|---|
 | `announce` | define items: `#[announce]`, `#[derive(Announce)]`, trait `Announce` |
-| `announce-helper` | write callbacks, start chains, redirect derives, check input |
+| `announce-helper` | write callbacks and checks, start chains, redirect derives |
 | `announce-std` | announce std/core traits (`announce_std::iter::Iterator!`) |
 
 A proc-macro crate that builds or rewrites items itself can make them announced
@@ -92,7 +92,8 @@ chain holds up to 127 small or 42 large definitions. For a longer one, set
 - Works in any position: item, statement, expression, type, pattern, also for
   items containing `$`. The derive and attribute route works in item position only.
 - Evaluates `#[cfg]` in the defining crate. `crate::` paths keep pointing there.
-- Checks at the definition: `#[announce(my_lib::no_tuple_structs)]`.
+- Checks at the definition: `#[announce(my_lib::no_tuple_structs)]`. A check can
+  own attributes of its own inside the item (below).
 - Metadata for consumers: `#[announce(meta = my_lib::info(k = v))]`.
 - Transformers chosen by the caller. A transformer is a list element right after
   the definition. It rewrites the entry and forwards to the rest, for example
@@ -102,6 +103,31 @@ chain holds up to 127 small or 42 large definitions. For a longer one, set
 - A derive or attribute may own the name: rename the trampoline with
   `#[announce(macro_name = ParseAnnounce)]`. That derive then forwards to it with
   `announce_helper::redirect`.
+
+## Attributes of your own
+
+A check can own attribute names, so the item may carry attributes that no
+derive declares and that rustc would reject:
+
+```text
+#[announce(my_lib::check)]        // the check owns `my_lib`
+pub struct S { #[my_lib(skip)] pub a: u8, pub b: u8 }
+```
+
+`#[announce]` removes the owned attributes from the item it emits and keeps them
+in the payload: callbacks see them, `META` lists `attrs(my_lib)`
+(`Entry::owned_attrs`), and the check gets the item with them, to validate them
+at the definition. They are found anywhere in the item (fields, variants,
+generics, trait items, inline `mod` contents), after `#[cfg_attr]` is evaluated.
+Not in a derive: a derive cannot change its input, so a library declares its
+attributes on its own derive there.
+
+To learn the names, `#[announce]` sends every check a query first
+(`my_lib::check! { @__announce_attrs [ .., finish! ] { STATE } }`), and **every
+check must answer it**, also one that owns nothing. `announce_helper::check!`
+writes a proc-macro check that does; a `macro_rules!` check has one more arm. The
+[`#[announce]` docs](https://docs.rs/announce/latest/announce/attr.announce.html#checks-and-attributes-of-your-own)
+and `announce_helper::attrs` have the protocol.
 
 ## Type context
 

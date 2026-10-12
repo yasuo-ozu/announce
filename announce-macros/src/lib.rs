@@ -49,7 +49,8 @@ use proc_macro::TokenStream;
 /// - `path` or `path(args)`, without `=`: a check. It runs at the definition,
 ///   as `path! { (args), ITEM }` (`()` for a bare `path`), so its
 ///   `compile_error!` shows up where the item is defined, not where it is used.
-///   It is also listed in `META`.
+///   It is also listed in `META`. A check also answers a query, and can own
+///   attributes of its own: see [Checks](#checks-and-attributes-of-your-own).
 /// - `mock = path`: the item is a stand-in for the item at `path` (this is how
 ///   `announce-std` announces std items). It is kept in a hidden module, so it
 ///   is still type-checked, and `META` gets `mock(path)`.
@@ -68,10 +69,104 @@ use proc_macro::TokenStream;
 /// #[announce(macro_name = ParseAnnounce, meta = my_lib::info(version = 1))]
 /// pub trait Parse { /* .. */ }
 ///
-/// // Runs `my_lib::no_tuple! { (named), struct S { .. } }` next to the item.
+/// // Runs `my_lib::no_tuple! { (named), struct S { .. } }` next to the item
+/// // (after the query of "Checks and attributes of your own").
 /// #[announce(my_lib::no_tuple(named))]
 /// pub struct S { pub a: u8 }
 /// ```
+///
+/// # Checks and attributes of your own
+///
+/// A check can own attribute names. A library then puts attributes of its own
+/// inside the item, which rustc would reject ("cannot find attribute"), because
+/// no derive declares them:
+///
+/// ```ignore
+/// #[announce(my_lib::check)]
+/// pub struct S {
+///     #[my_lib(skip)]
+///     pub a: u8,
+///     pub b: u8,
+/// }
+/// ```
+///
+/// - The attributes of the owned names are **removed from the item** that
+///   `#[announce]` emits, so rustc never sees them.
+/// - They are **kept in the payload**: callbacks see them, and `META` lists the
+///   names as one element `attrs(my_lib, other)` (`announce_helper::Entry::owned_attrs`).
+///   A callback that emits the item itself removes them first
+///   (`announce_helper::Entry::item_without_owned_attrs`).
+/// - The check receives the item **with** them, and can validate them: its
+///   `compile_error!` points at the attribute where the item is defined.
+///
+/// Put `#[announce]` above the owned attributes of the item itself: rustc
+/// resolves attributes from the top, and an attribute above `#[announce]` is
+/// rejected before `#[announce]` can remove it.
+///
+/// An owned name `my_lib` matches `#[my_lib]`, `#[my_lib(..)]`, `#[my_lib = ..]`
+/// and `#[my_lib::..]` (the first segment of the path; `#[::my_lib::x]` is not
+/// matched). It matches wherever syn parses attributes inside the item: the item,
+/// its fields, variants, generic parameters, trait items, function parameters
+/// and statements, and everything inside an inline `mod`, also inner attributes
+/// (`#![..]`). It does not look inside macro invocations and `macro_rules!`
+/// bodies. A name that rustc or a standard tool uses (`cfg`, `doc`, `derive`,
+/// `allow`, `rustfmt`, `rustc_*`, ..) cannot be owned: that is an error where
+/// `#[announce]` is used. Two checks must not own the same name for different
+/// purposes, and an owned name must not be read by another macro on the item (a
+/// derive's helper attribute would be removed before the derive runs).
+///
+/// **How a check says what it owns: the query.** With checks, `#[announce]` does
+/// not emit the item at once. It calls the first check with a query that passes
+/// through all of them and ends at a hidden macro of `announce`:
+///
+/// ```text
+/// a::check! { @__announce_attrs [ b::check!, ::announce::__private::finish! ] { STATE } }
+/// ```
+///
+/// A check **answers** by calling the first element of the list, with the rest
+/// of the list and `STATE` unchanged, plus `attrs(name, ..)` if it owns names:
+///
+/// ```text
+/// b::check! { @__announce_attrs [ ::announce::__private::finish! ] { STATE attrs(my_lib) } }
+/// ```
+///
+/// `finish!` reads the names and expands to what `#[announce]` expands to
+/// without checks (with the owned attributes removed, see below). The state is
+/// opaque to the checks. **Every check must answer, also one that owns no
+/// attribute.** A proc-macro check is written with `announce_helper::check!`,
+/// which does this; a `macro_rules!` check has one more arm (see
+/// `announce_helper::attrs`):
+///
+/// ```ignore
+/// macro_rules! my_check {
+///     (@__announce_attrs [ $($np:ident)? $(:: $ns:ident)* ! $(, $($rest:tt)*)? ] { $($state:tt)* }) => {
+///         $($np)? $(:: $ns)* ! { @__announce_attrs [ $($($rest)*)? ] { $($state)* attrs(my_lib) } }
+///     };
+///     (($($args:tt)*), $($item:tt)*) => { /* the check */ };
+/// }
+/// ```
+///
+/// A check that does not answer stops the item from being emitted. A proc-macro
+/// check that parses `announce_helper::CheckInput` by hand reports it. A
+/// `macro_rules!` check without the arm gets rustc's "no rules expected `@`" at
+/// the `#[announce]`. Without checks there is no query, and the expansion is
+/// direct.
+///
+/// **`#[cfg]` and `#[cfg_attr]`.** The owned attributes are removed after the
+/// item's cfgs are evaluated in the defining crate: an owned attribute inside
+/// `#[cfg_attr(feature = "x", my_lib(skip))]` is there when the feature is on, and
+/// is removed like any other. For that, an item with owned attributes is not
+/// emitted by `#[announce]` itself but by the hidden derive that evaluates the
+/// cfgs (the rest of the item is unchanged). An item whose checks own nothing is
+/// emitted as written.
+///
+/// **`#[derive(Announce)]`** cannot remove attributes: a derive does not emit its
+/// input. A library that owns attributes on a derive declares them with its own
+/// derive (`#[proc_macro_derive(MyDerive, attributes(my_lib))]`) and calls
+/// `announce::machinery::derive_announce_with`. The derive sends the same
+/// query, so the checks run, can validate the attributes and `META` lists
+/// `attrs(..)`, but the item keeps them. A callback that re-emits it elsewhere
+/// strips them with `Entry::item_without_owned_attrs`.
 ///
 /// # Size and recursion
 ///
@@ -349,6 +444,15 @@ pub fn define_repeater(input: TokenStream) -> TokenStream {
 #[proc_macro_derive(Announce, attributes(announce))]
 pub fn derive_announce(input: TokenStream) -> TokenStream {
     announce_core::derive_announce(input.into()).into()
+}
+
+/// The end of the attribute query of `#[announce(check, ..)]`: the last element
+/// of the list that the checks forward. Not part of the API, never written by
+/// hand (`announce_helper::attrs` describes the query).
+#[doc(hidden)]
+#[proc_macro]
+pub fn finish(input: TokenStream) -> TokenStream {
+    announce_core::finish(input.into()).into()
 }
 
 #[doc(hidden)]

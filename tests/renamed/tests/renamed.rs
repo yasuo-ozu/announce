@@ -44,3 +44,27 @@ fn crate_option_with_a_renamed_dependency() {
     fn spy<T: ?Sized + announce_test_renamed::spy::Announce>() {}
     spy::<announce_test_renamed::ViaSpy>();
 }
+
+mod checked {
+    ::announce_test_renamed::WithCheck! { [::announce_test_renamed::WithCheck!, capture!] }
+    pub mod e {
+        ::announce_test_renamed::WithCheckExplicit! { [::announce_test_renamed::WithCheckExplicit!, capture!] }
+    }
+}
+
+#[test]
+fn the_attribute_query_goes_through_the_renamed_dependency() {
+    let out: String = checked::OUT.split_whitespace().collect();
+    assert!(
+        out.contains("[$crate::rename_check,attrs(renamed_attr)]")
+            || out.contains("[rename_check,attrs(renamed_attr)]"),
+        "{}",
+        out
+    );
+    assert!(out.contains("#[renamed_attr(x)]"), "{}", out);
+    let out: String = checked::e::OUT.split_whitespace().collect();
+    assert!(out.contains("attrs(renamed_attr)"), "{}", out);
+    // The items were emitted without the attribute.
+    let w = announce_test_renamed::WithCheck { a: 1 };
+    assert_eq!(w.a + announce_test_renamed::WithCheckExplicit { a: 2 }.a, 3);
+}

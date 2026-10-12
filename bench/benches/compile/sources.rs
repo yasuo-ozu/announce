@@ -72,7 +72,11 @@ fn announce_attr() -> String {
 }
 
 fn definition(out: &mut String, kind: Kind, i: usize, s: usize, announced: bool) {
-    let attr = if announced { announce_attr() } else { String::new() };
+    let attr = if announced {
+        announce_attr()
+    } else {
+        String::new()
+    };
     match kind {
         Kind::Struct => {
             write!(out, "{attr}pub struct D{i} {{\n").unwrap();
@@ -136,13 +140,22 @@ pub fn user(def_crate: &str, k: usize, separate: bool) -> String {
     }
     if separate {
         for i in 0..k {
-            writeln!(out, "::{def_crate}::D{i}! {{ [::{def_crate}::D{i}!, ::bench_cb::count!] c{i} }}").unwrap();
+            writeln!(
+                out,
+                "::{def_crate}::D{i}! {{ [::{def_crate}::D{i}!, ::bench_cb::count!] c{i} }}"
+            )
+            .unwrap();
         }
         let sum: Vec<String> = (0..k).map(|i| format!("c{i}::ENTRIES")).collect();
         writeln!(out, "pub const ENTRIES: usize = {};", sum.join(" + ")).unwrap();
     } else {
         let list: Vec<String> = (0..k).map(|i| format!("::{def_crate}::D{i}!")).collect();
-        writeln!(out, "::{def_crate}::D0! {{ [{}, ::bench_cb::count!] all }}", list.join(", ")).unwrap();
+        writeln!(
+            out,
+            "::{def_crate}::D0! {{ [{}, ::bench_cb::count!] all }}",
+            list.join(", ")
+        )
+        .unwrap();
         out.push_str("pub use all::ENTRIES;\n");
     }
     writeln!(out, "const _: () = assert!(ENTRIES == {k});").unwrap();
@@ -156,5 +169,7 @@ pub fn user_bin(kind: Kind, krate: &str, def_crate: &str) -> String {
         Kind::Struct => format!("{def_crate}::D0"),
         Kind::Trait => format!("&dyn {def_crate}::D0"),
     };
-    format!("fn main() {{ println!(\"{{}} {{}}\", {krate}::ENTRIES, std::mem::size_of::<{ty}>()); }}\n")
+    format!(
+        "fn main() {{ println!(\"{{}} {{}}\", {krate}::ENTRIES, std::mem::size_of::<{ty}>()); }}\n"
+    )
 }

@@ -66,7 +66,7 @@ pub fn pair(input: TokenStream) -> TokenStream {
 
 /// `#[derive(Tracked)]` with `#[tracked(OPTIONS)]`: announces the struct, enum or
 /// union, with options built in code (`derive_announce_with`).
-#[proc_macro_derive(Tracked, attributes(tracked))]
+#[proc_macro_derive(Tracked, attributes(tracked, field_attr))]
 pub fn derive_tracked(input: TokenStream) -> TokenStream {
     let mut item: syn::DeriveInput = match syn::parse(input) {
         Ok(i) => i,
@@ -92,7 +92,21 @@ pub fn derive_tracked(input: TokenStream) -> TokenStream {
 /// `#[derive(Plain)]` with the `#[announce(..)]` helper attribute of
 /// `#[derive(Announce)]` (`derive_announce`). The options must hold `crate = ..`,
 /// as the library's users do not depend on `announce`.
-#[proc_macro_derive(Plain, attributes(announce))]
+#[proc_macro_derive(Plain, attributes(announce, field_attr))]
 pub fn derive_plain(input: TokenStream) -> TokenStream {
     machinery::derive_announce(input.into()).into()
+}
+
+announce_helper::check! {
+    /// A check of the library that owns the attribute `field_attr` and rejects
+    /// `#[field_attr(bad)]`. It is used by `#[tracked(..)]`, `#[derive(Tracked)]`
+    /// and `#[derive(Plain)]`: the machinery sends the same query as `#[announce]`.
+    pub fn owner(ci) attributes(field_attr) {
+        for attr in ci.owned_attributes() {
+            if matches!(attr.parse_args::<syn::Ident>(), Ok(i) if i == "bad") {
+                return Err(syn::Error::new_spanned(&attr, "`#[field_attr(bad)]` is not allowed"));
+            }
+        }
+        Ok(TokenStream2::new())
+    }
 }

@@ -71,3 +71,34 @@ fn the_announce_impl_resolves_through_the_facade() {
     };
     assert_eq!((p.x, p.kept, p.tracked), (1, 2, true));
 }
+
+mod owned {
+    use super::{lib, summary};
+    lib::OwnedAnnounce! { [lib::OwnedAnnounce!, lib::OwnedDerivedAnnounce!, lib::OwnedPlainAnnounce!, summary!] ALL }
+}
+
+#[test]
+fn checks_that_own_attributes_work_through_the_machinery() {
+    let rows = owned::ALL;
+    assert_eq!(rows.len(), 3);
+    for (row, name) in rows.iter().zip(["Owned", "OwnedDerived", "OwnedPlain"]) {
+        assert_eq!(row.2, format!("struct {}", name), "{:?}", row);
+        // The check, and the names it owns.
+        assert_eq!(
+            norm(row.1),
+            "::announce_test_machinery_lib::owner,attrs(field_attr)",
+            "{:?}",
+            row
+        );
+    }
+    // The attribute route emits the item without the attribute.
+    let o = lib::Owned {
+        x: 1,
+        y: 2,
+        tracked: true,
+    };
+    assert_eq!(o.x + o.y, 3);
+    // The derive route keeps the attribute: the derive declares it.
+    assert_eq!(lib::OwnedDerived { y: 4 }.y, 4);
+    assert_eq!(lib::OwnedPlain(5).0, 5);
+}

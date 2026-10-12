@@ -311,7 +311,11 @@ fn type_leak_info_lets_callbacks_resolve_local_types() {
     assert!(m.contains("referrer=[\"type-leak-format-"), "{}", m);
     assert!(m.contains("(Local)") && m.contains("<T>;(Vec<T>)"), "{}", m);
     let t = norm(leaked::t::M[0]);
-    assert!(t.contains("referrer=[\"type-leak-format-") && t.contains("(Local)"), "{}", t);
+    assert!(
+        t.contains("referrer=[\"type-leak-format-") && t.contains("(Local)"),
+        "{}",
+        t
+    );
     assert!(!t.contains("Vec"), "{}", t);
 }
 

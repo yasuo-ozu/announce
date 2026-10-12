@@ -1,9 +1,7 @@
 //! The repeater of type-leak 0.8 as a consumer sees it: each leaked type is
 //! rewritten with the generics of its own scope, and the re-emitted items use
 //! them from a module where the relative types are not in scope.
-use announce_test_defs::contexts::inner::{
-    Arr, Flag, Local, LocalC, LocalG, Wrap, G, GC, W,
-};
+use announce_test_defs::contexts::inner::{Arr, Flag, Local, LocalC, LocalG, Wrap, G, GC, W};
 
 macro_rules! reemit {
     ($($name:ident = $leaf:ident;)*) => {$(

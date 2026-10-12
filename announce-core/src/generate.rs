@@ -1,4 +1,5 @@
 use crate::options::{Layout, Options};
+use announce_helper::OwnedAttrs;
 use proc_macro2::{Group, Ident, Span, TokenStream, TokenTree};
 use syn::{Item, Result, Visibility};
 use template_quote::{quote, ToTokens};
@@ -101,81 +102,16 @@ fn crate_to_dollar_crate(ts: TokenStream) -> TokenStream {
     out.into_iter().collect()
 }
 
-/// Marks standing in for the `#[cfg]` attributes that are about to be dropped.
-const STRIPPED_CFG: &str = "__announce_stripped_cfg";
-
 /// After the derive's cfg evaluation, every `#[cfg]` still present is true.
 /// Remove them so the consumer does not evaluate them again with its own
 /// settings. `#[cfg]` inside macro invocation bodies is left alone.
 ///
-/// Returns the item's tokens without them, and the item itself without them
-/// (re-parsed) only if there were any. `syn`'s `VisitMut` can change an
-/// attribute but not remove it from its list in every version we support (the
-/// `visit_attributes_mut` hook is recent), so each `#[cfg]` is renamed to a
-/// mark first and the marks are dropped from the printed tokens.
-fn strip_true_cfgs(item: Item) -> Result<(Item, TokenStream)> {
-    struct V(bool);
-    impl syn::visit_mut::VisitMut for V {
-        fn visit_attribute_mut(&mut self, a: &mut syn::Attribute) {
-            if a.path().is_ident("cfg") {
-                let mark: syn::Path = Ident::new(STRIPPED_CFG, Span::call_site()).into();
-                match &mut a.meta {
-                    syn::Meta::Path(p) => *p = mark,
-                    syn::Meta::List(l) => l.path = mark,
-                    syn::Meta::NameValue(nv) => nv.path = mark,
-                }
-                self.0 = true;
-            }
-            syn::visit_mut::visit_attribute_mut(self, a);
-        }
-    }
-    let mut item = item;
-    let mut v = V(false);
-    syn::visit_mut::VisitMut::visit_item_mut(&mut v, &mut item);
-    if !v.0 {
-        let tokens = item.to_token_stream();
-        return Ok((item, tokens));
-    }
-    let tokens = drop_marked_attributes(item.to_token_stream());
-    Ok((syn::parse2(tokens.clone())?, tokens))
-}
-
-/// Removes the `#[STRIPPED_CFG(..)]` and `#![STRIPPED_CFG(..)]` attributes, at
-/// any depth.
-fn drop_marked_attributes(ts: TokenStream) -> TokenStream {
-    let tts: Vec<TokenTree> = ts.into_iter().collect();
-    let mut out = Vec::with_capacity(tts.len());
-    let mut i = 0;
-    while i < tts.len() {
-        match &tts[i] {
-            TokenTree::Punct(p) if p.as_char() == '#' => {
-                let mut j = i + 1;
-                if matches!(tts.get(j), Some(TokenTree::Punct(b)) if b.as_char() == '!') {
-                    j += 1;
-                }
-                if let Some(TokenTree::Group(g)) = tts.get(j) {
-                    let marked = g.delimiter() == proc_macro2::Delimiter::Bracket
-                        && matches!(
-                            g.stream().into_iter().next(),
-                            Some(TokenTree::Ident(id)) if id == STRIPPED_CFG
-                        );
-                    if marked {
-                        i = j + 1;
-                        continue;
-                    }
-                }
-                out.push(tts[i].clone());
-            }
-            TokenTree::Group(g) => {
-                let mut ng = Group::new(g.delimiter(), drop_marked_attributes(g.stream()));
-                ng.set_span(g.span());
-                out.push(TokenTree::Group(ng));
-            }
-            t => out.push(t.clone()),
-        }
-        i += 1;
-    }
-    out.into_iter().collect()
+/// Returns the item without them (re-parsed) and its tokens. See
+/// `announce_helper::remove_attributes` for how an attribute is removed.
+fn strip_true_cfgs(mut item: Item) -> Result<(Item, TokenStream)> {
+    announce_helper::remove_attributes(&mut item, |a| a.path().is_ident("cfg"))?;
+    let tokens = item.to_token_stream();
+    Ok((item, tokens))
 }
 
 /// Conservative test for "`dyn Trait` is certainly a valid type", so that the
@@ -512,11 +448,13 @@ fn arms(fallback: &Ident, plain: &Variant, single: bool) -> TokenStream {
 }
 
 /// The generated macro and its re-export, carrying `payload` (item tokens)
-/// with META = checks, `meta =` entries, `mock(..)` and `extra_meta`.
+/// with META = checks, `meta =` entries, `attrs(..)` (the owned attribute
+/// names), `mock(..)` and `extra_meta`.
 pub fn trampoline(
     ident: &Ident,
     vis: &Visibility,
     opts: &Options,
+    owned: &OwnedAttrs,
     random: u64,
     payload: TokenStream,
     extra_meta: TokenStream,
@@ -543,6 +481,9 @@ pub fn trampoline(
             }
         })
         .collect();
+    if !owned.is_empty() {
+        meta_items.push(quote! { #owned });
+    }
     if let Some(m) = &opts.mock {
         meta_items.push(quote! { mock(#m) });
     }
@@ -575,13 +516,57 @@ pub fn trampoline(
     }
 }
 
+/// The item without the owned attributes (`item` has its cfgs evaluated).
+fn compiled_copy(item: &Item, owned: &OwnedAttrs) -> Result<TokenStream> {
+    let mut item = item.clone();
+    owned.strip(&mut item)?;
+    Ok(item.to_token_stream())
+}
+
+/// Whether `generate` emits the real item itself: when something is removed from
+/// it, the derive emits it instead of `#[announce]` (section 4.7 of DESIGN.md).
+fn emits_real_item(opts: &Options, owned: &OwnedAttrs) -> bool {
+    !owned.is_empty() && opts.emit_item && opts.mock.is_none() && !opts.derived
+}
+
+/// What stands in for `generate` when it fails: the real item, if `generate`
+/// would have emitted it. Without it the error would be followed by errors about
+/// the missing item.
+pub fn real_item_on_error(item: Item, opts: &Options, owned: &OwnedAttrs) -> TokenStream {
+    if !emits_real_item(opts, owned) {
+        return TokenStream::new();
+    }
+    strip_true_cfgs(item)
+        .and_then(|(item, _)| compiled_copy(&item, owned))
+        .unwrap_or_default()
+}
+
 /// Everything the `__Capture` derive emits for one cfg-evaluated item.
-pub fn generate(item: Item, opts: &Options, random: u64) -> Result<TokenStream> {
+///
+/// `owned` are the attribute names that the checks own. The payload and the
+/// checks get the item with those attributes, since callbacks and checks read
+/// them. The copies that rustc compiles lose them: the real item (which this
+/// emits, instead of `#[announce]`, whenever there is anything to remove) and
+/// the hidden copy of a `mock`.
+pub fn generate(
+    item: Item,
+    opts: &Options,
+    random: u64,
+    owned: &OwnedAttrs,
+) -> Result<TokenStream> {
     let (ident, vis) = ident_vis(&item)?;
     let krate = opts.krate();
     let h = hex(random);
 
     let (item, full_item) = strip_true_cfgs(item)?;
+
+    // What the compiler sees: without the owned attributes.
+    let compiled = if owned.is_empty() {
+        full_item.clone()
+    } else {
+        compiled_copy(&item, owned)?
+    };
+    let real_item = emits_real_item(opts, owned).then(|| compiled.clone());
 
     let checks = opts.checks.iter().map(|c| {
         let p = &c.path;
@@ -596,7 +581,7 @@ pub fn generate(item: Item, opts: &Options, random: u64) -> Result<TokenStream> 
             mod #m {
                 #[allow(unused_imports)]
                 use super::*;
-                #full_item
+                #compiled
             }
         }
     });
@@ -608,9 +593,18 @@ pub fn generate(item: Item, opts: &Options, random: u64) -> Result<TokenStream> 
         Some(l) => (l.impls, l.meta),
         None => (TokenStream::new(), TokenStream::new()),
     };
-    let tramp = trampoline(&ident, &vis, opts, random, full_item.clone(), leak_meta);
+    let tramp = trampoline(
+        &ident,
+        &vis,
+        opts,
+        owned,
+        random,
+        full_item.clone(),
+        leak_meta,
+    );
 
     Ok(quote! {
+        #real_item
         #tramp
         #leak_impls
         #(#checks)*
@@ -828,6 +822,7 @@ mod tests {
             &ident,
             &vis,
             &opts,
+            &OwnedAttrs::new(),
             1,
             payload,
             TokenStream::new(),
@@ -932,6 +927,7 @@ mod tests {
             &ident,
             &vis,
             &opts,
+            &OwnedAttrs::new(),
             1,
             quote! { pub struct S { pub marker_zzz: u8 } },
             extra,
@@ -951,6 +947,112 @@ mod tests {
             );
             assert!(out.contains(squash(DERIVE_IN_EXPR).as_str()), "{}", out);
         }
+    }
+
+    fn generate_for(opts: &str, owned: &[&str], item: TokenStream) -> String {
+        let opts: Options = syn::parse2(opts.parse().unwrap()).unwrap();
+        let item: Item = syn::parse2(item).unwrap();
+        squash(generate(item, &opts, 3, &OwnedAttrs::from_strs(owned)).unwrap())
+    }
+
+    #[test]
+    fn owned_attributes_stay_in_the_payload_and_the_checks_only() {
+        let item = quote! {
+            #[my_lib(item)]
+            pub struct S { #[my_lib(skip)] #[doc = "kept"] pub a: u8, #[other] pub b: u8 }
+        };
+        let out = generate_for(
+            "crate = ::l::announce, c::check(x)",
+            &["my_lib"],
+            item.clone(),
+        );
+        // The compiler sees the item without them (the dummy is not emitted by `announce`).
+        assert!(
+            out.starts_with("pubstructS{#[doc=\"kept\"]puba:u8,#[other]pubb:u8}"),
+            "{}",
+            out
+        );
+        // The payload and the check have them (once each: the macro holds one copy per
+        // arm of the layout, so count the check's).
+        assert!(
+            out.contains(
+                "c::check!{(x),#[my_lib(item)]pubstructS{#[my_lib(skip)]#[doc=\"kept\"]puba:u8"
+            ),
+            "{}",
+            out
+        );
+        assert!(
+            out.contains("=>[c::check(x),attrs(my_lib)]{#[my_lib(item)]pubstructS{#[my_lib(skip)]"),
+            "{}",
+            out
+        );
+        // No owned name: the item is the caller's to emit, and nothing is stripped.
+        let out = generate_for("crate = ::l::announce", &[], item);
+        assert!(out.starts_with("#[doc(hidden)]"), "{}", out);
+        assert!(out.contains("=>[]{#[my_lib(item)]pubstructS"), "{}", out);
+    }
+
+    #[test]
+    fn owned_attributes_are_not_in_the_copies_that_rustc_compiles() {
+        let item = quote! { pub trait T { #[my_lib(m)] fn f(&self); } };
+        // A mock: its hidden copy is compiled, so it has none; the payload does.
+        let out = generate_for(
+            "crate = ::l::announce, mock = a::T",
+            &["my_lib"],
+            item.clone(),
+        );
+        let hidden = out.split("modsuper").next().unwrap().to_string();
+        assert!(
+            out.contains("mod__announce_mock_0000000000000003{"),
+            "{}",
+            out
+        );
+        assert!(!out.starts_with("pubtrait"), "{}", out);
+        let copy = out.split("usesuper::*;").nth(1).unwrap();
+        assert!(copy.starts_with("pubtraitT{fnf(&self);}}"), "{}", copy);
+        assert!(out.contains("mock(a::T)"), "{}", hidden);
+        assert!(
+            out.contains("=>[attrs(my_lib),mock(a::T)]{pubtraitT{#[my_lib(m)]fnf(&self);}}"),
+            "{}",
+            out
+        );
+        // `emit_item = false`: nothing is emitted for rustc at all.
+        let out = generate_for("emit_item = false", &["my_lib"], item.clone());
+        assert!(out.starts_with("#[doc(hidden)]"), "{}", out);
+        // A derive does not emit its input either.
+        let opts = Options {
+            derived: true,
+            emit_item: false,
+            ..Options::default()
+        };
+        let out = squash(
+            generate(
+                syn::parse2(item).unwrap(),
+                &opts,
+                3,
+                &OwnedAttrs::from_strs(&["my_lib"]),
+            )
+            .unwrap(),
+        );
+        assert!(out.starts_with("#[doc(hidden)]"), "{}", out);
+    }
+
+    #[test]
+    fn a_failed_generate_still_gives_the_real_item() {
+        let owned = OwnedAttrs::from_strs(&["my_lib"]);
+        let opts = Options::default();
+        // With owned names the derive would have emitted the item.
+        let item2: Item =
+            syn::parse2(quote! { pub struct S { #[my_lib] #[cfg(a)] pub a: u8 } }).unwrap();
+        let out = squash(real_item_on_error(item2.clone(), &opts, &owned));
+        assert_eq!(out, "pubstructS{puba:u8}");
+        // Otherwise `#[announce]` emitted it already, or nobody does.
+        assert!(real_item_on_error(item2.clone(), &opts, &OwnedAttrs::new()).is_empty());
+        let no_emit = Options {
+            emit_item: false,
+            ..Options::default()
+        };
+        assert!(real_item_on_error(item2, &no_emit, &owned).is_empty());
     }
 
     #[test]
@@ -982,7 +1084,7 @@ mod tests {
             "{}",
             out
         );
-        assert!(!out.contains(STRIPPED_CFG), "{}", out);
+        assert!(!out.contains("__announce_removed_attribute"), "{}", out);
         assert_eq!(squash(&item), out);
 
         // Macro bodies are opaque; an item without `cfg` is returned as it is.

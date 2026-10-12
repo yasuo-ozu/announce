@@ -585,12 +585,7 @@ pub fn table(item: &Item, opts: &crate::options::Options, random: u64) -> Result
             }
         });
     }
-    let table = TypeLeak::new(
-        repeater.clone(),
-        id,
-        referrer.clone(),
-        analysis.context,
-    );
+    let table = TypeLeak::new(repeater.clone(), id, referrer.clone(), analysis.context);
     // The consumer reads the META back and uses the same indices as the impls
     // above, so the table must survive its own serialization unchanged.
     let meta = table.meta();
@@ -881,9 +876,7 @@ mod tests {
     fn higher_ranked_lifetime_in_a_leaked_type_is_carried() {
         // The entry's context declares `'b`, so the impl does and the consumer's
         // projection (inside the `for<'b>`) passes it (ALGORITHM_FINDINGS #7).
-        let impls = squash(
-            &leaked(quote! { struct S { f: for<'b> fn(Local<'b>) } }).impls,
-        );
+        let impls = squash(&leaked(quote! { struct S { f: for<'b> fn(Local<'b>) } }).impls);
         assert!(
             impls.contains("impl<'b>crate::R<(&'b(),),42u64,0usize>for(){typeType=Local<'b>;}"),
             "{}",
@@ -903,7 +896,11 @@ mod tests {
             e
         );
         assert!(e.contains("repeater = crate::path::to::Repeater"), "{}", e);
-        assert!(e.contains("announce::define_repeater!(pub Repeater);"), "{}", e);
+        assert!(
+            e.contains("announce::define_repeater!(pub Repeater);"),
+            "{}",
+            e
+        );
         assert!(!e.contains("such types"), "{}", e);
         let e = table(
             &item(quote! { struct S { a: Local, b: Other } }),
@@ -951,7 +948,9 @@ mod tests {
         );
         let meta = squash(&leaked.meta);
         assert!(
-            meta.starts_with("type_leak(repeater=crate::R,id=42u64,context=0,referrer=[\"type-leak-format-"),
+            meta.starts_with(
+                "type_leak(repeater=crate::R,id=42u64,context=0,referrer=[\"type-leak-format-"
+            ),
             "{}",
             meta
         );
@@ -1038,7 +1037,12 @@ mod tests {
             impls
         );
         assert!(impls.contains("impl<X>crate::R<(X,),42u64,"), "{}", impls);
-        assert_eq!(impls.matches("typeType=inner::GC<X>;").count(), 2, "{}", impls);
+        assert_eq!(
+            impls.matches("typeType=inner::GC<X>;").count(),
+            2,
+            "{}",
+            impls
+        );
     }
 
     #[test]
@@ -1098,8 +1102,16 @@ mod tests {
             })
             .impls,
         );
-        assert!(impls.contains("impl<U>crate::R<(U,),42u64,0usize>for()"), "{}", impls);
-        assert!(impls.contains("crate::R<(),42u64,1usize>for()"), "{}", impls);
+        assert!(
+            impls.contains("impl<U>crate::R<(U,),42u64,0usize>for()"),
+            "{}",
+            impls
+        );
+        assert!(
+            impls.contains("crate::R<(),42u64,1usize>for()"),
+            "{}",
+            impls
+        );
         let impls = squash(
             &leaked(quote! {
                 trait K { fn f<N>(&self, x: inner::LocalG<N>); fn g<const N: usize>(&self, x: inner::Arr<N>); }
@@ -1107,7 +1119,11 @@ mod tests {
             .impls,
         );
         assert!(impls.contains("impl<N>crate::R<(N,),42u64,"), "{}", impls);
-        assert!(impls.contains("impl<constN:usize>crate::R<([();N],),42u64,"), "{}", impls);
+        assert!(
+            impls.contains("impl<constN:usize>crate::R<([();N],),42u64,"),
+            "{}",
+            impls
+        );
     }
 
     #[test]
@@ -1116,7 +1132,11 @@ mod tests {
         let leaked = table(&it, &with_repeater(), 3).unwrap().unwrap();
         assert!(leaked.impls.is_empty());
         let meta = squash(&leaked.meta);
-        assert!(meta.starts_with("type_leak(repeater=crate::R,id=3u64,context=0,referrer=["), "{}", meta);
+        assert!(
+            meta.starts_with("type_leak(repeater=crate::R,id=3u64,context=0,referrer=["),
+            "{}",
+            meta
+        );
         // The consumer reads it back, with nothing to replace.
         let m: announce_helper::Meta = syn::parse2(leaked.meta).unwrap();
         let read = TypeLeak::from_kv(&mut m.kv().unwrap()).unwrap();
@@ -1136,7 +1156,11 @@ mod tests {
         for (ix, ty) in read.types() {
             let nth = format!("42u64,{}usize>for()", ix);
             assert!(impls.contains(&nth), "{}: {}", nth, impls);
-            assert!(impls.contains(&format!("typeType={};", squash(ty))), "{}", impls);
+            assert!(
+                impls.contains(&format!("typeType={};", squash(ty))),
+                "{}",
+                impls
+            );
         }
     }
 

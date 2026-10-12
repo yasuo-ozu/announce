@@ -58,6 +58,31 @@
 //! then emits the trampoline `macro_rules!`. So the item may hold `#[cfg]`
 //! attributes, and the macro has to be expanded in item position.
 //!
+//! # Checks and the attribute query
+//!
+//! With checks in the options (`my_lib::check`), the output is not that yet: it
+//! is a call of the first check that carries the *query*, the question which
+//! attributes each check owns (`announce_helper::attrs` has the protocol). The
+//! last element of the query is `<crate path>::__private::finish!`, a hidden
+//! macro of the `announce` crate that the path in `crate = ..` must reach (a
+//! library that re-exports `announce` does). It expands to the output above,
+//! without the attributes the checks own in the item it emits. [`finish`] is the
+//! function behind that macro; a library does not call it. The same holds for
+//! [`derive_announce`] and [`derive_announce_with`], where the item cannot be
+//! changed: the library declares its attributes on its own derive, and the query
+//! only lists them in `META`.
+//!
+//! ```
+//! use announce::machinery::announce;
+//! use proc_macro2::TokenStream;
+//!
+//! let attr: TokenStream = "crate = ::my_lib::announce, ::my_lib::check".parse().unwrap();
+//! let item: TokenStream = "pub struct S { #[my_lib(skip)] pub a: u8 }".parse().unwrap();
+//! let out = announce(attr, item).to_string();
+//! assert!(out.starts_with(":: my_lib :: check ! { @ __announce_attrs"));
+//! assert!(out.contains(":: my_lib :: announce :: __private :: finish !"));
+//! ```
+//!
 //! ```
 //! use announce::machinery::announce;
 //! use proc_macro2::TokenStream;
@@ -75,6 +100,7 @@
 //! forms return the `syn::Error`, to combine it with others or to report it
 //! with another span. The API uses the types of `proc-macro2` 1 and `syn` 2.
 pub use announce_core::{
-    announce, define_repeater, derive_announce, derive_announce_with, try_announce,
-    try_define_repeater, try_derive_announce, Check, Layout, Options, SINGLE_COPY_THRESHOLD,
+    announce, define_repeater, derive_announce, derive_announce_with, finish, try_announce,
+    try_define_repeater, try_derive_announce, try_finish, Check, Layout, Options,
+    SINGLE_COPY_THRESHOLD,
 };

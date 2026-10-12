@@ -5,6 +5,7 @@ use announce::announce;
 
 pub mod large;
 pub mod large_leak;
+pub mod owned;
 
 pub mod kinds {
     use super::announce;
@@ -213,6 +214,16 @@ pub mod checks {
     #[announce(announce_test_derive::no_tuple(named only))]
     pub struct Checked {
         pub a: u8,
+    }
+
+    /// A check on the derive form: the derive sends the same query, and the
+    /// item stays as written.
+    #[derive(::announce::Announce, Debug)]
+    #[announce(announce_test_derive::no_tuple(derived), meta = crate::info(1))]
+    pub struct DerivedChecked {
+        pub a: u8,
+        #[cfg(any())]
+        pub gone: u8,
     }
 }
 

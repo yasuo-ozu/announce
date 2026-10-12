@@ -31,3 +31,25 @@ pub struct Derived {
 #[derive(Plain)]
 #[announce(crate = ::announce_test_machinery_lib::announce, macro_name = PlainAnnounce)]
 pub struct PlainStruct(pub u8);
+
+// A check that owns an attribute. The attribute route removes it from
+// the item it emits, and the check sees it.
+#[tracked(::announce_test_machinery_lib::owner, macro_name = OwnedAnnounce)]
+pub struct Owned {
+    #[field_attr(x)]
+    pub x: i32,
+    pub y: i32,
+}
+
+// The derive cannot remove attributes from its input: the library's own derive
+// declares `field_attr`. The query only lists the name in META.
+#[derive(Tracked)]
+#[tracked(::announce_test_machinery_lib::owner, macro_name = OwnedDerivedAnnounce)]
+pub struct OwnedDerived {
+    #[field_attr(y)]
+    pub y: u8,
+}
+
+#[derive(Plain)]
+#[announce(crate = ::announce_test_machinery_lib::announce, macro_name = OwnedPlainAnnounce, ::announce_test_machinery_lib::owner)]
+pub struct OwnedPlain(#[field_attr(z)] pub u8);

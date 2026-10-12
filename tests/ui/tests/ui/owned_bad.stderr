@@ -1,0 +1,11 @@
+error: `#[my_lib(bad)]` is not allowed
+ --> tests/ui/owned_bad.rs:7:5
+  |
+7 |     #[my_lib(bad)]
+  |     ^^^^^^^^^^^^^^
+
+error: `#[other(forbidden)]` is not allowed
+  --> tests/ui/owned_bad.rs:16:9
+   |
+16 |         #[other(forbidden)]
+   |         ^^^^^^^^^^^^^^^^^^^

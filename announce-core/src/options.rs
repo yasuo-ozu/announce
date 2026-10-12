@@ -263,10 +263,13 @@ impl Parse for Options {
     }
 }
 
-/// Arguments of the hidden `#[__announce(RANDOM; OPTIONS)]` helper attribute that
-/// `#[announce]` puts on the capture dummy.
+/// Arguments of the hidden `#[__announce(RANDOM; [OWNED;] OPTIONS)]` helper
+/// attribute that `#[announce]` puts on the capture dummy. `OWNED` is a bracketed,
+/// comma-separated list of the attribute names that the checks own; it is left
+/// out when there are none.
 pub struct CaptureArgs {
     pub random: u64,
+    pub owned: announce_helper::OwnedAttrs,
     pub opts: Options,
 }
 
@@ -274,8 +277,19 @@ impl Parse for CaptureArgs {
     fn parse(input: ParseStream) -> Result<Self> {
         let lit: syn::LitInt = input.parse()?;
         input.parse::<Token![;]>()?;
+        let owned = if input.peek(syn::token::Bracket) {
+            let content;
+            syn::bracketed!(content in input);
+            let names: syn::punctuated::Punctuated<Ident, Token![,]> =
+                syn::punctuated::Punctuated::parse_terminated(&content)?;
+            input.parse::<Token![;]>()?;
+            announce_helper::OwnedAttrs::from_idents(names)
+        } else {
+            announce_helper::OwnedAttrs::new()
+        };
         Ok(CaptureArgs {
             random: lit.base10_parse()?,
+            owned,
             opts: input.parse()?,
         })
     }

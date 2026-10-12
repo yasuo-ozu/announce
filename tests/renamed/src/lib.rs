@@ -52,3 +52,24 @@ pub mod spy {
 
 #[ann::announce(crate = crate::spy)]
 pub struct ViaSpy;
+
+/// A check that owns an attribute: the query ends at `finish!`, which is reached
+/// through the renamed dependency (`::ann::__private::finish!`).
+macro_rules! rename_check {
+    (@__announce_attrs [ $($np:ident)? $(:: $ns:ident)* ! $(, $($rest:tt)*)? ] { $($state:tt)* }) => {
+        $($np)? $(:: $ns)* ! { @__announce_attrs [ $($($rest)*)? ] { $($state)* attrs(renamed_attr) } }
+    };
+    (($($args:tt)*), $($item:tt)*) => {};
+}
+
+#[ann::announce(rename_check)]
+pub struct WithCheck {
+    #[renamed_attr(x)]
+    pub a: u8,
+}
+
+#[ann::announce(crate = ::ann, rename_check)]
+pub struct WithCheckExplicit {
+    #[renamed_attr]
+    pub a: u8,
+}

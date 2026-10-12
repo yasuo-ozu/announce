@@ -10,14 +10,17 @@
 //! docs, and `announce::machinery` for how a library uses them.
 
 mod cratepath;
+mod finish;
 mod generate;
 mod leak;
 mod options;
 
+use announce_helper::OwnedAttrs;
 use proc_macro2::{Ident, Span, TokenStream};
 use std::sync::atomic::{AtomicU64, Ordering};
-use template_quote::quote;
+use template_quote::{quote, ToTokens};
 
+pub use finish::{finish, try_finish};
 pub use generate::SINGLE_COPY_THRESHOLD;
 pub use options::{Check, Layout, Options};
 
@@ -37,6 +40,13 @@ fn random_u64() -> u64 {
 /// `emit_item = false` or `mock`) and adds the code that emits the
 /// trampoline `macro_rules!` and the other generated items.
 ///
+/// With checks (`my_lib::check`) the result is not the item yet: it is the
+/// call of the first check, with the query that asks every check which
+/// attributes it owns. The last element of the query is the hidden macro
+/// `finish!` of the `announce` crate (`<crate path>::__private::finish!`, see
+/// [`finish()`]), which expands to what is described above, without the
+/// attributes the checks own. See `announce_helper::attrs` for the protocol.
+///
 /// A returned error is a syntax or type-context error of the same kind as
 /// `#[announce]` reports. Here it comes back as a `compile_error!` invocation
 /// in the returned tokens, so a proc macro can return the result as it is.
@@ -53,24 +63,57 @@ pub fn try_announce(attr: TokenStream, item: TokenStream) -> syn::Result<TokenSt
     let opts: Options = syn::parse2(attr.clone())?;
     let parsed: syn::Item = syn::parse2(item.clone())?;
     generate::ident_vis(&parsed)?;
-    let krate = opts.krate();
     let random = random_u64();
+    if opts.checks.is_empty() {
+        return Ok(capture_output(
+            &opts,
+            &attr,
+            item,
+            random,
+            &OwnedAttrs::new(),
+        ));
+    }
+    Ok(finish::query(
+        &opts,
+        finish::Mode::Attribute,
+        &attr,
+        &item,
+        random,
+    ))
+}
+
+/// What `#[announce]` expands to once the attribute names that its checks own
+/// are known (`owned`; empty without checks): the item and the capture dummy.
+///
+/// DESIGN.md section 4.2: the derive sees the copy with every nested cfg
+/// evaluated in this crate, then `remove` deletes the dummy. Without owned
+/// attributes the item is emitted here, as written. With owned attributes it
+/// is the derive that emits it, from its cfg-evaluated copy and without them
+/// (section 4.7).
+pub(crate) fn capture_output(
+    opts: &Options,
+    attr: &TokenStream,
+    item: TokenStream,
+    random: u64,
+    owned: &OwnedAttrs,
+) -> TokenStream {
+    let krate = opts.krate();
     let cap = Ident::new(
         &format!("__AnnounceCap_{}", generate::hex(random)),
         Span::call_site(),
     );
     let random_lit = syn::LitInt::new(&format!("{}u64", random), Span::call_site());
-    let emit_item = opts.mock.is_none() && opts.emit_item;
-    // DESIGN.md section 4.2: the derive sees the copy with every nested cfg
-    // evaluated in this crate, then `remove` deletes the dummy.
-    Ok(quote! {
+    let emit_item = opts.mock.is_none() && opts.emit_item && owned.is_empty();
+    let names = owned.names();
+    let owned_arg = (!owned.is_empty()).then(|| quote! { [ #(#names),* ] ; });
+    quote! {
         #(if emit_item) { #item }
         #[derive(#krate::__private::Capture)]
-        #[__announce(#random_lit; #attr)]
+        #[__announce(#random_lit; #owned_arg #attr)]
         #[#krate::__private::remove]
         #[allow(dead_code, non_camel_case_types)]
         enum #cap { V = { #item 0 } }
-    })
+    }
 }
 
 /// Does what `define_repeater!($vis $ident)` does: the definition of the
@@ -205,7 +248,33 @@ fn finish_derive(mut item: syn::Item, mut opts: Options) -> syn::Result<TokenStr
     // The derive input is already cfg-evaluated by rustc.
     opts.emit_item = false;
     opts.derived = true;
-    generate::generate(item, &opts, random_u64())
+    if opts.checks.is_empty() {
+        return generate::generate(item, &opts, random_u64(), &OwnedAttrs::new());
+    }
+    // The same query as `#[announce]` sends. A derive cannot remove the
+    // attributes from its input, so a library that owns attributes declares them
+    // on its own derive (`attributes(..)`); the query only lists them in META.
+    let (attr, item) = (opts.to_token_stream(), item.to_token_stream());
+    let random = random_u64();
+    Ok(finish::query(
+        &opts,
+        finish::Mode::Derive,
+        &attr,
+        &item,
+        random,
+    ))
+}
+
+/// The end of the derive's query: [`finish_derive`] with the owned names known.
+pub(crate) fn finish_derive_now(
+    item: syn::Item,
+    mut opts: Options,
+    random: u64,
+    owned: &OwnedAttrs,
+) -> syn::Result<TokenStream> {
+    opts.emit_item = false;
+    opts.derived = true;
+    generate::generate(item, &opts, random, owned)
 }
 
 /// The body of the hidden `Capture` derive that `#[announce]` expands to.
@@ -247,7 +316,14 @@ pub fn capture(input: TokenStream) -> syn::Result<TokenStream> {
         _ => None,
     });
     match item {
-        Some(item) => generate::generate(item, &args.opts, args.random),
+        Some(item) => {
+            let generated = generate::generate(item.clone(), &args.opts, args.random, &args.owned);
+            generated.or_else(|e| {
+                let mut out = e.to_compile_error();
+                out.extend(generate::real_item_on_error(item, &args.opts, &args.owned));
+                Ok(out)
+            })
+        }
         None => Ok(TokenStream::new()),
     }
 }
@@ -320,7 +396,8 @@ mod tests {
         }
         let out = norm(&define_repeater(ts("pub")));
         assert!(
-            out.starts_with("::core::compile_error!") && out.contains("expected`define_repeater!(<visibility><Name>)`"),
+            out.starts_with("::core::compile_error!")
+                && out.contains("expected`define_repeater!(<visibility><Name>)`"),
             "{}",
             out
         );
@@ -418,6 +495,192 @@ mod tests {
         };
         let out = derive_announce_with(opts, ts(item)).unwrap();
         assert!(norm(&out).contains("__announce_emit"));
+    }
+
+    /// The state group of a query for `S`, as `query` writes it, to feed `finish`.
+    fn finish_input(mode: &str, attr: &str, item: &str, answers: &str) -> TokenStream {
+        ts(&format!(
+            "@__announce_attrs [] {{ [7u64; {} ({}) {{ {} }}] {} }}",
+            mode, attr, item, answers
+        ))
+    }
+
+    #[test]
+    fn checks_send_the_query_before_anything_is_emitted() {
+        let out = norm(&announce(
+            ts("crate = ::l::announce, a::check, b::check(x), meta = m::info"),
+            ts("pub struct S { pub a: u8 }"),
+        ));
+        // The first check is called; the others and `finish!` follow.
+        assert!(
+            out.starts_with(
+                "a::check!{@__announce_attrs[b::check!,::l::announce::__private::finish!]{[",
+            ),
+            "{}",
+            out
+        );
+        // The state: a random number, the mode, the attribute and the item.
+        assert!(
+            out.contains(";attr(crate=::l::announce,a::check,b::check(x),meta=m::info){pubstructS{puba:u8}}]}}"),
+            "{}",
+            out
+        );
+        // Nothing else yet: no item, no capture dummy.
+        assert!(
+            !out.contains("Capture") && out.matches("pubstructS").count() == 1,
+            "{}",
+            out
+        );
+        // Without checks there is no query.
+        let out = norm(&announce(
+            ts("crate = ::l::announce, meta = m::info"),
+            ts("pub struct S;"),
+        ));
+        assert!(
+            !out.contains("__announce_attrs") && out.contains("Capture"),
+            "{}",
+            out
+        );
+    }
+
+    #[test]
+    fn finish_without_owned_attributes_emits_what_announce_emits_without_checks() {
+        let item = "pub struct S { pub a: u8 }";
+        let out = norm(&finish(finish_input(
+            "attr",
+            "crate=::l::announce,a::check",
+            item,
+            "",
+        )));
+        assert!(
+            out.starts_with("pubstructS{puba:u8}#[derive(::l::announce::__private::Capture)]"),
+            "{}",
+            out
+        );
+        assert!(
+            out.contains("#[__announce(7u64;crate=::l::announce,a::check)]"),
+            "{}",
+            out
+        );
+    }
+
+    #[test]
+    fn finish_with_owned_attributes_leaves_the_item_to_the_capture_derive() {
+        let item = "pub struct S { #[my_lib(skip)] pub a: u8 }";
+        let out = norm(&finish(finish_input(
+            "attr",
+            "crate=::l::announce,a::check",
+            item,
+            "attrs(my_lib) attrs(other, my_lib)",
+        )));
+        // The item is not emitted here (it would have an attribute no macro knows),
+        // only in the dummy that the derive reads, with the owned names in front
+        // of the options.
+        assert!(
+            out.starts_with("#[derive(::l::announce::__private::Capture)]"),
+            "{}",
+            out
+        );
+        assert!(
+            out.contains("#[__announce(7u64;[my_lib,other];crate=::l::announce,a::check)]"),
+            "{}",
+            out
+        );
+        assert_eq!(out.matches("#[my_lib(skip)]").count(), 1, "{}", out);
+    }
+
+    #[test]
+    fn finish_reports_a_bad_query() {
+        let item = "struct S;";
+        let attr = "a::check";
+        let err = |ts: TokenStream| try_finish(ts).err().unwrap().to_string();
+        // A name that rustc uses.
+        let e = err(finish_input("attr", attr, item, "attrs(doc)"));
+        assert!(
+            e.contains("`doc` cannot be an owned attribute name"),
+            "{}",
+            e
+        );
+        // A check that changed the state.
+        let e = err(finish_input("attr", attr, item, "other(x)"));
+        assert!(e.contains("was changed by a check"), "{}", e);
+        let e = err(finish_input("attr", attr, item, "attrs[x]"));
+        assert!(e.contains("was changed by a check"), "{}", e);
+        let e = err(finish_input("weird", attr, item, ""));
+        assert!(e.contains("was changed by a check"), "{}", e);
+        // A list that was not forwarded to the end.
+        let e = err(ts(
+            "@__announce_attrs [ x! ] { [7u64; attr (a) { struct S; }] }",
+        ));
+        assert!(e.contains("elements left in its list"), "{}", e);
+        // Called by hand.
+        let e = err(ts("struct S;"));
+        assert!(e.contains("cannot be called by hand"), "{}", e);
+        // The item is parsed again, with its error.
+        assert!(try_finish(finish_input("attr", attr, "fn f() {}", "")).is_err());
+    }
+
+    #[test]
+    fn capture_arguments_read_the_owned_names() {
+        let with: options::CaptureArgs =
+            syn::parse2(ts("5u64; [a, b]; crate = ::l::announce, c::check")).unwrap();
+        assert_eq!(with.random, 5);
+        assert_eq!(
+            with.owned
+                .names()
+                .iter()
+                .map(|n| n.to_string())
+                .collect::<Vec<_>>(),
+            ["a", "b"]
+        );
+        assert_eq!(
+            norm(&with.opts.to_token_stream()),
+            "crate=::l::announce,c::check"
+        );
+        let without: options::CaptureArgs = syn::parse2(ts("5u64; c::check")).unwrap();
+        assert!(without.owned.is_empty());
+        assert_eq!(norm(&without.opts.to_token_stream()), "c::check");
+    }
+
+    #[test]
+    fn derive_with_checks_sends_the_same_query() {
+        let out = norm(&derive_announce(ts(
+            "#[announce(crate = ::l::announce, macro_name = N, a::check)] pub struct S(#[my_lib] pub u8);",
+        )));
+        assert!(
+            out.starts_with("a::check!{@__announce_attrs[::l::announce::__private::finish!]{[")
+                && out
+                    .contains(";derive(crate=::l::announce,macro_name=N,emit_item=false,a::check)"),
+            "{}",
+            out
+        );
+        // The helper attribute is not part of the item; the derive's own attributes are.
+        assert!(
+            !out.contains("#[announce") && out.contains("pubstructS(#[my_lib]pubu8);"),
+            "{}",
+            out
+        );
+        // The end of the query: the trampoline, the check and the `Announce` impl,
+        // with the owned names in META; the item is not emitted again.
+        let end = norm(&finish(finish_input(
+            "derive",
+            "crate=::l::announce,macro_name=N,emit_item=false,a::check",
+            "pub struct S(#[my_lib] pub u8);",
+            "attrs(my_lib)",
+        )));
+        assert!(end.contains("macro_rules!__announce_S_"), "{}", end);
+        assert!(
+            end.contains("a::check!{(),pubstructS(#[my_lib]pubu8);}"),
+            "{}",
+            end
+        );
+        assert!(
+            end.contains("[a::check,attrs(my_lib)]{pubstructS(#[my_lib]pubu8);}"),
+            "{}",
+            end
+        );
+        assert!(end.contains("::l::announce::AnnounceforS{}"), "{}", end);
+        assert!(!end.starts_with("pubstructS"), "{}", end);
     }
 
     #[test]

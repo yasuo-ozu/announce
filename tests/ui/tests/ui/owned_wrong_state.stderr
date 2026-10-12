@@ -1,0 +1,25 @@
+error: announce: the state of the attribute query was changed by a check. A check must forward `{ STATE }` unchanged and may only append `attrs(name, ..)`; see the `announce_helper::attrs` docs
+  --> tests/ui/owned_wrong_state.rs:5:81
+   |
+ 3 | / macro_rules! bad_state {
+ 4 | |     (@__announce_attrs [ $($np:ident)? $(:: $ns:ident)* ! $(, $($rest:tt)*)? ] { $($state:tt)* }) => {
+ 5 | |         $($np)? $(:: $ns)* ! { @__announce_attrs [ $($($rest)*)? ] { $($state)* oops(my_lib) } }
+   | |                                                                                 ^^^^
+ 6 | |     };
+ 7 | |     (($($args:tt)*), $($item:tt)*) => {};
+ 8 | | }
+   | |_- this error originates in the macro `bad_state` which comes from the expansion of the attribute macro `announce::announce`
+ 9 |
+10 |   #[announce::announce(bad_state)]
+   |   -------------------------------- in this attribute macro expansion
+
+error: announce: the attribute query has no macro to call next: a check before this one did not forward the rest of its list (`finish!` ends it)
+  --> tests/ui/owned_wrong_state.rs:19:11
+   |
+19 |         $($np)? $(:: $ns)* ! { @__announce_attrs [] { $($state)* } }
+   |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+24 | #[announce::announce(drops_list, announce_test_derive::no_tuple)]
+   | ----------------------------------------------------------------- in this attribute macro expansion
+   |
+   = note: this error originates in the macro `announce_test_derive::no_tuple` which comes from the expansion of the attribute macro `announce::announce` (in Nightly builds, run with -Z macro-backtrace for more info)

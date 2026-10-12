@@ -22,10 +22,26 @@ struct Metric {
 }
 
 const METRICS: [Metric; 4] = [
-    Metric { group: report::G_PLAIN, pkg_of: |p| p.plain(), with_bin: false },
-    Metric { group: report::G_ANNOUNCE, pkg_of: |p| p.definer(), with_bin: false },
-    Metric { group: report::G_CHAIN, pkg_of: |p| p.chain(), with_bin: true },
-    Metric { group: report::G_CALLS, pkg_of: |p| p.calls(), with_bin: true },
+    Metric {
+        group: report::G_PLAIN,
+        pkg_of: |p| p.plain(),
+        with_bin: false,
+    },
+    Metric {
+        group: report::G_ANNOUNCE,
+        pkg_of: |p| p.definer(),
+        with_bin: false,
+    },
+    Metric {
+        group: report::G_CHAIN,
+        pkg_of: |p| p.chain(),
+        with_bin: true,
+    },
+    Metric {
+        group: report::G_CALLS,
+        pkg_of: |p| p.calls(),
+        with_bin: true,
+    },
 ];
 
 type Group<'a> = BenchmarkGroup<'a, criterion::measurement::WallTime>;

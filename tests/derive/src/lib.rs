@@ -129,21 +129,87 @@ pub fn start(input: TokenStream) -> TokenStream {
     }
 }
 
-/// Definition-side check: rejects tuple structs. `no_tuple! { (ARGS), ITEM }`.
-#[proc_macro]
-pub fn no_tuple(input: TokenStream) -> TokenStream {
-    let ci: announce_helper::CheckInput = match syn::parse(input) {
-        Ok(i) => i,
-        Err(e) => return e.to_compile_error().into(),
-    };
-    match &ci.item {
-        syn::Item::Struct(s) if matches!(s.fields, syn::Fields::Unnamed(_)) => {
-            let msg = format!("this macro does not support tuple structs ({})", ci.args);
-            syn::Error::new_spanned(&s.fields, msg)
-                .to_compile_error()
-                .into()
+announce_helper::check! {
+    /// Definition-side check: rejects tuple structs. `no_tuple! { (ARGS), ITEM }`.
+    /// It owns no attributes, and answers the attribute query all the same.
+    pub fn no_tuple(ci) {
+        match &ci.item {
+            syn::Item::Struct(s) if matches!(s.fields, syn::Fields::Unnamed(_)) => {
+                let msg = format!("this macro does not support tuple structs ({})", ci.args);
+                Err(syn::Error::new_spanned(&s.fields, msg))
+            }
+            _ => Ok(TokenStream2::new()),
         }
-        _ => TokenStream::new(),
+    }
+}
+
+announce_helper::check! {
+    /// Owns the attribute `my_lib`, and rejects `#[my_lib(bad)]` anywhere in the item.
+    pub fn lib_check(ci) attributes(my_lib) {
+        for attr in ci.owned_attributes() {
+            if matches!(attr.parse_args::<syn::Ident>(), Ok(i) if i == "bad") {
+                return Err(syn::Error::new_spanned(&attr, "`#[my_lib(bad)]` is not allowed"));
+            }
+        }
+        Ok(TokenStream2::new())
+    }
+}
+
+announce_helper::check! {
+    /// Owns the attributes `other` and `tag`, and rejects `#[other(forbidden)]`.
+    pub fn other_check(ci) attributes(other, tag) {
+        for attr in ci.owned_attributes() {
+            if attr.path().is_ident("other") && attr.parse_args::<syn::Ident>().map_or(false, |i| i == "forbidden") {
+                return Err(syn::Error::new_spanned(&attr, "`#[other(forbidden)]` is not allowed"));
+            }
+        }
+        Ok(TokenStream2::new())
+    }
+}
+
+announce_helper::check! {
+    /// Owns `my_lib` and records what it saw: `pub const SEEN_<ITEM>: &[&str]`, one
+    /// string for each owned attribute (without spaces), in source order.
+    pub fn record_attrs(ci) attributes(my_lib) {
+        let name = match &ci.item {
+            syn::Item::Struct(s) => s.ident.to_string(),
+            syn::Item::Enum(s) => s.ident.to_string(),
+            syn::Item::Trait(s) => s.ident.to_string(),
+            syn::Item::Mod(s) => s.ident.to_string(),
+            other => return Err(syn::Error::new_spanned(other, "record_attrs: unsupported item")),
+        };
+        let seen: Vec<String> = ci
+            .owned_attributes()
+            .iter()
+            .map(|a| template_quote::ToTokens::to_token_stream(&a.meta).to_string().split_whitespace().collect())
+            .collect();
+        let id = syn::Ident::new(&format!("SEEN_{}", name.to_uppercase()), proc_macro2::Span::call_site());
+        Ok(quote! { pub const #id: &[&str] = &[ #(#seen),* ]; })
+    }
+}
+
+announce_helper::check! {
+    /// Owns an attribute that rustc uses: always an error where it is used.
+    pub fn doc_owner(_ci) attributes(doc) {
+        Ok(TokenStream2::new())
+    }
+}
+
+/// Declares the attribute `rules` and does nothing else. A `#[derive(Announce)]`
+/// cannot remove attributes from its item, so an item that has `#[rules(..)]` in it
+/// needs a derive that declares them (the check is `announce_test_defs::rules_check`).
+#[proc_macro_derive(Rules, attributes(rules))]
+pub fn derive_rules(_: TokenStream) -> TokenStream {
+    TokenStream::new()
+}
+
+/// A check written the way checks were before the attribute query existed: it
+/// parses `CheckInput` and does not answer the query.
+#[proc_macro]
+pub fn old_style_check(input: TokenStream) -> TokenStream {
+    match syn::parse::<announce_helper::CheckInput>(input) {
+        Ok(_) => TokenStream::new(),
+        Err(e) => e.to_compile_error().into(),
     }
 }
 
@@ -226,6 +292,54 @@ announce_helper::callback! {
         }
         let name = &rest.name;
         Ok(quote! { pub const #name: &[&str] = &[ #(#idents),* ]; })
+    }
+}
+
+announce_helper::callback! {
+    /// Records, for every entry in visiting order, `pub const <REST>: &[(&str, usize, usize, String)]`
+    /// is not possible in a const, so the rows are strings: `"names|in item|in stripped"`:
+    /// the owned attribute names of the entry (`Entry::owned_attrs`, comma separated), the
+    /// number of owned attributes in `Entry::item` and in `Entry::item_without_owned_attrs`.
+    pub fn owned_report(input) {
+        let name: syn::Ident = input.rest_as()?;
+        let mut rows = Vec::new();
+        for e in input.entries_in_order() {
+            let owned = e.owned_attrs();
+            let names: Vec<String> = owned.names().iter().map(|n| n.to_string()).collect();
+            let item = e.item()?;
+            let stripped = e.item_without_owned_attrs()?;
+            rows.push(format!("{}|{}|{}", names.join(","), owned.find(&item).len(), owned.find(&stripped).len()));
+        }
+        Ok(quote! { pub const #name: &[&str] = &[ #(#rows),* ]; })
+    }
+}
+
+announce_helper::callback! {
+    /// Reports what a callback receives next to the entries, for the tests that
+    /// REST is the caller's tokens and nothing else. Emits, with fixed names:
+    /// `REST: &str` (`input.rest`, printed), `ENTRIES: usize`, `OWNED: &[&str]` (the
+    /// names of `Entry::owned_attrs`, comma separated, one row for each entry in
+    /// visiting order) and `META: &[&str]` (the META of each entry). It forwards
+    /// when more continuations remain.
+    pub fn rest_probe(input) {
+        if let Some(fwd) = input.forward() {
+            return Ok(fwd);
+        }
+        let rest = input.rest.to_string();
+        let entries = input.entries.len();
+        let mut owned = Vec::new();
+        let mut metas = Vec::new();
+        for e in input.entries_in_order() {
+            let names: Vec<String> = e.owned_attrs().names().iter().map(|n| n.to_string()).collect();
+            owned.push(names.join(","));
+            metas.push(e.meta.iter().map(|m| template_quote::ToTokens::to_token_stream(m).to_string()).collect::<Vec<_>>().join(", "));
+        }
+        Ok(quote! {
+            pub const REST: &str = #rest;
+            pub const ENTRIES: usize = #entries;
+            pub const OWNED: &[&str] = &[ #(#owned),* ];
+            pub const META: &[&str] = &[ #(#metas),* ];
+        })
     }
 }
 

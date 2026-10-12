@@ -39,11 +39,18 @@ pub struct Grid {
 impl Grid {
     pub fn from_env() -> Grid {
         let quick = env_flag("ANNOUNCE_BENCH_QUICK");
-        let (dsizes, dcounts) = if quick { ("1,10", "1,4") } else { (DEFAULT_SIZES, DEFAULT_COUNTS) };
+        let (dsizes, dcounts) = if quick {
+            ("1,10", "1,4")
+        } else {
+            (DEFAULT_SIZES, DEFAULT_COUNTS)
+        };
         let nums = |name: &str, default: &str| -> Vec<usize> {
             env_list(name, default)
                 .iter()
-                .map(|x| x.parse().unwrap_or_else(|_| panic!("{name}: not a number: {x:?}")))
+                .map(|x| {
+                    x.parse()
+                        .unwrap_or_else(|_| panic!("{name}: not a number: {x:?}"))
+                })
                 .collect()
         };
         let kinds: Vec<Kind> = env_list("ANNOUNCE_BENCH_KINDS", DEFAULT_KINDS)
@@ -65,7 +72,11 @@ impl Grid {
             }
         }
         let samples = nums("ANNOUNCE_BENCH_SAMPLES", "10")[0].max(10);
-        Grid { points, samples, timing: !env_flag("ANNOUNCE_BENCH_NO_TIMING") }
+        Grid {
+            points,
+            samples,
+            timing: !env_flag("ANNOUNCE_BENCH_NO_TIMING"),
+        }
     }
 }
 
@@ -117,7 +128,9 @@ pub struct Harness {
 
 fn output_of(cmd: &mut Command) -> Option<String> {
     let o = cmd.output().ok()?;
-    o.status.success().then(|| String::from_utf8_lossy(&o.stdout).trim().to_string())
+    o.status
+        .success()
+        .then(|| String::from_utf8_lossy(&o.stdout).trim().to_string())
 }
 
 fn write_if_changed(path: &Path, text: &str) {
@@ -134,7 +147,13 @@ fn cargo_target_directory(manifest: &Path, cargo: &OsString) -> PathBuf {
     }
     output_of(
         Command::new(cargo)
-            .args(["metadata", "--format-version", "1", "--no-deps", "--offline"])
+            .args([
+                "metadata",
+                "--format-version",
+                "1",
+                "--no-deps",
+                "--offline",
+            ])
             .current_dir(manifest),
     )
     .and_then(|json| {
@@ -152,8 +171,18 @@ fn revision(repo: &Path) -> String {
     let git = |args: &[&str]| output_of(Command::new("git").arg("-C").arg(repo).args(args));
     match git(&["rev-parse", "--short", "HEAD"]) {
         Some(rev) => {
-            let dirty = git(&["status", "--porcelain", "--", "announce", "announce-core", "announce-macros", "announce-helper", "Cargo.toml", "Cargo.lock"])
-                .is_some_and(|s| !s.is_empty());
+            let dirty = git(&[
+                "status",
+                "--porcelain",
+                "--",
+                "announce",
+                "announce-core",
+                "announce-macros",
+                "announce-helper",
+                "Cargo.toml",
+                "Cargo.lock",
+            ])
+            .is_some_and(|s| !s.is_empty());
             format!("{rev}{}", if dirty { " + uncommitted changes" } else { "" })
         }
         None => "unknown".into(),
@@ -188,15 +217,23 @@ impl Harness {
             meta: Meta {
                 revision: revision(&repo),
                 date: output_of(Command::new("date").arg("+%F")).unwrap_or_default(),
-                rustc: rustc_v.lines().find(|l| l.starts_with("rustc ")).unwrap_or("rustc ?").to_string(),
-                machine: output_of(Command::new("uname").arg("-m")).unwrap_or_else(|| std::env::consts::ARCH.into()),
+                rustc: rustc_v
+                    .lines()
+                    .find(|l| l.starts_with("rustc "))
+                    .unwrap_or("rustc ?")
+                    .to_string(),
+                machine: output_of(Command::new("uname").arg("-m"))
+                    .unwrap_or_else(|| std::env::consts::ARCH.into()),
                 nproc: std::thread::available_parallelism().map_or(0, |n| n.get()),
             },
             ws: root.join("ws"),
             tdir: root.join("target"),
             root,
             cargo,
-            strip: Command::new("strip").arg("--version").output().is_ok_and(|o| o.status.success()),
+            strip: Command::new("strip")
+                .arg("--version")
+                .output()
+                .is_ok_and(|o| o.status.success()),
             sizes: Mutex::new(BTreeMap::new()),
             nondeterministic: Mutex::new(Vec::new()),
             verified: Mutex::new(HashSet::new()),
@@ -216,14 +253,18 @@ impl Harness {
         let helper = repo.join("announce-helper");
         let mut members = vec!["bench_cb".to_string(), "baseline".to_string()];
         let ws = &self.ws;
-        let put = |name: &str, rel: &str, text: &str| write_if_changed(&ws.join(name).join(rel), text);
+        let put =
+            |name: &str, rel: &str, text: &str| write_if_changed(&ws.join(name).join(rel), text);
 
         put(
             "bench_cb",
             "Cargo.toml",
             &cargo_toml(
                 "bench_cb",
-                &format!("announce-helper = {{ path = \"{}\" }}\nsyn = \"2\"\nproc-macro2 = \"1\"\n", helper.display()),
+                &format!(
+                    "announce-helper = {{ path = \"{}\" }}\nsyn = \"2\"\nproc-macro2 = \"1\"\n",
+                    helper.display()
+                ),
                 "\n[lib]\nproc-macro = true\n",
             ),
         );
@@ -239,21 +280,34 @@ impl Harness {
         for &p in &self.grid.points {
             let def = p.definer();
             for (name, announced) in [(def.clone(), true), (p.plain(), false)] {
-                let deps = if announced { format!("announce = {{ path = \"{}\" }}\n", announce.display()) } else { String::new() };
+                let deps = if announced {
+                    format!("announce = {{ path = \"{}\" }}\n", announce.display())
+                } else {
+                    String::new()
+                };
                 put(&name, "Cargo.toml", &cargo_toml(&name, &deps, ""));
                 put(&name, "src/lib.rs", &sources::definer(p, announced));
                 members.push(name);
             }
             for (name, separate) in [(p.chain(), false), (p.calls(), true)] {
-                let deps = format!("{def} = {{ path = \"../{def}\" }}\nbench_cb = {{ path = \"../bench_cb\" }}\n");
+                let deps = format!(
+                    "{def} = {{ path = \"../{def}\" }}\nbench_cb = {{ path = \"../bench_cb\" }}\n"
+                );
                 put(&name, "Cargo.toml", &cargo_toml(&name, &deps, ""));
                 put(&name, "src/lib.rs", &sources::user(&def, p.k, separate));
-                put(&name, &format!("src/bin/{}.rs", bin_name(&name)), &sources::user_bin(p.kind, &name, &def));
+                put(
+                    &name,
+                    &format!("src/bin/{}.rs", bin_name(&name)),
+                    &sources::user_bin(p.kind, &name, &def),
+                );
                 members.push(name);
             }
         }
         let list: String = members.iter().map(|m| format!("  \"{m}\",\n")).collect();
-        write_if_changed(&ws.join("Cargo.toml"), &format!("[workspace]\nresolver = \"2\"\nmembers = [\n{list}]\n"));
+        write_if_changed(
+            &ws.join("Cargo.toml"),
+            &format!("[workspace]\nresolver = \"2\"\nmembers = [\n{list}]\n"),
+        );
         let lock = ws.join("Cargo.lock");
         if !lock.exists() && repo.join("Cargo.lock").exists() {
             // Pin to versions known to be in the offline cache.
@@ -276,13 +330,23 @@ impl Harness {
     /// `cargo build <args>` in the generated workspace (dev profile); returns the wall time.
     fn build(&self, args: &[&str]) -> Duration {
         let mut cmd = self.cargo_cmd();
-        cmd.arg("build").args(args).stdout(Stdio::null()).stderr(Stdio::piped());
+        cmd.arg("build")
+            .args(args)
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped());
         let start = Instant::now();
         let out = cmd.output().expect("cannot run cargo");
         let elapsed = start.elapsed();
         if !out.status.success() {
             let err = String::from_utf8_lossy(&out.stderr);
-            let tail: String = err.chars().rev().take(6000).collect::<Vec<_>>().into_iter().rev().collect();
+            let tail: String = err
+                .chars()
+                .rev()
+                .take(6000)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect();
             panic!("cargo build {args:?} failed:\n{tail}");
         }
         elapsed
@@ -304,19 +368,26 @@ impl Harness {
             for e in fs::read_dir(dir).into_iter().flatten().flatten() {
                 let name = e.file_name().to_string_lossy().into_owned();
                 if name.starts_with(&prefix) && name.ends_with(&suffix) {
-                    let t = e.metadata().and_then(|m| m.modified()).unwrap_or(SystemTime::UNIX_EPOCH);
+                    let t = e
+                        .metadata()
+                        .and_then(|m| m.modified())
+                        .unwrap_or(SystemTime::UNIX_EPOCH);
                     if best.as_ref().map_or(true, |(bt, _)| t >= *bt) {
                         best = Some((t, e.path()));
                     }
                 }
             }
         }
-        best.unwrap_or_else(|| panic!("no .{ext} found for {pkg} under {}", self.tdir.display())).1
+        best.unwrap_or_else(|| panic!("no .{ext} found for {pkg} under {}", self.tdir.display()))
+            .1
     }
 
     fn lib_sizes(&self, pkg: &str) -> LibSizes {
         let len = |ext| fs::metadata(self.newest(pkg, ext)).unwrap().len();
-        LibSizes { rlib: len("rlib"), rmeta: len("rmeta") }
+        LibSizes {
+            rlib: len("rlib"),
+            rmeta: len("rmeta"),
+        }
     }
 
     fn stripped_size(&self, exe: &Path) -> Option<u64> {
@@ -324,8 +395,15 @@ impl Harness {
             return None;
         }
         let tmp = self.root.join("stripped.tmp");
-        let ok = Command::new("strip").arg("-o").arg(&tmp).arg(exe).status().is_ok_and(|s| s.success());
-        let size = ok.then(|| fs::metadata(&tmp).map(|m| m.len()).ok()).flatten();
+        let ok = Command::new("strip")
+            .arg("-o")
+            .arg(&tmp)
+            .arg(exe)
+            .status()
+            .is_ok_and(|s| s.success());
+        let size = ok
+            .then(|| fs::metadata(&tmp).map(|m| m.len()).ok())
+            .flatten();
         let _ = fs::remove_file(&tmp);
         size
     }
@@ -343,13 +421,23 @@ impl Harness {
         let (mut exe, mut exe_strip) = (None, None);
         if let Some(k) = entries {
             let path = self.tdir.join("debug").join(bin_name(pkg));
-            let out = Command::new(&path).output().expect("cannot run the generated executable");
+            let out = Command::new(&path)
+                .output()
+                .expect("cannot run the generated executable");
             let text = String::from_utf8_lossy(&out.stdout).into_owned();
-            assert_eq!(text.split_whitespace().next(), Some(k.to_string().as_str()), "{pkg} printed {text:?}");
+            assert_eq!(
+                text.split_whitespace().next(),
+                Some(k.to_string().as_str()),
+                "{pkg} printed {text:?}"
+            );
             exe = Some(fs::metadata(&path).unwrap().len());
             exe_strip = self.stripped_size(&path);
         }
-        let s = Sizes { lib, exe, exe_strip };
+        let s = Sizes {
+            lib,
+            exe,
+            exe_strip,
+        };
         map.insert(pkg.to_string(), s);
         s
     }
@@ -357,7 +445,12 @@ impl Harness {
     /// Touches `pkg`'s `lib.rs` and times `cargo build -p pkg --lib` (its dependencies are built).
     pub fn rebuild(&self, pkg: &str) -> Duration {
         let lib = self.ws.join(pkg).join("src").join("lib.rs");
-        fs::File::options().write(true).open(&lib).unwrap().set_modified(SystemTime::now()).unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&lib)
+            .unwrap()
+            .set_modified(SystemTime::now())
+            .unwrap();
         self.build(&["-p", pkg, "--lib"])
     }
 

@@ -43,5 +43,5 @@ pub mod machinery;
 
 #[doc(hidden)]
 pub mod __private {
-    pub use announce_macros::{remove, Capture};
+    pub use announce_macros::{finish, remove, Capture};
 }

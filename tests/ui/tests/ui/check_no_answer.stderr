@@ -1,0 +1,7 @@
+error: announce: this check received the attribute query `@__announce_attrs` that `#[announce]` sends first, and does not answer it. Define the check with `announce_helper::check!`, or parse `announce_helper::CheckCall` and answer `Query` (a `macro_rules!` check needs one more arm); every check must answer. See the `announce_helper::attrs` docs
+ --> tests/ui/check_no_answer.rs:3:1
+  |
+3 | #[announce::announce(announce_test_derive::old_style_check)]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `announce::announce` (in Nightly builds, run with -Z macro-backtrace for more info)

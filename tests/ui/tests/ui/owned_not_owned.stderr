@@ -1,0 +1,17 @@
+error: cannot find attribute `other` in this scope
+  --> tests/ui/owned_not_owned.rs:18:7
+   |
+18 |     #[other(x)]
+   |       ^^^^^
+
+error: cannot find attribute `my_lib` in this scope
+  --> tests/ui/owned_not_owned.rs:11:7
+   |
+11 |     #[my_lib(x)]
+   |       ^^^^^^
+
+error: cannot find attribute `my_lib` in this scope
+ --> tests/ui/owned_not_owned.rs:5:7
+  |
+5 |     #[my_lib(x)]
+  |       ^^^^^^

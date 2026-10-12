@@ -7,8 +7,13 @@
 //! - Start: [`ContList::invoke`] calls a trampoline from a proc macro.
 //! - Redirect: [`redirect`] forwards a derive or attribute to a renamed trampoline.
 //! - Transform: [`transformer!`] defines a list element that rewrites the newest entry.
-//! - Check: [`CheckInput`] parses a definition-side check. [`check_type`] and
-//!   [`check_trait`] test for `announce::Announce`.
+//! - Check: [`check!`] defines a definition-side check (a `#[proc_macro]` that
+//!   answers `#[announce]`'s attribute query, see [`OwnedAttrs`], and parses
+//!   [`CheckInput`]). [`check_type`] and [`check_trait`] test for
+//!   `announce::Announce`.
+//! - Attributes of your own inside an announced item: a check owns their names
+//!   ([`OwnedAttrs`]); [`Entry::owned_attrs`] and
+//!   [`Entry::item_without_owned_attrs`] read them in a callback.
 //! - Read META: [`Entry::find_meta`] and [`KvArgs`] parse `key = value` lists.
 //! - Resolve relative types (feature `type-leak`, on by default):
 //!   [`Entry::type_leak`] reads the [`TypeLeak`] table of a
@@ -17,6 +22,7 @@
 //!   `type_leak::Referrer` (re-exported as [`type_leak`]), so the arguments of the
 //!   rewritten types are the ones type-leak gives for the use site ([`TypeLeak::entry_args`]).
 
+pub mod attrs;
 mod kv;
 #[cfg(feature = "type-leak")]
 pub mod leak;
@@ -24,6 +30,7 @@ mod transformer;
 #[cfg(feature = "type-leak")]
 mod typeleak;
 
+pub use attrs::{remove_attributes, CheckCall, OwnedAttrs, Query};
 pub use kv::KvArgs;
 pub use transformer::signature_only;
 /// The version of `type-leak` that [`TypeLeak`] uses: name it through this crate
@@ -361,6 +368,27 @@ impl Entry {
             .iter()
             .any(|m| m.path.segments.last().map_or(false, |s| s.ident == name))
     }
+
+    /// The attribute names that the definition's checks own: the `attrs(..)`
+    /// META element (empty without one). The definer removed these attributes
+    /// from the item it emitted, but they are still in [`item`](Self::item), where
+    /// the callback can read them ([`OwnedAttrs::find`]).
+    ///
+    /// A callback that emits the item itself (rather than reading it) must remove
+    /// them first: rustc rejects an attribute that no macro declares. Use
+    /// [`item_without_owned_attrs`](Self::item_without_owned_attrs).
+    pub fn owned_attrs(&self) -> OwnedAttrs {
+        attrs::owned_from_metas(&self.meta)
+    }
+
+    /// The payload parsed as an item, without the owned attributes: the item as
+    /// the definer emitted it. The same as [`item`](Self::item) when the
+    /// definition has no owned attributes.
+    pub fn item_without_owned_attrs(&self) -> Result<syn::Item> {
+        let mut item = self.item()?;
+        self.owned_attrs().strip(&mut item)?;
+        Ok(item)
+    }
 }
 
 impl Parse for Entry {
@@ -681,6 +709,64 @@ macro_rules! callback {
     };
 }
 
+/// Defines a definition-side check: a `#[proc_macro]` that runs at the place where
+/// an item is announced, and answers `#[announce]`'s attribute query.
+///
+/// ```ignore
+/// announce_helper::check! {
+///     /// Rejects `#[my_lib(bad)]` and tuple structs.
+///     pub fn my_check(input) attributes(my_lib, other) {
+///         // `input` is an `announce_helper::CheckInput`: `args`, `item` (with the
+///         // owned attributes) and `owned`.
+///         for attr in input.owned_attributes() {
+///             if attr.path().is_ident("my_lib") && attr.parse_args::<syn::Ident>().map_or(false, |i| i == "bad") {
+///                 return Err(syn::Error::new_spanned(attr, "`bad` is not allowed"));
+///             }
+///         }
+///         Ok(proc_macro2::TokenStream::new())
+///     }
+/// }
+/// ```
+///
+/// `attributes(..)` is optional. It lists the attribute names the check owns:
+/// `#[announce(my_lib::my_check)]` lets the item carry `#[my_lib]`,
+/// `#[my_lib(..)]`, `#[my_lib::..]` attributes, which `#[announce]` removes from
+/// the item it emits. Leave it out for a check that owns none; the check still
+/// answers the query. The body returns `syn::Result<proc_macro2::TokenStream>`,
+/// like [`callback!`]; a check usually returns nothing, or a `compile_error!` as
+/// an `Err`. A name that rustc or a standard tool uses (`doc`, `cfg`, ..) is an
+/// error where `#[announce]` is used. See [`OwnedAttrs`] for what a name matches.
+#[macro_export]
+macro_rules! check {
+    (
+        $(#[$m:meta])* $vis:vis fn $name:ident ($input:ident)
+        $(attributes($($attr:ident),* $(,)?))?
+        $body:block
+    ) => {
+        $(#[$m])*
+        #[proc_macro]
+        $vis fn $name(__announce_ts: ::proc_macro::TokenStream) -> ::proc_macro::TokenStream {
+            let __announce_owned = $crate::OwnedAttrs::from_strs(&[$($(::core::stringify!($attr)),*)?]);
+            let __announce_run = |__announce_ts: ::proc_macro::TokenStream|
+             -> $crate::__private::syn::Result<$crate::__private::proc_macro2::TokenStream> {
+                match $crate::__private::syn::parse::<$crate::CheckCall>(__announce_ts)? {
+                    $crate::CheckCall::Query(__announce_q) => {
+                        ::core::result::Result::Ok(__announce_q.answer(&__announce_owned))
+                    }
+                    $crate::CheckCall::Run(__announce_i) => {
+                        let $input = __announce_i.with_owned(__announce_owned.clone());
+                        $body
+                    }
+                }
+            };
+            match __announce_run(__announce_ts) {
+                ::core::result::Result::Ok(ts) => ts.into(),
+                ::core::result::Result::Err(e) => e.to_compile_error().into(),
+            }
+        }
+    };
+}
+
 /// Extracts the trampoline payload from the dummy enum that a derive or
 /// attribute continuation receives. Spans, hygiene and `$crate` survive.
 pub fn payload(item: TokenStream) -> Option<TokenStream> {
@@ -744,15 +830,47 @@ pub fn redirect(item: TokenStream, target: &Path) -> Option<TokenStream> {
 }
 
 /// What a definition-side check receives: `(ARGS), ITEM`.
+///
+/// The item has its `#[cfg]` evaluated, and it still has the attributes that the
+/// checks own (see [`OwnedAttrs`]): the check is where they are validated.
+/// [`check!`] defines a check that can use this, and it also answers the
+/// attribute query; parsing a `CheckInput` by hand fails with an error that says
+/// so when `#[announce]` sends the query.
 pub struct CheckInput {
     /// The check's arguments, `(ARGS)`.
     pub args: TokenStream,
-    /// The cfg-evaluated item.
+    /// The cfg-evaluated item, with the owned attributes.
     pub item: syn::Item,
+    /// The attribute names the check declared with `attributes(..)` in
+    /// [`check!`]; empty when the input was parsed by hand.
+    pub owned: OwnedAttrs,
+}
+
+impl CheckInput {
+    /// The same input with the declared attribute names.
+    pub fn with_owned(mut self, owned: OwnedAttrs) -> Self {
+        self.owned = owned;
+        self
+    }
+
+    /// The owned attributes in the item, in source order: what the check
+    /// validates ([`OwnedAttrs::find`]).
+    pub fn owned_attributes(&self) -> Vec<Attribute> {
+        self.owned.find(&self.item)
+    }
 }
 
 impl Parse for CheckInput {
     fn parse(input: ParseStream) -> Result<Self> {
+        if input.peek(Token![@]) {
+            return Err(input.error(
+                "announce: this check received the attribute query `@__announce_attrs` that \
+                 `#[announce]` sends first, and does not answer it. Define the check with \
+                 `announce_helper::check!`, or parse `announce_helper::CheckCall` and answer \
+                 `Query` (a `macro_rules!` check needs one more arm); every check must \
+                 answer. See the `announce_helper::attrs` docs",
+            ));
+        }
         let content;
         syn::parenthesized!(content in input);
         let args = content.parse()?;
@@ -760,6 +878,7 @@ impl Parse for CheckInput {
         Ok(CheckInput {
             args,
             item: input.parse()?,
+            owned: OwnedAttrs::new(),
         })
     }
 }
@@ -823,6 +942,52 @@ mod tests {
         assert_eq!(order, ["p::D", "a::F"]);
         let fwd = input.forward().unwrap().to_string();
         assert!(fwd.contains("__AnnouncePayload"), "{}", fwd);
+    }
+
+    #[test]
+    fn entries_know_the_attributes_their_checks_own() {
+        let input: Input = syn::parse_quote! {
+            [cb!]
+            a::F! => [x::check, attrs(my_lib, other), m::info(1), attrs(other, third)] {
+                #[my_lib(on_item)]
+                pub struct F { #[other] pub a: u8, #[third(x)] #[doc = "d"] pub b: u8 }
+            }
+            a::G! => [] { pub struct G; }
+        };
+        let owned = input.entries[0].owned_attrs();
+        let names: Vec<String> = owned.names().iter().map(|n| n.to_string()).collect();
+        assert_eq!(names, ["my_lib", "other", "third"]);
+        assert_eq!(owned.find(&input.entries[0].item().unwrap()).len(), 3);
+        let stripped = input.entries[0].item_without_owned_attrs().unwrap();
+        assert_eq!(s(&stripped), "pubstructF{puba:u8,#[doc=\"d\"]pubb:u8}");
+        // Without `attrs(..)` there is nothing to strip.
+        assert!(input.entries[1].owned_attrs().is_empty());
+        assert_eq!(
+            s(input.entries[1].item_without_owned_attrs().unwrap()),
+            "pubstructG;"
+        );
+        // `attrs` is found by its exact name, not as the last segment of a path.
+        let input: Input = syn::parse_quote! { [cb!] a::F! => [lib::attrs(x)] { struct F; } };
+        assert!(input.entries[0].owned_attrs().is_empty());
+    }
+
+    #[test]
+    fn check_input_reports_the_query_it_does_not_answer() {
+        let e = syn::parse2::<CheckInput>(template_quote::quote! {
+            @__announce_attrs [ f! ] { st }
+        })
+        .err()
+        .unwrap()
+        .to_string();
+        assert!(
+            e.contains("does not answer it") && e.contains("announce_helper::check!"),
+            "{}",
+            e
+        );
+        let ok: CheckInput = syn::parse_quote! { (x, y), struct S; };
+        assert!(ok.owned.is_empty() && ok.owned_attributes().is_empty());
+        let ok = ok.with_owned(OwnedAttrs::from_strs(&["a"]));
+        assert!(ok.owned.contains("a"));
     }
 
     #[test]
@@ -983,7 +1148,15 @@ mod options_tests {
     fn options_are_parsed_and_forwarded() {
         let mut leaker = type_leak::Leaker::new();
         let context = leaker
-            .intern_struct(&syn::parse_quote!(struct F<T> { a: Local, b: Vec<T> }), false)
+            .intern_struct(
+                &syn::parse_quote!(
+                    struct F<T> {
+                        a: Local,
+                        b: Vec<T>,
+                    }
+                ),
+                false,
+            )
             .unwrap();
         let tl = TypeLeak::new(
             syn::parse_quote!(::my::A),

@@ -32,7 +32,11 @@ fn read_est(h: &Harness, rel: &[&str]) -> Option<Est> {
     let v: serde_json::Value = serde_json::from_str(&fs::read_to_string(file).ok()?).ok()?;
     let ms = |v: &serde_json::Value| Some(v.as_f64()? / 1e6);
     let m = &v["median"];
-    Some(Est { median: ms(&m["point_estimate"])?, lo: ms(&m["confidence_interval"]["lower_bound"])?, hi: ms(&m["confidence_interval"]["upper_bound"])? })
+    Some(Est {
+        median: ms(&m["point_estimate"])?,
+        lo: ms(&m["confidence_interval"]["lower_bound"])?,
+        hi: ms(&m["confidence_interval"]["upper_bound"])?,
+    })
 }
 
 fn est(h: &Harness, group: &str, p: Point) -> Option<Est> {
@@ -44,7 +48,11 @@ fn kib(b: Option<u64>) -> String {
         None => "n/a".into(),
         Some(b) => {
             let x = b as f64 / 1024.0;
-            if x >= 100.0 { format!("{x:.0}") } else { format!("{x:.1}") }
+            if x >= 100.0 {
+                format!("{x:.0}")
+            } else {
+                format!("{x:.1}")
+            }
         }
     }
 }
@@ -55,7 +63,11 @@ fn ms(e: Option<Est>) -> String {
         None => "n/a".into(),
         Some(e) => {
             let half = (e.hi - e.lo) / 2.0;
-            if e.median >= 100.0 { format!("{:.0} ±{:.0}", e.median, half) } else { format!("{:.1} ±{:.1}", e.median, half) }
+            if e.median >= 100.0 {
+                format!("{:.0} ±{:.0}", e.median, half)
+            } else {
+                format!("{:.1} ±{:.1}", e.median, half)
+            }
         }
     }
 }
@@ -82,8 +94,14 @@ pub fn write(h: &Harness) {
         .iter()
         .copied()
         .filter(|p| {
-            have(&size_of(p.plain())) || have(&size_of(p.definer())) || have(&size_of(p.chain())) || have(&size_of(p.calls()))
-                || est(h, G_PLAIN, *p).is_some() || est(h, G_ANNOUNCE, *p).is_some() || est(h, G_CHAIN, *p).is_some() || est(h, G_CALLS, *p).is_some()
+            have(&size_of(p.plain()))
+                || have(&size_of(p.definer()))
+                || have(&size_of(p.chain()))
+                || have(&size_of(p.calls()))
+                || est(h, G_PLAIN, *p).is_some()
+                || est(h, G_ANNOUNCE, *p).is_some()
+                || est(h, G_CHAIN, *p).is_some()
+                || est(h, G_CALLS, *p).is_some()
         })
         .collect();
     if points.is_empty() {
@@ -105,7 +123,12 @@ pub fn write(h: &Harness) {
     );
     let num = |v: Option<u64>| v.map_or(String::new(), |v| v.to_string());
     for p in &points {
-        let (plain, def, chain, calls) = (size_of(p.plain()), size_of(p.definer()), size_of(p.chain()), size_of(p.calls()));
+        let (plain, def, chain, calls) = (
+            size_of(p.plain()),
+            size_of(p.definer()),
+            size_of(p.chain()),
+            size_of(p.calls()),
+        );
         let (pr, pm) = lib(plain);
         let (dr, dm) = lib(def);
         let (cr, cm) = lib(chain);
@@ -118,31 +141,117 @@ pub fn write(h: &Harness) {
         r.extend([ms(est(h, G_PLAIN, *p)), ms(est(h, G_ANNOUNCE, *p))]);
         definer_all.push(r);
         let mut r = id(p);
-        r.extend([cr.clone(), cm.clone(), ce.clone(), ces.clone(), kr.clone(), km.clone(), ke.clone(), kes.clone()]);
+        r.extend([
+            cr.clone(),
+            cm.clone(),
+            ce.clone(),
+            ces.clone(),
+            kr.clone(),
+            km.clone(),
+            ke.clone(),
+            kes.clone(),
+        ]);
         caller_sizes.push(r);
         let mut r = id(p);
-        r.extend([cr, cm, ce, ces, ms(est(h, G_CHAIN, *p)), kr, km, ke, kes, ms(est(h, G_CALLS, *p))]);
+        r.extend([
+            cr,
+            cm,
+            ce,
+            ces,
+            ms(est(h, G_CHAIN, *p)),
+            kr,
+            km,
+            ke,
+            kes,
+            ms(est(h, G_CALLS, *p)),
+        ]);
         caller_all.push(r);
-        let b = |s: Option<Sizes>| (num(s.map(|s| s.lib.rlib)), num(s.map(|s| s.lib.rmeta)), num(s.and_then(|s| s.exe)), num(s.and_then(|s| s.exe_strip)));
+        let b = |s: Option<Sizes>| {
+            (
+                num(s.map(|s| s.lib.rlib)),
+                num(s.map(|s| s.lib.rmeta)),
+                num(s.and_then(|s| s.exe)),
+                num(s.and_then(|s| s.exe_strip)),
+            )
+        };
         let (c, k) = (b(chain), b(calls));
         writeln!(
             csv,
             "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
-            p.kind.name(), p.s, p.k, b(plain).0, b(plain).1, b(def).0, b(def).1, c.0, c.1, c.2, c.3, k.0, k.1, k.2, k.3
+            p.kind.name(),
+            p.s,
+            p.k,
+            b(plain).0,
+            b(plain).1,
+            b(def).0,
+            b(def).1,
+            c.0,
+            c.1,
+            c.2,
+            c.3,
+            k.0,
+            k.1,
+            k.2,
+            k.3
         )
         .unwrap();
     }
 
     let id_h = ["kind", "S", "K"];
-    let cat = |a: &[&str], b: &[&str]| -> Vec<String> { a.iter().chain(b).map(|s| s.to_string()).collect() };
-    let dh_sizes = cat(&id_h, &["plain rlib KiB", "plain rmeta KiB", "announce rlib KiB", "announce rmeta KiB"]);
-    let dh_all = cat(&id_h, &["plain rlib KiB", "plain rmeta KiB", "announce rlib KiB", "announce rmeta KiB", "plain rebuild ms", "announce rebuild ms"]);
-    let ch_sizes = cat(&id_h, &["chain rlib KiB", "chain rmeta KiB", "chain exe KiB", "chain exe stripped KiB", "K calls rlib KiB", "K calls rmeta KiB", "K calls exe KiB", "K calls exe stripped KiB"]);
+    let cat = |a: &[&str], b: &[&str]| -> Vec<String> {
+        a.iter().chain(b).map(|s| s.to_string()).collect()
+    };
+    let dh_sizes = cat(
+        &id_h,
+        &[
+            "plain rlib KiB",
+            "plain rmeta KiB",
+            "announce rlib KiB",
+            "announce rmeta KiB",
+        ],
+    );
+    let dh_all = cat(
+        &id_h,
+        &[
+            "plain rlib KiB",
+            "plain rmeta KiB",
+            "announce rlib KiB",
+            "announce rmeta KiB",
+            "plain rebuild ms",
+            "announce rebuild ms",
+        ],
+    );
+    let ch_sizes = cat(
+        &id_h,
+        &[
+            "chain rlib KiB",
+            "chain rmeta KiB",
+            "chain exe KiB",
+            "chain exe stripped KiB",
+            "K calls rlib KiB",
+            "K calls rmeta KiB",
+            "K calls exe KiB",
+            "K calls exe stripped KiB",
+        ],
+    );
     let ch_all = cat(
         &id_h,
-        &["chain rlib KiB", "chain rmeta KiB", "chain exe KiB", "chain exe stripped KiB", "chain rebuild ms", "K calls rlib KiB", "K calls rmeta KiB", "K calls exe KiB", "K calls exe stripped KiB", "K calls rebuild ms"],
+        &[
+            "chain rlib KiB",
+            "chain rmeta KiB",
+            "chain exe KiB",
+            "chain exe stripped KiB",
+            "chain rebuild ms",
+            "K calls rlib KiB",
+            "K calls rmeta KiB",
+            "K calls exe KiB",
+            "K calls exe stripped KiB",
+            "K calls rebuild ms",
+        ],
     );
-    let t = |hs: &[String], rows: &[Vec<String>]| table(&hs.iter().map(String::as_str).collect::<Vec<_>>(), rows);
+    let t = |hs: &[String], rows: &[Vec<String>]| {
+        table(&hs.iter().map(String::as_str).collect::<Vec<_>>(), rows)
+    };
 
     // ---- header
     let m = &h.meta;
@@ -161,7 +270,12 @@ pub fn write(h: &Harness) {
     } else if bad.is_empty() {
         write!(head, "Size determinism: rlib and rmeta sizes of {verified} crates were identical after all timed rebuilds.\n").unwrap();
     } else {
-        write!(head, "Size determinism: DIFFERENCES after rebuilds: {}\n", bad.join("; ")).unwrap();
+        write!(
+            head,
+            "Size determinism: DIFFERENCES after rebuilds: {}\n",
+            bad.join("; ")
+        )
+        .unwrap();
     }
     drop(bad);
     let base_start = read_est(h, &[G_BASELINE, BASELINE_START]);
@@ -177,7 +291,11 @@ pub fn write(h: &Harness) {
         String::new()
     };
 
-    let sizes_md = format!("{head}\n### Definer side (sizes)\n\n{}\n### Calling side (sizes)\n\n{}", t(&dh_sizes, &definer_sizes), t(&ch_sizes, &caller_sizes));
+    let sizes_md = format!(
+        "{head}\n### Definer side (sizes)\n\n{}\n### Calling side (sizes)\n\n{}",
+        t(&dh_sizes, &definer_sizes),
+        t(&ch_sizes, &caller_sizes)
+    );
     let report_md = format!(
         "{head}{timing_note}\n### Definer side\n\n{}\n### Calling side\n\n{}",
         t(&dh_all, &definer_all),

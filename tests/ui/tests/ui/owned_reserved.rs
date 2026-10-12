@@ -1,0 +1,33 @@
+// An owned attribute name must not be an attribute that rustc or a tool uses.
+// A proc-macro check (`check!`) reports it where the check is used.
+#[announce::announce(announce_test_derive::doc_owner)]
+pub struct A {
+    pub a: u8,
+}
+
+// A `macro_rules!` check reports it at `finish!`, at the name it wrote.
+macro_rules! cfg_owner {
+    (@__announce_attrs [ $($np:ident)? $(:: $ns:ident)* ! $(, $($rest:tt)*)? ] { $($state:tt)* }) => {
+        $($np)? $(:: $ns)* ! { @__announce_attrs [ $($($rest)*)? ] { $($state)* attrs(cfg) } }
+    };
+    (($($args:tt)*), $($item:tt)*) => {};
+}
+
+#[announce::announce(cfg_owner)]
+pub struct B {
+    pub b: u8,
+}
+
+macro_rules! announce_owner {
+    (@__announce_attrs [ $($np:ident)? $(:: $ns:ident)* ! $(, $($rest:tt)*)? ] { $($state:tt)* }) => {
+        $($np)? $(:: $ns)* ! { @__announce_attrs [ $($($rest)*)? ] { $($state)* attrs(rustc_thing) } }
+    };
+    (($($args:tt)*), $($item:tt)*) => {};
+}
+
+#[announce::announce(announce_owner)]
+pub struct C {
+    pub c: u8,
+}
+
+fn main() {}

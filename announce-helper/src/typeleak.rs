@@ -271,11 +271,9 @@ mod tests {
     fn meta_ignores_unknown_keys_and_reports_an_old_format() {
         let tl = table_of(&syn::parse_quote! { struct S { a: Local } });
         let meta = tl.meta().to_string();
-        let with_extra: crate::Meta = syn::parse_str(&meta.replace(
-            "id = 7u64",
-            "id = 7u64, future = [1, 2], other",
-        ))
-        .unwrap();
+        let with_extra: crate::Meta =
+            syn::parse_str(&meta.replace("id = 7u64", "id = 7u64, future = [1, 2], other"))
+                .unwrap();
         let mut kv = with_extra.kv().unwrap();
         assert!(TypeLeak::from_kv(&mut kv).is_ok());
 
@@ -334,7 +332,11 @@ mod tests {
             "{}",
             out
         );
-        assert!(!out.contains("a:Local") && !out.contains("c:::core"), "{}", out);
+        assert!(
+            !out.contains("a:Local") && !out.contains("c:::core"),
+            "{}",
+            out
+        );
         assert!(out.contains("d:u8") && out.contains("e:T}"), "{}", out);
     }
 
@@ -362,11 +364,7 @@ mod tests {
         tl.apply(&mut it);
         let out = s(&it);
         assert!(out.contains("fnf<Local>(&self,x:Local);"), "{}", out);
-        assert!(
-            out.contains("fng(&self)-><()as::my::R<(),7u64,"),
-            "{}",
-            out
-        );
+        assert!(out.contains("fng(&self)-><()as::my::R<(),7u64,"), "{}", out);
         for ix in gc {
             assert!(
                 out.contains(&format!("::my::R<(X,),7u64,{}usize>>::Type", ix)),
