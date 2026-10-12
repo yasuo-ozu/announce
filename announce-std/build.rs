@@ -30,6 +30,6 @@ macro_rules! gates {
     };
 }
 
-// The only place that names the versions. Every `announce_std_rust_1_N` used in
-// `src/` must be listed here (`tools/gen_std.py` is not kept in sync with it).
+// The only place that names the versions. `tools/gen_std.py` reads this list and
+// refuses to emit a cfg version that is not in it (`gen_std.py --check`).
 gates![1.61, 1.64, 1.80, 1.81, 1.94];
