@@ -223,7 +223,7 @@ impl ContList {
         body: TokenStream,
     ) -> TokenStream {
         let opts = options.map(|o| quote! { ( #o ) });
-        let in_expr = options.is_some_and(|o| {
+        let in_expr = options.map_or(false, |o| {
             o.clone()
                 .into_iter()
                 .any(|tt| matches!(tt, proc_macro2::TokenTree::Ident(i) if i == "expr"))
@@ -422,7 +422,7 @@ impl Entry {
     pub fn find_meta(&self, name: &str) -> Option<&Meta> {
         self.meta
             .iter()
-            .find(|m| m.path.segments.last().is_some_and(|s| s.ident == name))
+            .find(|m| m.path.segments.last().map_or(false, |s| s.ident == name))
     }
 
     /// The `type_leak(..)` META of an entry announced with `repeater = ..`.
@@ -449,7 +449,7 @@ impl Entry {
     pub fn has_check(&self, name: &str) -> bool {
         self.meta
             .iter()
-            .any(|m| m.path.segments.last().is_some_and(|s| s.ident == name))
+            .any(|m| m.path.segments.last().map_or(false, |s| s.ident == name))
     }
 }
 
@@ -498,10 +498,7 @@ impl Parse for Input {
         if input.peek(Token![@]) {
             let fork = input.fork();
             let _: Token![@] = fork.parse()?;
-            if fork
-                .parse::<Ident>()
-                .is_ok_and(|i| i == "__announce_dollar")
-            {
+            if matches!(fork.parse::<Ident>(), Ok(i) if i == "__announce_dollar") {
                 let _g: proc_macro2::Group = fork.parse()?;
                 syn::parse::discouraged::Speculative::advance_to(input, &fork);
             }
@@ -569,7 +566,7 @@ impl Input {
 
     /// Whether the global options group contains the ident `name`.
     pub fn has_option(&self, name: &str) -> bool {
-        self.options.as_ref().is_some_and(|o| {
+        self.options.as_ref().map_or(false, |o| {
             o.clone()
                 .into_iter()
                 .any(|tt| matches!(tt, proc_macro2::TokenTree::Ident(i) if i == name))
@@ -774,21 +771,25 @@ macro_rules! callback {
 /// attribute continuation receives. Spans, hygiene and `$crate` survive.
 pub fn payload(item: TokenStream) -> Option<TokenStream> {
     let di: syn::DeriveInput = syn::parse2(item).ok()?;
-    let syn::Data::Enum(e) = di.data else {
-        return None;
+    let e = match di.data {
+        syn::Data::Enum(e) => e,
+        _ => return None,
     };
     let v = e.variants.first()?;
     if v.ident != "__AnnouncePayload" || e.variants.len() != 1 {
         return None;
     }
-    let syn::Expr::Field(f) = &v.discriminant.as_ref()?.1 else {
-        return None;
+    let f = match &v.discriminant.as_ref()?.1 {
+        syn::Expr::Field(f) => f,
+        _ => return None,
     };
-    let syn::Expr::Tuple(t) = &*f.base else {
-        return None;
+    let t = match &*f.base {
+        syn::Expr::Tuple(t) => t,
+        _ => return None,
     };
-    let syn::Expr::Macro(m) = t.elems.first()? else {
-        return None;
+    let m = match t.elems.first()? {
+        syn::Expr::Macro(m) => m,
+        _ => return None,
     };
     if !m.mac.path.is_ident("stringify") {
         return None;

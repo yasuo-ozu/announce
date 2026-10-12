@@ -411,7 +411,7 @@ fn help_text(item: &type_leak::ErrorItem, opts: &crate::options::Options) -> Str
             .into_iter()
             .next()
             .map(|t| t.to_string());
-        if name.is_some_and(|n| PRELUDE.contains(&n.as_str())) && !opts.allow_std_prelude {
+        if name.map_or(false, |n| PRELUDE.contains(&n.as_str())) && !opts.allow_std_prelude {
             help.push_str(" (or set `allow_std_prelude = true` to accept prelude names)");
         }
     }
@@ -1043,7 +1043,7 @@ mod tests {
     fn repeater_table_rejects_non_usize_const_generics() {
         let it = item(quote! { struct S<const N: u8> { a: Wrap<N> } });
         let e = table(&it, &with_repeater(), 1).err().map(|e| e.to_string());
-        assert!(e.is_some_and(|e| e.contains("only `usize` const generics")));
+        assert!(e.map_or(false, |e| e.contains("only `usize` const generics")));
     }
 
     #[test]

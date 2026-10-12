@@ -3,7 +3,9 @@
 import re, os, sys
 SRC = os.path.expanduser("~/ghq/github.com/yasuo-ozu/newer-type/std/src")
 DST = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "announce-std", "src")
-MSRV = 71
+MSRV = 57
+# Traits newer than the MSRV that newer-type's sources do not gate: name -> first rustc.
+ADDED_IN = {"Termination": 61, "IntoFuture": 64}
 DERIVE_NAMES = {"Debug", "Clone", "Copy", "Default", "Hash", "PartialEq", "Eq", "PartialOrd", "Ord"}
 versions = set()
 # Provided (default) methods of each trait. In the mocks they get a
@@ -104,6 +106,9 @@ def conv_block(body, g, extra_cfg):
         content = add_default_bodies(name, content)
         alt = next(re.search(r'alternative\s*=\s*([\w:]+)', a).group(1) for a in attrs if a.startswith("target"))
         cfgs = [f"#[{a}]" for a in attrs if a.startswith("cfg")] + ([extra_cfg] if extra_cfg else []) + ([g] if g else [])
+        if name in ADDED_IN:
+            versions.add(ADDED_IN[name])
+            cfgs.append(f"#[cfg(announce_std_rust_1_{ADDED_IN[name]})]")
         cfg = "\n".join(cfgs)
         doc = f"/// announce mock of [`{alt}`]: invoke `{name}!` to receive its definition.\n"
         if name not in DERIVE_NAMES:

@@ -1,14 +1,23 @@
 [package]
 name = "announce"
 description = "Definition-side trampolines: make a definition known to proc macros in any crate"
-version.workspace = true
-edition.workspace = true
-rust-version.workspace = true
-license.workspace = true
-authors.workspace = true
-repository.workspace = true
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.57"
+license = "MIT"
+authors = ["Yasuo Ozu <yasuo@ozu.email>"]
+repository = "https://github.com/yasuo-ozu/ozu"
 readme = "README.md"
 build = "build.rs"
 
 [dependencies]
-announce-macros.workspace = true
+announce-macros = { path = "../announce-macros", version = "0.1.0" }
+# Re-exported as `announce::machinery`: the generation code behind
+# `#[announce]` and `#[derive(Announce)]`, callable from other proc-macro crates.
+announce-core = { path = "../announce-core", version = "0.1.0" }
+# Re-exported as `announce::type_leak`.
+type-leak = "0.8"
+
+[dev-dependencies]
+# The `announce::machinery` doc test.
+proc-macro2 = "1"

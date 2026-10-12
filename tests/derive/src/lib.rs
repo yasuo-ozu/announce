@@ -67,7 +67,7 @@ pub fn summary(input: TokenStream) -> TokenStream {
         };
         quote! { (#key, #meta, #item) }
     });
-    quote! { pub const #name: &[(&str, &str, &str)] = &[ #(#rows),* ]; }.into()
+    TokenStream::from(quote! { pub const #name: &[(&str, &str, &str)] = &[ #(#rows),* ]; })
 }
 
 /// Starts a trampoline from a proc macro: `start!([a!, #[derive(B)], ..] REST)`.
@@ -120,7 +120,7 @@ pub fn check_marker(input: TokenStream) -> TokenStream {
 #[proc_macro_derive(Announced)]
 pub fn derive_announced(input: TokenStream) -> TokenStream {
     let input: TokenStream2 = input.into();
-    quote! { #[::announce::announce(emit_item = false)] #input }.into()
+    TokenStream::from(quote! { #[::announce::announce(emit_item = false)] #input })
 }
 
 announce_helper::transformer! {

@@ -1,0 +1,12 @@
+[package]
+name = "announce-test-machinery-user"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.57"
+publish = false
+
+# Uses a library built on `announce::machinery`. It does not depend on `announce`
+# itself: `announce-test-machinery-lib` is the library and re-exports it.
+[dependencies]
+announce-test-machinery-lib = { path = "../machinery-lib" }
+announce-test-derive = { path = "../derive" }

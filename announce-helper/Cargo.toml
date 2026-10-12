@@ -1,19 +1,18 @@
 [package]
 name = "announce-helper"
 description = "Helpers for proc-macro crates that consume announce trampolines"
-version.workspace = true
-edition.workspace = true
-rust-version.workspace = true
-license.workspace = true
-authors.workspace = true
-repository.workspace = true
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.56"
+license = "MIT"
+authors = ["Yasuo Ozu <yasuo@ozu.email>"]
+repository = "https://github.com/yasuo-ozu/ozu"
 
-[features]
+# Feature `type-leak` (the optional dependency below) enables
 # `leak::StableReferrer`: deterministic numbering on top of type-leak.
-type-leak = ["dep:type-leak"]
 
 [dependencies]
 type-leak = { version = "0.8", optional = true }
-syn = { workspace = true, features = ["visit", "visit-mut"] }
-proc-macro2.workspace = true
-template-quote.workspace = true
+syn = { version = "2.0.25", features = ["full", "extra-traits", "visit", "visit-mut"] }
+proc-macro2 = "1"
+template-quote = "0.4"

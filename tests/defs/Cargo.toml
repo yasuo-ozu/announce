@@ -2,12 +2,12 @@
 name = "announce-test-defs"
 version = "0.0.0"
 edition = "2021"
-rust-version = "1.71"
+rust-version = "1.59"
 publish = false
 
 [features]
 x = []
 
 [dependencies]
-announce.workspace = true
+announce = { path = "../../announce" }
 announce-test-derive = { path = "../derive" }

@@ -1,19 +1,18 @@
 [package]
 name = "announce-macros"
 description = "Proc macros of announce (use the `announce` crate instead)"
-version.workspace = true
-edition.workspace = true
-rust-version.workspace = true
-license.workspace = true
-authors.workspace = true
-repository.workspace = true
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.57"
+license = "MIT"
+authors = ["Yasuo Ozu <yasuo@ozu.email>"]
+repository = "https://github.com/yasuo-ozu/ozu"
 
 [lib]
 proc-macro = true
 
 [dependencies]
-syn = { workspace = true, features = ["visit", "visit-mut"] }
-proc-macro2.workspace = true
-template-quote.workspace = true
-announce-helper.workspace = true
-type-leak = "0.8"
+syn = { version = "2.0.25", features = ["full", "extra-traits"] }
+template-quote = "0.4"
+announce-core = { path = "../announce-core", version = "0.1.0" }
+announce-helper = { path = "../announce-helper", version = "0.1.0" }

@@ -101,20 +101,81 @@ fn crate_to_dollar_crate(ts: TokenStream) -> TokenStream {
     out.into_iter().collect()
 }
 
+/// Marks standing in for the `#[cfg]` attributes that are about to be dropped.
+const STRIPPED_CFG: &str = "__announce_stripped_cfg";
+
 /// After the derive's cfg evaluation, every `#[cfg]` still present is true.
 /// Remove them so the consumer does not evaluate them again with its own
 /// settings. `#[cfg]` inside macro invocation bodies is left alone.
-fn strip_true_cfgs(item: &mut Item) {
-    struct V;
+///
+/// Returns the item's tokens without them, and the item itself without them
+/// (re-parsed) only if there were any. `syn`'s `VisitMut` can change an
+/// attribute but not remove it from its list in every version we support (the
+/// `visit_attributes_mut` hook is recent), so each `#[cfg]` is renamed to a
+/// mark first and the marks are dropped from the printed tokens.
+fn strip_true_cfgs(item: Item) -> Result<(Item, TokenStream)> {
+    struct V(bool);
     impl syn::visit_mut::VisitMut for V {
-        fn visit_attributes_mut(&mut self, attrs: &mut Vec<syn::Attribute>) {
-            attrs.retain(|a| !a.path().is_ident("cfg"));
-            for a in attrs {
-                self.visit_attribute_mut(a);
+        fn visit_attribute_mut(&mut self, a: &mut syn::Attribute) {
+            if a.path().is_ident("cfg") {
+                let mark: syn::Path = Ident::new(STRIPPED_CFG, Span::call_site()).into();
+                match &mut a.meta {
+                    syn::Meta::Path(p) => *p = mark,
+                    syn::Meta::List(l) => l.path = mark,
+                    syn::Meta::NameValue(nv) => nv.path = mark,
+                }
+                self.0 = true;
             }
+            syn::visit_mut::visit_attribute_mut(self, a);
         }
     }
-    syn::visit_mut::VisitMut::visit_item_mut(&mut V, item);
+    let mut item = item;
+    let mut v = V(false);
+    syn::visit_mut::VisitMut::visit_item_mut(&mut v, &mut item);
+    if !v.0 {
+        let tokens = item.to_token_stream();
+        return Ok((item, tokens));
+    }
+    let tokens = drop_marked_attributes(item.to_token_stream());
+    Ok((syn::parse2(tokens.clone())?, tokens))
+}
+
+/// Removes the `#[STRIPPED_CFG(..)]` and `#![STRIPPED_CFG(..)]` attributes, at
+/// any depth.
+fn drop_marked_attributes(ts: TokenStream) -> TokenStream {
+    let tts: Vec<TokenTree> = ts.into_iter().collect();
+    let mut out = Vec::with_capacity(tts.len());
+    let mut i = 0;
+    while i < tts.len() {
+        match &tts[i] {
+            TokenTree::Punct(p) if p.as_char() == '#' => {
+                let mut j = i + 1;
+                if matches!(tts.get(j), Some(TokenTree::Punct(b)) if b.as_char() == '!') {
+                    j += 1;
+                }
+                if let Some(TokenTree::Group(g)) = tts.get(j) {
+                    let marked = g.delimiter() == proc_macro2::Delimiter::Bracket
+                        && matches!(
+                            g.stream().into_iter().next(),
+                            Some(TokenTree::Ident(id)) if id == STRIPPED_CFG
+                        );
+                    if marked {
+                        i = j + 1;
+                        continue;
+                    }
+                }
+                out.push(tts[i].clone());
+            }
+            TokenTree::Group(g) => {
+                let mut ng = Group::new(g.delimiter(), drop_marked_attributes(g.stream()));
+                ng.set_span(g.span());
+                out.push(TokenTree::Group(ng));
+            }
+            t => out.push(t.clone()),
+        }
+        i += 1;
+    }
+    out.into_iter().collect()
 }
 
 /// Conservative test for "`dyn Trait` is certainly a valid type", so that the
@@ -408,13 +469,12 @@ pub fn trampoline(
 }
 
 /// Everything the `__Capture` derive emits for one cfg-evaluated item.
-pub fn generate(mut item: Item, opts: &Options, random: u64) -> Result<TokenStream> {
+pub fn generate(item: Item, opts: &Options, random: u64) -> Result<TokenStream> {
     let (ident, vis) = ident_vis(&item)?;
     let krate = opts.krate();
     let h = hex(random);
 
-    strip_true_cfgs(&mut item);
-    let full_item = item.to_token_stream();
+    let (item, full_item) = strip_true_cfgs(item)?;
 
     let checks = opts.checks.iter().map(|c| {
         let p = &c.path;
@@ -620,5 +680,52 @@ mod tests {
     fn crate_to_dollar_crate_is_not_applied_twice_to_the_same_path() {
         let once = crate_to_dollar_crate(quote! { crate::x });
         assert_eq!(squash(crate_to_dollar_crate(once)), "$crate::x");
+    }
+
+    #[test]
+    fn true_cfgs_are_stripped_everywhere_but_in_macro_bodies() {
+        let item: Item = syn::parse2(quote! {
+            #[cfg(a)]
+            #[derive(Clone)]
+            pub struct S<#[cfg(b)] T> {
+                #[cfg(c)]
+                pub x: u8,
+                pub y: [u8; { #[cfg(d)] 1 }],
+            }
+        })
+        .unwrap();
+        let (item, tokens) = strip_true_cfgs(item).unwrap();
+        let out = squash(&tokens);
+        assert!(
+            !out.contains("cfg(a)") && !out.contains("cfg(b)"),
+            "{}",
+            out
+        );
+        assert!(
+            !out.contains("cfg(c)") && !out.contains("cfg(d)"),
+            "{}",
+            out
+        );
+        assert!(
+            out.contains("#[derive(Clone)]") && out.contains("pubx:u8"),
+            "{}",
+            out
+        );
+        assert!(!out.contains(STRIPPED_CFG), "{}", out);
+        assert_eq!(squash(&item), out);
+
+        // Macro bodies are opaque; an item without `cfg` is returned as it is.
+        let item: Item = syn::parse2(quote! {
+            #[cfg(a)]
+            mod m { #![cfg(w)] m!(#[cfg(z)] x); }
+        })
+        .unwrap();
+        let (_, tokens) = strip_true_cfgs(item).unwrap();
+        let out = squash(&tokens);
+        assert!(
+            out.contains("m!(#[cfg(z)]x)") && !out.contains("cfg(a)") && !out.contains("cfg(w)"),
+            "{}",
+            out
+        );
     }
 }

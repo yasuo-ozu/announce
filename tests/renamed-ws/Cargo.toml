@@ -1,10 +1,18 @@
+# Its own workspace root, so that `ann-ws.workspace = true` (a rename inherited
+# from `[workspace.dependencies]`) is tested. Workspace inheritance needs
+# cargo 1.64, so this is kept out of the main workspace, which must parse with
+# cargo 1.56. Run it with `cargo test` in this directory.
 [package]
 name = "announce-test-renamed-ws"
 version = "0.0.0"
 edition = "2021"
-rust-version = "1.71"
+rust-version = "1.64"
 publish = false
 
+[workspace]
+
+[workspace.dependencies]
+ann-ws = { package = "announce", path = "../../announce", version = "0.1.0" }
+
 [dependencies]
-# Rename inherited from [workspace.dependencies] (`ann-ws = { package = "announce", .. }`).
 ann-ws.workspace = true

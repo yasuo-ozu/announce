@@ -25,6 +25,21 @@ pub use announce_macros::signature_only;
 )]
 pub trait Announce {}
 
+/// Re-export of [`type-leak`](https://docs.rs/type-leak), the library that the
+/// `repeater` option and `announce_helper::TypeLeak` are built on.
+///
+/// It is the version that `announce-macros` and `announce-helper` use, so a
+/// macro crate that works with the types announce leaks (for example with
+/// `announce_helper::leak::StableReferrer`) can name it through `announce`
+/// and cannot end up with a second, incompatible copy.
+///
+/// ```
+/// let _leaker = announce::type_leak::Leaker::new();
+/// ```
+pub use type_leak;
+
+pub mod machinery;
+
 #[doc(hidden)]
 pub mod __private {
     pub use announce_macros::{remove, Capture};

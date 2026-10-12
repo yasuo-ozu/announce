@@ -1,19 +1,50 @@
 use proc_macro2::{Ident, TokenStream};
 use syn::parse::{Parse, ParseStream};
 use syn::{Error, LitBool, Path, Result, Token};
+use template_quote::{quote, ToTokens};
 
-/// One `#[announce(path)]` / `#[announce(path(args))]` entry.
+/// One check or `meta` entry of the attribute: `path` or `path(args)`.
+///
+/// As a check (`#[announce(my_lib::check(args))]`) it runs at the definition,
+/// as `path! { (args), ITEM }`. As a `meta` entry it is only listed in `META`.
 #[derive(Clone)]
 pub struct Check {
+    /// The macro path.
     pub path: Path,
+    /// The tokens inside the parentheses, if there were any.
     pub args: Option<TokenStream>,
 }
 
-/// Parsed `#[announce(...)]` arguments. `key = value` is an option, any other
-/// path is a check (DESIGN.md section 4).
+impl ToTokens for Check {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        let p = &self.path;
+        match &self.args {
+            Some(a) => tokens.extend(quote! { #p(#a) }),
+            None => tokens.extend(quote! { #p }),
+        }
+    }
+}
+
+/// The parsed arguments of `#[announce(..)]` or of the `#[announce(..)]`
+/// helper attribute of `#[derive(Announce)]`.
+///
+/// Parse it from the attribute's tokens with [`syn::parse2`]; the grammar and
+/// the meaning of every option are those of the `#[announce]` attribute
+/// (`announce::announce`). Build one in code with [`Options::default`] and
+/// the public fields. Turn it back into attribute arguments with
+/// [`ToTokens`] (`opts.to_token_stream()`), for example to hand it to
+/// [`announce()`](crate::announce).
+///
+/// The most useful field for a library is `krate`: the path to the `announce`
+/// crate that the generated code uses (see [`Options::krate()`]). Without it the
+/// path is read from the `Cargo.toml` of the crate being compiled, which only
+/// works when that crate depends on `announce` itself.
 #[derive(Clone)]
+#[non_exhaustive]
 pub struct Options {
+    /// `macro_name = Name`: name of the emitted macro. Default: the item's name.
     pub macro_name: Option<Ident>,
+    /// `mock = path`: the item is a stand-in for the item at `path`.
     pub mock: Option<Path>,
     /// `repeater = path`: emit the type-leak table against this repeater trait.
     pub repeater: Option<Path>,
@@ -21,15 +52,18 @@ pub struct Options {
     pub allow_primitive: bool,
     /// type-leak: std prelude names resolve everywhere (default `false`).
     pub allow_std_prelude: bool,
+    /// `crate = path`: path to the `announce` crate in generated code. When it
+    /// is `None`, [`Options::krate()`] looks the crate up in `Cargo.toml`.
     pub krate: Option<Path>,
     /// `emit_item = false`: do not re-emit the item (for derives, whose input
-    /// already exists).
+    /// already exists). Default `true`.
     pub emit_item: bool,
     /// Set by `#[derive(Announce)]`: the item is emitted by the user and always
     /// gets the `Announce` impl. Not an option.
-    pub derived: bool,
+    pub(crate) derived: bool,
     /// The option keys that were written (for derive-specific errors).
-    pub given: Vec<String>,
+    pub(crate) given: Vec<String>,
+    /// Checks: bare `path` / `path(args)` entries. They run at the definition.
     pub checks: Vec<Check>,
     /// `meta = path(args)`: listed in META like a check, but never invoked.
     pub metas: Vec<Check>,
@@ -54,12 +88,50 @@ impl Default for Options {
 }
 
 impl Options {
+    /// The path to the `announce` crate that the generated code uses.
+    ///
+    /// `crate = ..` (the `krate` field) wins. Otherwise it is
+    /// the name that the `Cargo.toml` of the crate being compiled
+    /// (`CARGO_MANIFEST_DIR`) gives to its `announce` dependency, renames
+    /// included, else `::announce`.
     pub fn krate(&self) -> Path {
-        // `crate = ..` wins; otherwise the name the caller's Cargo.toml gives
-        // the `announce` dependency (renames included), else `::announce`.
         self.krate
             .clone()
             .unwrap_or_else(crate::cratepath::default_crate_path)
+    }
+}
+
+impl ToTokens for Options {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        let mut parts: Vec<TokenStream> = Vec::new();
+        if let Some(k) = &self.krate {
+            parts.push(quote! { crate = #k });
+        }
+        if let Some(n) = &self.macro_name {
+            parts.push(quote! { macro_name = #n });
+        }
+        if let Some(m) = &self.mock {
+            parts.push(quote! { mock = #m });
+        }
+        if let Some(r) = &self.repeater {
+            parts.push(quote! { repeater = #r });
+        }
+        if !self.allow_primitive {
+            parts.push(quote! { allow_primitive = false });
+        }
+        if self.allow_std_prelude {
+            parts.push(quote! { allow_std_prelude = true });
+        }
+        if !self.emit_item {
+            parts.push(quote! { emit_item = false });
+        }
+        for m in &self.metas {
+            parts.push(quote! { meta = #m });
+        }
+        for c in &self.checks {
+            parts.push(quote! { #c });
+        }
+        tokens.extend(quote! { #(#parts),* });
     }
 }
 

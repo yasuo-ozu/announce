@@ -55,6 +55,16 @@ pub struct Point { pub x: i32, pub y: i32 }
 | `announce-helper` | write callbacks, start chains, redirect derives, check input |
 | `announce-std` | announce std/core traits (`announce_std::iter::Iterator!`) |
 
+A proc-macro crate that builds or rewrites items itself can make them announced
+by calling `announce::machinery::announce(attr, item)` instead of emitting
+`#[announce(..)]`. The result is
+the same code, as `proc_macro2` tokens. If the crate's users do not depend on
+`announce`, the crate re-exports it and passes `crate = ::my_lib::announce`.
+`announce` also re-exports [`type_leak`](https://docs.rs/type-leak).
+
+Minimum Rust version: 1.57 (1.56 for `announce-helper`). A `repeater` trait needs
+1.59 in the defining crate.
+
 ## Calling a trampoline
 
 ```text

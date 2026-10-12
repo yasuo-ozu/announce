@@ -1,22 +1,22 @@
 [workspace]
-members = ["announce", "announce-macros", "announce-helper", "announce-std", "tests/defs", "tests/user", "tests/derive", "tests/renamed", "tests/renamed-ws"]
-exclude = ["tests/ui"]
+members = [
+    "announce",
+    "announce-core",
+    "announce-macros",
+    "announce-helper",
+    "announce-std",
+    "tests/defs",
+    "tests/user",
+    "tests/derive",
+    "tests/renamed",
+    "tests/machinery",
+    "tests/machinery-lib",
+    "tests/machinery-user",
+]
+# `tests/ui` needs a newer rustc (trybuild); `tests/renamed-ws` is its own
+# workspace, because it tests a workspace-inherited rename (`ann-ws.workspace = true`).
+exclude = ["tests/ui", "tests/renamed-ws"]
 resolver = "2"
 
-[workspace.package]
-version = "0.1.0"
-edition = "2021"
-rust-version = "1.71"
-license = "MIT"
-authors = ["Yasuo Ozu <yasuo@ozu.email>"]
-repository = "https://github.com/yasuo-ozu/ozu"
-
-[workspace.dependencies]
-# Renamed form, used by tests/renamed-ws (workspace-inherited rename).
-ann-ws = { package = "announce", path = "announce", version = "0.1.0" }
-syn = { version = "2.0.100", features = ["full", "extra-traits"] }
-proc-macro2 = "1"
-template-quote = "0.4"
-announce = { path = "announce", version = "0.1.0" }
-announce-macros = { path = "announce-macros", version = "0.1.0" }
-announce-helper = { path = "announce-helper", version = "0.1.0" }
+# No `[workspace.package]` / `[workspace.dependencies]` inheritance: the
+# manifests must parse with cargo 1.56 (announce-helper's MSRV), and inheritance needs 1.64.

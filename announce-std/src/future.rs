@@ -18,6 +18,7 @@ pub trait Future {
 #[doc(no_inline)]
 pub use ::core::future::Future;
 
+#[cfg(announce_std_rust_1_64)]
 /// announce mock of [`::core::future::IntoFuture`]: invoke `IntoFuture!` to receive its definition.
 ///
 /// The real trait is re-exported under the same path.
@@ -28,5 +29,6 @@ pub trait IntoFuture {
     fn into_future(self) -> Self::IntoFuture;
 }
 
+#[cfg(announce_std_rust_1_64)]
 #[doc(no_inline)]
 pub use ::core::future::IntoFuture;

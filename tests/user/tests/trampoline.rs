@@ -584,10 +584,15 @@ mod probe {
 }
 use probe::{NotAnnounced as _, Probe};
 
+/// Hides a constant from clippy (`std::hint::black_box` needs rustc 1.66).
+fn opaque(b: bool) -> bool {
+    b
+}
+
 /// `T: announce::Announce`, as a value clippy does not take for a constant.
 macro_rules! announced {
     ($t:ty) => {
-        std::hint::black_box(Probe::<$t>::IS)
+        opaque(Probe::<$t>::IS)
     };
 }
 

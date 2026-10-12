@@ -142,8 +142,9 @@ fn allow_std_prelude_with_repeater() {
     // The relative `Local` is carried, in whichever types around it type-leak
     // interns (which prelude wrapper that is, is its business). `String` needs
     // nothing and is not carried.
-    let [row] = prelude::ty::T else {
-        panic!("one entry expected: {:?}", prelude::ty::T)
+    let row = match prelude::ty::T {
+        [row] => row,
+        t => panic!("one entry expected: {:?}", t),
     };
     assert!(row.contains("Local"), "{}", row);
     assert!(!row.contains("String"), "{}", row);

@@ -1,7 +1,8 @@
 use std::process::Command;
 
-// Version-gated mocks (traits that changed after the 1.71 MSRV).
-const VERSIONS: &[u32] = &[80, 81, 94];
+// Version-gated mocks: traits that are newer than the MSRV (1.57), or that changed
+// after it. `announce_std_rust_1_N` is set from rustc 1.N on.
+const VERSIONS: &[u32] = &[61, 64, 80, 81, 94];
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");

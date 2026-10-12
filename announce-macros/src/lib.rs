@@ -1,23 +1,8 @@
 //! Proc macros behind [`announce`](https://docs.rs/announce). Use them through the
-//! `announce` crate; the paths here are not a stable interface.
-
-mod cratepath;
-mod generate;
-mod leak;
-mod options;
+//! `announce` crate; the paths here are not a stable interface. The code behind
+//! the macros is in `announce-core`.
 
 use proc_macro::TokenStream;
-use proc_macro2::{Ident, Span, TokenStream as TokenStream2};
-use std::sync::atomic::{AtomicU64, Ordering};
-use template_quote::quote;
-
-fn random_u64() -> u64 {
-    use std::hash::{BuildHasher, Hasher};
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let mut h = std::collections::hash_map::RandomState::new().build_hasher();
-    h.write_u64(COUNTER.fetch_add(1, Ordering::Relaxed));
-    h.finish()
-}
 
 /// Announces an item: lets macros in any crate read its definition.
 ///
@@ -128,8 +113,9 @@ fn random_u64() -> u64 {
 /// pub trait Repeater<const ID: u64, const I: usize, G: ?Sized> { type Type: ?Sized; }
 /// ```
 ///
-/// Write it as `crate::path::to::Repeater` in the option, and make it `pub` so
-/// callers can reach it as `$crate::path::to::Repeater`. It has to be a trait of
+/// (This shape needs rustc 1.59: a type parameter after const parameters is an
+/// error before.) Write it as `crate::path::to::Repeater` in the option, and make
+/// it `pub` so callers can reach it as `$crate::path::to::Repeater`. It has to be a trait of
 /// the defining crate: announce implements it for `()`, and the orphan rule allows
 /// that only for a local trait. A `repeater` works on a struct, enum, union and
 /// trait.
@@ -279,34 +265,7 @@ fn random_u64() -> u64 {
 /// go in an `#[announce(..)]` helper attribute, except `mock` and `emit_item`.
 #[proc_macro_attribute]
 pub fn announce(attr: TokenStream, item: TokenStream) -> TokenStream {
-    match announce_impl(attr.into(), item.into()) {
-        Ok(ts) => ts.into(),
-        Err(e) => e.to_compile_error().into(),
-    }
-}
-
-fn announce_impl(attr: TokenStream2, item: TokenStream2) -> syn::Result<TokenStream2> {
-    let opts: options::Options = syn::parse2(attr.clone())?;
-    let parsed: syn::Item = syn::parse2(item.clone())?;
-    generate::ident_vis(&parsed)?;
-    let krate = opts.krate();
-    let random = random_u64();
-    let cap = Ident::new(
-        &format!("__AnnounceCap_{}", generate::hex(random)),
-        Span::call_site(),
-    );
-    let random_lit = syn::LitInt::new(&format!("{}u64", random), Span::call_site());
-    let emit_item = opts.mock.is_none() && opts.emit_item;
-    // DESIGN.md section 4.2: the derive sees the copy with every nested cfg
-    // evaluated in this crate, then `remove` deletes the dummy.
-    Ok(quote! {
-        #(if emit_item) { #item }
-        #[derive(#krate::__private::Capture)]
-        #[__announce(#random_lit; #attr)]
-        #[#krate::__private::remove]
-        #[allow(dead_code, non_camel_case_types)]
-        enum #cap { V = { #item 0 } }
-    })
+    announce_core::announce(attr.into(), item.into()).into()
 }
 
 /// Announces a struct, enum or union as written, and implements `Announce` for it.
@@ -321,55 +280,7 @@ fn announce_impl(attr: TokenStream2, item: TokenStream2) -> syn::Result<TokenStr
 /// ```
 #[proc_macro_derive(Announce, attributes(announce))]
 pub fn derive_announce(input: TokenStream) -> TokenStream {
-    match derive_announce_impl(input.into()) {
-        Ok(ts) => ts.into(),
-        Err(e) => e.to_compile_error().into(),
-    }
-}
-
-fn derive_announce_impl(input: TokenStream2) -> syn::Result<TokenStream2> {
-    let mut item: syn::Item = syn::parse2(input)?;
-    let attrs = match &mut item {
-        syn::Item::Struct(s) => &mut s.attrs,
-        syn::Item::Enum(e) => &mut e.attrs,
-        syn::Item::Union(u) => &mut u.attrs,
-        other => {
-            return Err(syn::Error::new_spanned(
-                other,
-                "`#[derive(Announce)]` supports struct, enum and union items",
-            ))
-        }
-    };
-    let mut opts = options::Options::default();
-    let mut seen = false;
-    for a in attrs.iter().filter(|a| a.path().is_ident("announce")) {
-        if seen {
-            return Err(syn::Error::new_spanned(
-                a,
-                "announce: only one `#[announce(..)]` helper attribute is allowed",
-            ));
-        }
-        seen = true;
-        if let syn::Meta::List(l) = &a.meta {
-            opts = syn::parse2(l.tokens.clone())?;
-        }
-    }
-    attrs.retain(|a| !a.path().is_ident("announce"));
-    for key in ["mock", "emit_item"] {
-        if opts.given.iter().any(|g| g == key) {
-            return Err(syn::Error::new(
-                Span::call_site(),
-                format!(
-                    "`{}` does not apply to `#[derive(Announce)]`: the item is emitted as written",
-                    key
-                ),
-            ));
-        }
-    }
-    // The derive input is already cfg-evaluated by rustc.
-    opts.emit_item = false;
-    opts.derived = true;
-    generate::generate(item, &opts, random_u64())
+    announce_core::derive_announce(input.into()).into()
 }
 
 #[doc(hidden)]
@@ -433,49 +344,8 @@ announce_helper::transformer! {
 #[doc(hidden)]
 #[proc_macro_derive(Capture, attributes(__announce))]
 pub fn capture(input: TokenStream) -> TokenStream {
-    match capture_impl(input.into()) {
+    match announce_core::capture(input.into()) {
         Ok(ts) => ts.into(),
         Err(e) => e.to_compile_error().into(),
-    }
-}
-
-fn capture_impl(input: TokenStream2) -> syn::Result<TokenStream2> {
-    let di: syn::DeriveInput = syn::parse2(input)?;
-    let attr = di
-        .attrs
-        .iter()
-        .find(|a| a.path().is_ident("__announce"))
-        .ok_or_else(|| {
-            syn::Error::new_spanned(
-                &di.ident,
-                "announce: missing #[__announce] on capture dummy",
-            )
-        })?;
-    let args: options::CaptureArgs = attr.parse_args()?;
-    let expr = match &di.data {
-        syn::Data::Enum(e) => e
-            .variants
-            .first()
-            .and_then(|v| v.discriminant.as_ref())
-            .map(|d| &d.1),
-        _ => None,
-    };
-    let stmts = match expr {
-        Some(syn::Expr::Block(b)) => &b.block.stmts,
-        _ => {
-            return Err(syn::Error::new_spanned(
-                &di.ident,
-                "announce: malformed capture dummy",
-            ))
-        }
-    };
-    // The copy is gone when the item itself was `#[cfg]`'d out.
-    let item = stmts.iter().find_map(|s| match s {
-        syn::Stmt::Item(i) => Some(i.clone()),
-        _ => None,
-    });
-    match item {
-        Some(item) => generate::generate(item, &args.opts, args.random),
-        None => Ok(TokenStream2::new()),
     }
 }
