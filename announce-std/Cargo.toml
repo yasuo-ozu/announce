@@ -13,7 +13,7 @@ default = ["std"]
 std = []
 
 [dependencies]
-announce = { path = "../announce", version = "0.1.0" }
+announce = { path = "..", version = "0.1.0" }
 
 [build-dependencies]
 rustversion = "1"

@@ -1,6 +1,50 @@
+[package]
+name = "announce"
+description = "Definition-side trampolines: make a definition known to proc macros in any crate"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.57"
+license = "MIT"
+authors = ["Yasuo Ozu <yasuo@ozu.email>"]
+repository = "https://github.com/yasuo-ozu/ozu"
+readme = "README.md"
+build = "build.rs"
+# This package is the root of the repository: publish only the crate itself,
+# not the other workspace members, tests/, bench/, measurement/, tools/ or the logo.
+include = ["src/**/*", "build.rs", "README.md", "Cargo.toml"]
+
+[dependencies]
+announce-macros = { path = "announce-macros", version = "0.1.0" }
+# Re-exported as `announce::machinery`: the generation code behind
+# `#[announce]` and `#[derive(Announce)]`, callable from other proc-macro crates.
+announce-core = { path = "announce-core", version = "0.1.0" }
+# Re-exported as `announce::type_leak`.
+type-leak = "0.8"
+
+[dev-dependencies]
+# The `announce::machinery` doc test.
+proc-macro2 = "1"
+
 [workspace]
+# The root package `announce` is a member implicitly.
 members = [
-    "announce",
+    "announce-core",
+    "announce-macros",
+    "announce-helper",
+    "announce-std",
+    "tests/defs",
+    "tests/user",
+    "tests/derive",
+    "tests/renamed",
+    "tests/machinery",
+    "tests/machinery-lib",
+    "tests/machinery-user",
+]
+# A plain `cargo test` / `cargo build` in a workspace with a root package acts
+# on that package only; list every member (and the root, ".") to keep it
+# covering the whole workspace, as `--workspace` does.
+default-members = [
+    ".",
     "announce-core",
     "announce-macros",
     "announce-helper",

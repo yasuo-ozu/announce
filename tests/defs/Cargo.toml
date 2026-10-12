@@ -9,5 +9,5 @@ publish = false
 x = []
 
 [dependencies]
-announce = { path = "../../announce" }
+announce = { path = "../.." }
 announce-test-derive = { path = "../derive" }

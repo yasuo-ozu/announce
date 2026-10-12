@@ -9,5 +9,5 @@ publish = false
 # the macros of its proc-macro crate (`announce-test-machinery`) and `announce`,
 # so that the library's users need no `announce` dependency.
 [dependencies]
-announce = { path = "../../announce" }
+announce = { path = "../.." }
 announce-test-machinery = { path = "../machinery" }

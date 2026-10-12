@@ -175,7 +175,8 @@ fn revision(repo: &Path) -> String {
                 "status",
                 "--porcelain",
                 "--",
-                "announce",
+                "src",
+                "build.rs",
                 "announce-core",
                 "announce-macros",
                 "announce-helper",
@@ -249,7 +250,13 @@ impl Harness {
     /// the build directory is kept so that shared dependencies stay built).
     fn generate(&self, repo: &Path) {
         let _ = fs::remove_dir_all(&self.ws);
-        let announce = repo.join("announce");
+        // The `announce` package is the repository root; a checkout from before
+        // it moved there (`ANNOUNCE_BENCH_REPO`) still has it in `announce/`.
+        let announce = if repo.join("announce/Cargo.toml").exists() {
+            repo.join("announce")
+        } else {
+            repo.to_path_buf()
+        };
         let helper = repo.join("announce-helper");
         let mut members = vec!["bench_cb".to_string(), "baseline".to_string()];
         let ws = &self.ws;

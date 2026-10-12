@@ -9,7 +9,7 @@ publish = false
 [workspace]
 
 [dependencies]
-announce = { path = "../../announce" }
+announce = { path = "../.." }
 announce-test-defs = { path = "../defs" }
 announce-test-derive = { path = "../derive" }
 announce-test-machinery-lib = { path = "../machinery-lib" }

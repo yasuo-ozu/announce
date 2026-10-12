@@ -11,6 +11,6 @@ default = ["x"]
 x = []
 
 [dependencies]
-announce = { path = "../../announce" }
+announce = { path = "../.." }
 announce-test-defs = { path = "../defs" }
 announce-test-derive = { path = "../derive" }

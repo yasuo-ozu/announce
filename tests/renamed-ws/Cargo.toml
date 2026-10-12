@@ -12,7 +12,7 @@ publish = false
 [workspace]
 
 [workspace.dependencies]
-ann-ws = { package = "announce", path = "../../announce", version = "0.1.0" }
+ann-ws = { package = "announce", path = "../..", version = "0.1.0" }
 
 [dependencies]
 ann-ws.workspace = true
