@@ -19,9 +19,7 @@ pub enum Unknown {
 }
 
 // `repeater` is accepted on the derive: with no relative type the table is empty.
-pub trait Repeater<const ID: u64, const I: usize, G: ?Sized> {
-    type Type: ?Sized;
-}
+::announce::define_repeater!(pub Repeater);
 #[derive(announce::Announce)]
 #[announce(repeater = crate::Repeater)]
 pub struct Fine(pub u8);

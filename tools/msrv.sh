@@ -1,6 +1,6 @@
 #!/bin/sh
 # Builds and tests announce on its minimum Rust versions, in a scratch copy:
-#   1.56   announce-helper (also with its `type-leak` feature)
+#   1.56   announce-helper (with and without its `type-leak` feature, on by default)
 #   1.57   announce, announce-core, announce-macros, announce-std, announce-helper
 #          and the machinery tests (everything without a `repeater`)
 #   1.59   the whole workspace
@@ -40,8 +40,8 @@ run() {
     cargo "+$@" --offline
 }
 
+run 1.56 test -p announce-helper --no-default-features
 run 1.56 test -p announce-helper
-run 1.56 test -p announce-helper --features type-leak
 run 1.57.0 test -p announce -p announce-core -p announce-macros -p announce-std -p announce-helper \
     -p announce-test-derive -p announce-test-machinery -p announce-test-machinery-lib \
     -p announce-test-machinery-user

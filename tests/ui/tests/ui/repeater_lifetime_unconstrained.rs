@@ -3,9 +3,7 @@
 // rejected with E0195 (early- vs late-bound). type-leak 0.8 reports this at the
 // definition; type-leak 0.7 accepted the definition, and the received item
 // could not be implemented that way.
-pub trait Repeater<const ID: u64, const I: usize, G: ?Sized> {
-    type Type: ?Sized;
-}
+::announce::define_repeater!(pub Repeater);
 pub mod inner {
     pub struct Wrap<'a>(pub &'a u8);
 }

@@ -10,16 +10,28 @@
 //! - Check: [`CheckInput`] parses a definition-side check. [`check_type`] and
 //!   [`check_trait`] test for `announce::Announce`.
 //! - Read META: [`Entry::find_meta`] and [`KvArgs`] parse `key = value` lists.
+//! - Resolve relative types (feature `type-leak`, on by default):
+//!   [`Entry::type_leak`] reads the [`TypeLeak`] table of a
+//!   definition announced with `repeater = ..`, and [`TypeLeak::apply`] rewrites
+//!   an item so that its types resolve in any crate. The table holds a
+//!   `type_leak::Referrer` (re-exported as [`type_leak`]), so the arguments of the
+//!   rewritten types are the ones type-leak gives for the use site ([`TypeLeak::entry_args`]).
 
 mod kv;
 #[cfg(feature = "type-leak")]
 pub mod leak;
-#[doc(hidden)]
-pub mod scope;
 mod transformer;
+#[cfg(feature = "type-leak")]
+mod typeleak;
 
 pub use kv::KvArgs;
 pub use transformer::signature_only;
+/// The version of `type-leak` that [`TypeLeak`] uses: name it through this crate
+/// so there is never a second, incompatible copy. (Feature `type-leak`.)
+#[cfg(feature = "type-leak")]
+pub use type_leak;
+#[cfg(feature = "type-leak")]
+pub use typeleak::TypeLeak;
 
 use proc_macro2::{Ident, Span, TokenStream};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -298,100 +310,6 @@ impl ToTokens for Meta {
     }
 }
 
-/// Type table of an entry announced with `#[announce(repeater = ..)]`, from
-/// [`Entry::type_leak`].
-///
-/// The payload is the original item. Type `types[I]` resolves from any crate as
-/// `<() as REPEATER<ID, I, G>>::Type`, where `G` is `generics[I]`.
-/// [`apply`](Self::apply) rewrites an item that way.
-#[derive(Clone, Debug)]
-pub struct TypeLeak {
-    /// The repeater trait path as tokens, e.g. `$crate::Repeater`. Tokens, not a
-    /// `syn::Path`, because `$crate` is not a path segment for syn.
-    pub repeater: TokenStream,
-    /// The definition's table id.
-    pub id: syn::LitInt,
-    /// `generics[i]`: the generic parameters that `types[i]` mentions, in order
-    /// of first appearance, as a tuple type. Type parameters appear as
-    /// themselves, lifetimes as `&'a ()`, consts as `[(); N]`. `()` if none.
-    pub generics: Vec<syn::Type>,
-    /// `types[i]`: the original type behind index `i`, as the definer wrote it.
-    /// Relative paths in it do not resolve at the caller.
-    pub types: Vec<syn::Type>,
-}
-
-impl TypeLeak {
-    /// The index of `ty` in [`types`](Self::types), if it was interned.
-    pub fn lookup(&self, ty: &syn::Type) -> Option<usize> {
-        self.types.iter().position(|t| t == ty)
-    }
-
-    /// Rewrites every type of `types` in `item` (usually the entry's payload) to
-    /// its projection, so the item resolves from any crate. A fn generic
-    /// parameter named like a listed type shadows it.
-    pub fn apply(&self, item: &mut syn::Item) {
-        use syn::visit_mut::VisitMut;
-        struct V<'a> {
-            tl: &'a TypeLeak,
-            shadowed: Vec<syn::Type>,
-        }
-        impl V<'_> {
-            fn shadow(&mut self, g: &syn::Generics, f: impl FnOnce(&mut Self)) {
-                let saved = self.shadowed.len();
-                for p in &g.params {
-                    if let syn::GenericParam::Type(t) = p {
-                        let i = &t.ident;
-                        self.shadowed.push(syn::parse_quote!(#i));
-                    }
-                }
-                f(self);
-                self.shadowed.truncate(saved);
-            }
-        }
-        impl VisitMut for V<'_> {
-            fn visit_type_mut(&mut self, ty: &mut syn::Type) {
-                if !self.shadowed.contains(ty) {
-                    if let Some(i) = self.tl.lookup(ty) {
-                        // `projection` returns tokens (the repeater may be `$crate`).
-                        let g = self
-                            .tl
-                            .generics
-                            .get(i)
-                            .cloned()
-                            .unwrap_or_else(|| syn::parse_quote!(()));
-                        *ty = syn::Type::Verbatim(self.tl.projection(i, &g));
-                        return;
-                    }
-                }
-                syn::visit_mut::visit_type_mut(self, ty)
-            }
-            fn visit_trait_item_fn_mut(&mut self, f: &mut syn::TraitItemFn) {
-                let g = f.sig.generics.clone();
-                self.shadow(&g, |v| syn::visit_mut::visit_trait_item_fn_mut(v, f));
-            }
-            fn visit_impl_item_fn_mut(&mut self, f: &mut syn::ImplItemFn) {
-                let g = f.sig.generics.clone();
-                self.shadow(&g, |v| syn::visit_mut::visit_impl_item_fn_mut(v, f));
-            }
-            fn visit_item_fn_mut(&mut self, f: &mut syn::ItemFn) {
-                let g = f.sig.generics.clone();
-                self.shadow(&g, |v| syn::visit_mut::visit_item_fn_mut(v, f));
-            }
-        }
-        V {
-            tl: self,
-            shadowed: Vec::new(),
-        }
-        .visit_item_mut(item);
-    }
-
-    /// `<() as REPEATER<ID, index, generics>>::Type`, as tokens to emit.
-    pub fn projection(&self, index: usize, generics: &syn::Type) -> TokenStream {
-        let (a, id) = (&self.repeater, &self.id);
-        quote! { <() as #a<#id, #index, #generics>>::Type }
-    }
-}
-
 /// `KEY => [META] { ITEM }`
 #[derive(Clone, Debug)]
 pub struct Entry {
@@ -426,22 +344,14 @@ impl Entry {
     }
 
     /// The `type_leak(..)` META of an entry announced with `repeater = ..`.
-    /// Unknown keys are ignored.
+    /// Unknown keys are ignored. Needs the feature `type-leak` (on by default).
+    #[cfg(feature = "type-leak")]
     pub fn type_leak(&self) -> Result<Option<TypeLeak>> {
         let m = match self.find_meta("type_leak") {
             Some(m) => m,
             None => return Ok(None),
         };
-        let mut kv = m.kv()?;
-        let t = TypeLeak {
-            repeater: kv
-                .tokens("repeater")
-                .ok_or_else(|| syn::Error::new(Span::call_site(), "missing `repeater`"))?,
-            id: kv.require("id")?,
-            generics: kv.list("generics")?.unwrap_or_default(),
-            types: kv.list("types")?.unwrap_or_default(),
-        };
-        Ok(Some(t))
+        TypeLeak::from_kv(&mut m.kv()?).map(Some)
     }
 
     /// Whether META lists a check whose last path segment is `name`. Only the
@@ -1054,15 +964,26 @@ mod kv_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "type-leak"))]
 mod options_tests {
     use super::*;
 
     #[test]
     fn options_are_parsed_and_forwarded() {
+        let mut leaker = type_leak::Leaker::new();
+        let context = leaker
+            .intern_struct(&syn::parse_quote!(struct F<T> { a: Local, b: Vec<T> }), false)
+            .unwrap();
+        let tl = TypeLeak::new(
+            syn::parse_quote!(::my::A),
+            syn::parse_quote!(7u64),
+            leaker.finish(),
+            context,
+        );
+        let meta = tl.meta();
         let input: Input = syn::parse_quote! {
             (type_leak) [me!, next!]
-            a::F! => [type_leak(repeater = $crate::A, id = 7u64, generics = [(), (T,)], types = [Local, Vec<T>])] { struct F<T>(T); }
+            a::F! => [#meta] { struct F<T>(T); }
             (rest)
         };
         assert!(input.has_option("type_leak"));
@@ -1081,13 +1002,14 @@ mod options_tests {
             "{}",
             fetch
         );
-        let tl = input.entries[0].type_leak().unwrap().unwrap();
-        assert_eq!(tl.types.len(), 2);
-        assert_eq!(tl.id.base10_digits(), "7");
-        let proj = tl.projection(1, &syn::parse_quote!((u8,)));
+        let read = input.entries[0].type_leak().unwrap().unwrap();
+        assert_eq!(read.types().count(), 2);
+        assert_eq!(read.id.base10_digits(), "7");
+        assert_eq!(read.referrer, tl.referrer);
+        let proj = read.projection(1, &syn::parse_quote!((u8,)));
         assert_eq!(
             proj.to_string().replace(' ', ""),
-            "<()as$crate::A<7u64,1usize,(u8,)>>::Type"
+            "<()as::my::A<(u8,),7u64,1usize>>::Type"
         );
         let plain: Input = syn::parse_quote! { [me!] a::F! => [] { struct F; } };
         assert!(!plain.has_option("type_leak"));
@@ -1590,119 +1512,5 @@ mod gap_tests {
         .unwrap();
         assert_eq!(input.list.0.len(), 2);
         assert_eq!(s(input.rest), "body");
-    }
-
-    fn leak() -> TypeLeak {
-        TypeLeak {
-            repeater: template_quote::quote!(::my::R),
-            id: syn::parse_quote!(7u64),
-            generics: vec![syn::parse_quote!(()), syn::parse_quote!((T,))],
-            types: vec![syn::parse_quote!(Local), syn::parse_quote!(Wrap<T>)],
-        }
-    }
-
-    #[test]
-    fn type_leak_lookup_and_projection() {
-        let tl = leak();
-        assert_eq!(tl.lookup(&syn::parse_quote!(Local)), Some(0));
-        assert_eq!(tl.lookup(&syn::parse_quote!(Wrap<T>)), Some(1));
-        assert_eq!(tl.lookup(&syn::parse_quote!(Wrap<U>)), None);
-        assert_eq!(tl.lookup(&syn::parse_quote!(T)), None);
-        assert_eq!(
-            s(tl.projection(1, &syn::parse_quote!((u8,)))),
-            "<()as::my::R<7u64,1usize,(u8,)>>::Type"
-        );
-        assert_eq!(
-            s(tl.projection(0, &syn::parse_quote!(()))),
-            "<()as::my::R<7u64,0usize,()>>::Type"
-        );
-    }
-
-    #[test]
-    fn type_leak_apply_rewrites_listed_types_only() {
-        let tl = leak();
-        let mut it: syn::Item = syn::parse_quote! {
-            struct S<T> { a: Local, b: Wrap<T>, c: Vec<Local>, d: u8, e: T }
-        };
-        tl.apply(&mut it);
-        let out = s(&it);
-        let local = "<()as::my::R<7u64,0usize,()>>::Type";
-        let wrap = "<()as::my::R<7u64,1usize,(T,)>>::Type";
-        assert!(out.contains(&format!("a:{}", local)), "{}", out);
-        assert!(out.contains(&format!("b:{}", wrap)), "{}", out);
-        // An unlisted outer type keeps its shape; listed types inside it are rewritten.
-        assert!(out.contains(&format!("c:Vec<{}>", local)), "{}", out);
-        assert!(out.contains("d:u8") && out.contains("e:T}"), "{}", out);
-    }
-
-    #[test]
-    fn type_leak_apply_with_missing_generics_uses_unit() {
-        let mut tl = leak();
-        tl.generics.clear();
-        let mut it: syn::Item = syn::parse_quote! { struct S { a: Wrap<T> } };
-        tl.apply(&mut it);
-        assert!(
-            s(&it).contains("<()as::my::R<7u64,1usize,()>>::Type"),
-            "{}",
-            s(&it)
-        );
-    }
-
-    #[test]
-    fn type_leak_apply_respects_shadowing_generics() {
-        let tl = TypeLeak {
-            repeater: template_quote::quote!(::my::R),
-            id: syn::parse_quote!(7u64),
-            generics: vec![syn::parse_quote!(())],
-            types: vec![syn::parse_quote!(T)],
-        };
-        let proj = "<()as::my::R<7u64,0usize,()>>::Type";
-
-        // Free fn: its own `T` shadows the interned `T`.
-        let mut it: syn::Item = syn::parse_quote! { fn f<T>(x: T) -> T { let y: T = x; y } };
-        tl.apply(&mut it);
-        let out = s(&it);
-        assert!(!out.contains(proj), "{}", out);
-        assert_eq!(out, "fnf<T>(x:T)->T{lety:T=x;y}");
-
-        // Trait fn: only the generic method is shadowed, and only inside it.
-        let mut it: syn::Item = syn::parse_quote! {
-            trait Tr { fn m<T>(x: T) -> T; fn n(x: T) -> T; }
-        };
-        tl.apply(&mut it);
-        let out = s(&it);
-        assert!(out.contains("fnm<T>(x:T)->T;"), "{}", out);
-        assert!(
-            out.contains(&format!("fnn(x:{})->{};", proj, proj)),
-            "{}",
-            out
-        );
-
-        // Impl fn.
-        let mut it: syn::Item = syn::parse_quote! {
-            impl Tr for S { fn m<T>(x: T) -> T { x } fn n(x: T) -> T { x } }
-        };
-        tl.apply(&mut it);
-        let out = s(&it);
-        assert!(out.contains("fnm<T>(x:T)->T{x}"), "{}", out);
-        assert!(
-            out.contains(&format!("fnn(x:{})->{}{{x}}", proj, proj)),
-            "{}",
-            out
-        );
-
-        // A lifetime or const parameter of the same text does not shadow a type.
-        let mut it: syn::Item = syn::parse_quote! { fn f<'a>(x: T) {} };
-        tl.apply(&mut it);
-        assert!(s(&it).contains(&format!("x:{}", proj)), "{}", s(&it));
-
-        // The shadow ends with the fn: the next item sees `T` again.
-        let mut it: syn::Item = syn::parse_quote! {
-            mod m { fn f<T>(x: T) {} struct S { a: T } }
-        };
-        tl.apply(&mut it);
-        let out = s(&it);
-        assert!(out.contains("fnf<T>(x:T){}"), "{}", out);
-        assert!(out.contains(&format!("structS{{a:{}}}", proj)), "{}", out);
     }
 }

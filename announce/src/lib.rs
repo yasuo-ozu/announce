@@ -2,6 +2,7 @@
 #![no_std]
 
 pub use announce_macros::announce;
+pub use announce_macros::define_repeater;
 pub use announce_macros::Announce;
 
 pub use announce_macros::signature_only;

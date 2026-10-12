@@ -305,15 +305,14 @@ fn type_leak_info_lets_callbacks_resolve_local_types() {
         }
     }
     assert_eq!(leaked::t::LeakTrait::make(&X), Local(5));
+    // The META carries type-leak's `Referrer` (the types with the generics of
+    // their contexts) and the context of the item.
     let m = norm(leaked::s::M[0]);
-    // The order of interned types is unspecified; `generics` and `types` are aligned.
-    assert!(
-        m.contains(",generics=[(T,),()],types=[Vec<T>,Local])")
-            || m.contains(",generics=[(),(T,)],types=[Local,Vec<T>])"),
-        "{}",
-        m
-    );
-    assert!(norm(leaked::t::M[0]).ends_with("generics=[()],types=[Local])"));
+    assert!(m.contains("referrer=[\"type-leak-format-"), "{}", m);
+    assert!(m.contains("(Local)") && m.contains("<T>;(Vec<T>)"), "{}", m);
+    let t = norm(leaked::t::M[0]);
+    assert!(t.contains("referrer=[\"type-leak-format-") && t.contains("(Local)"), "{}", t);
+    assert!(!t.contains("Vec"), "{}", t);
 }
 
 mod crate_paths2 {
@@ -497,14 +496,11 @@ fn audit3_repeater_tables() {
     assert_eq!(b.1, Local(2));
     let d: audit3::dflt::Dflt = audit3::dflt::Dflt(Local(3));
     assert_eq!(d.0, Local(3));
-    // The order of interned types is unspecified; `generics` and `types` are aligned.
+    // Two contexts, each with the generics it uses: the type parameter `U` of
+    // `f` and the lifetime `'a` of `g`.
     let m = norm(audit3::mg::M[0]);
-    assert!(
-        m.contains("generics=[(U,),(&'a(),)],types=[LocalG<U>,LocalL<'a>]")
-            || m.contains("generics=[(&'a(),),(U,)],types=[LocalL<'a>,LocalG<U>]"),
-        "{}",
-        m
-    );
+    assert!(m.contains("<U>;(LocalG<U>)"), "{}", m);
+    assert!(m.contains("<'a>;(LocalL<'a>)"), "{}", m);
 }
 
 macro_rules! opts_cb {

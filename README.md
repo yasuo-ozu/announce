@@ -101,9 +101,22 @@ The item's tokens are used again in another crate, so its paths must resolve
 there. `crate::` and absolute paths (`::std::vec::Vec<u8>`) do. A relative type
 such as `Local` needs `repeater = crate::Repeater`, a trait of the defining
 crate that carries the type to the callback (`announce_helper::TypeLeak::apply`).
-Trait paths (supertraits, bounds) must be absolute (`::core::fmt::Display`). The
+Do not write that trait: `announce::define_repeater!(pub Repeater);` emits it
+(from `type_leak::repeater_definition()`; the crate that expands it needs Rust
+1.59). Const generics of every primitive type (`bool`, `char`, any integer) can
+appear in a carried type. Each carried type is written from the context where it
+occurs, so a method generic, a where clause or a bound that only one scope has
+stays in that scope. Trait paths (supertraits, bounds) must be absolute
+(`::core::fmt::Display`). The
 [`#[announce]` docs](https://docs.rs/announce/latest/announce/attr.announce.html#type-context)
 list what resolves, what a repeater is, and what is an error.
+
+```text
+announce::define_repeater!(pub Repeater);
+
+#[announce(repeater = crate::Repeater)]
+pub struct Holder<T> { pub a: Local, pub b: Wrap<T> }
+```
 
 A library with its own type handling announces a copy wrapped in a same-named
 inline `mod`, with `emit_item = false`. Only the trampoline is emitted, not the

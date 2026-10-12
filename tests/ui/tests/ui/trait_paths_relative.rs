@@ -29,9 +29,7 @@ pub trait DynRel {
 }
 
 // ... and a repeater does not help, whatever else it carries.
-pub trait Repeater<const ID: u64, const I: usize, G: ?Sized> {
-    type Type: ?Sized;
-}
+::announce::define_repeater!(pub Repeater);
 #[announce::announce(repeater = crate::Repeater)]
 pub struct WithRepeater<T: Rel>(pub T, pub Local);
 

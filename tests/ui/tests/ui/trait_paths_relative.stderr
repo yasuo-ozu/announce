@@ -23,7 +23,7 @@ error: announce: trait paths must be absolute (`::core::fmt::Display`, `crate::B
    |                                          ^^^
 
 error: announce: trait paths must be absolute (`::core::fmt::Display`, `crate::Base`, `?::core::marker::Sized`); a repeater only covers types, not traits
-  --> tests/ui/trait_paths_relative.rs:36:28
+  --> tests/ui/trait_paths_relative.rs:34:28
    |
-36 | pub struct WithRepeater<T: Rel>(pub T, pub Local);
+34 | pub struct WithRepeater<T: Rel>(pub T, pub Local);
    |                            ^^^

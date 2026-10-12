@@ -1,6 +1,4 @@
-pub trait Repeater<const ID: u64, const I: usize, G: ?Sized> {
-    type Type: ?Sized;
-}
+::announce::define_repeater!(pub Repeater);
 
 // `repeater` works on a struct, enum, union and trait only.
 #[announce::announce(repeater = crate::Repeater)]

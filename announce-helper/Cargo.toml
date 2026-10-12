@@ -8,8 +8,12 @@ license = "MIT"
 authors = ["Yasuo Ozu <yasuo@ozu.email>"]
 repository = "https://github.com/yasuo-ozu/ozu"
 
-# Feature `type-leak` (the optional dependency below) enables
-# `leak::StableReferrer`: deterministic numbering on top of type-leak.
+# Feature `type-leak` (the optional dependency below, on by default) enables
+# `TypeLeak` and `Entry::type_leak` (the `type_leak(..)` META of a `repeater = ..`
+# definition, which carries a `type_leak::Referrer`) and `leak::StableReferrer`.
+# Without it this crate parses the protocol only.
+[features]
+default = ["type-leak"]
 
 [dependencies]
 type-leak = { version = "0.8", optional = true }

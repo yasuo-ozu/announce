@@ -18,39 +18,59 @@
 //!   only carries types; the types named inside such an expression, as in
 //!   `size_of::<Local>()`, are carried like any other: type-leak reads array
 //!   lengths, const arguments, discriminants and the defaults of const
-//!   parameters, not the defaults of associated consts),
-//! - that no type to carry names a lifetime bound by a `for<..>` of the item.
+//!   parameters, not the defaults of associated consts).
 //!
 //! type-leak's own errors are re-worded by [`report`]: its help and notes talk
 //! about its API (`LeakerConfig`, `allow_self`, ..) and an example crate name.
 //!
 //! If any relative type remains, `repeater = ..` is **required** (for type
-//! aliases, which are not a type-leak target, it is an error instead). Each
-//! type `T_I` then gets an impl of the definer's repeater trait,
+//! aliases, which are not a type-leak target, it is an error instead). The
+//! repeater is the trait that `define_repeater!` (type-leak's
+//! `repeater_definition()`) defines in the definer's crate. Each required
+//! entry `I` of the `Referrer` then gets an impl of it, written by type-leak
+//! (`Referrer::repeater_impl_with`):
 //!
 //! ```text
-//! impl<P..> REPEATER<ID, I, (P..)> for () { type Type = T_I; }
+//! impl<P..> REPEATER<(ARGS..), ID, I> for () { type Type = T_I; }
 //! ```
 //!
-//! where `P..` are only the generic parameters `T_I` mentions (from any scope;
-//! see `announce_helper::scope`), with their own bounds. The payload stays the
-//! original item; the entry's META gets
-//! `type_leak(repeater = .., id = .., generics = [..], types = [..])`, and a
-//! callback rewrites `types[I]` itself (`announce_helper::TypeLeak::apply`).
-//! The repeater trait must be local and have the shape
-//! `pub trait Repeater<const ID: u64, const I: usize, G: ?Sized> { type Type: ?Sized; }`.
+//! where `P..` are the generics of the *context of that entry* (the scope
+//! where the type is written: the item, a method, a GAT) and `ARGS` encodes the
+//! ones the type uses; const generics of every primitive type go through the
+//! repeater's slots (`RepeaterSlots`). The payload stays the original item; the
+//! entry's META gets `type_leak(repeater = .., id = .., context = .., referrer =
+//! [..])`, the `Referrer` as type-leak serializes it, and a callback rewrites
+//! the payload with that `Referrer` (`announce_helper::TypeLeak::apply`), so the
+//! consumer's arguments are type-leak's too.
 
-use announce_helper::scope;
+use announce_helper::TypeLeak;
 use proc_macro2::{Ident, Span, TokenStream};
 use syn::visit::Visit;
-use syn::{GenericParam, Item, Path, Result, Type};
-use template_quote::{quote, ToTokens};
+use syn::{Item, Path, Result, Type};
+use template_quote::quote;
+use type_leak::{ContextId, ImplSelf, Referrer, RepeaterSlots};
 
 pub struct Leaked {
     /// Impls emitted at the definition site.
     pub impls: TokenStream,
-    /// `type_leak(repeater = .., id = .., generics = [..], types = [..])`.
+    /// `type_leak(repeater = .., id = .., context = .., referrer = [..])`.
     pub meta: TokenStream,
+}
+
+/// The analysis of an item: what type-leak found, and the scope of the item.
+#[derive(Debug)]
+pub struct Analysis {
+    pub referrer: Referrer,
+    /// The top-level context of the item in `referrer`.
+    pub context: ContextId,
+}
+
+impl Analysis {
+    /// The types that need a repeater impl (type-leak's required entries), with
+    /// their index. One type text can be several entries, one for each context.
+    pub fn required(&self) -> impl Iterator<Item = (usize, &Type)> {
+        self.referrer.required()
+    }
 }
 
 /// The repeater must be a local trait (`crate::..` / `$crate::..`): the table
@@ -239,57 +259,6 @@ fn check_values(item: &Item, const_params: &[String]) -> Result<()> {
     v.err.map_or(Ok(()), Err)
 }
 
-/// The first lifetime of `ty` that is neither `'static` nor `'_`, nor declared
-/// by a generic parameter of the item, nor bound inside `ty` itself: one bound
-/// by a `for<..>` of the item (`for<'b> fn(Local<'b>)`). The table could not
-/// declare it.
-fn undeclared_lifetime(ty: &Type, params: &[GenericParam]) -> Option<syn::Lifetime> {
-    struct V<'a> {
-        declared: &'a [GenericParam],
-        bound: Vec<String>,
-        found: Option<syn::Lifetime>,
-    }
-    impl V<'_> {
-        fn binder(&mut self, b: &Option<syn::BoundLifetimes>, f: impl FnOnce(&mut Self)) {
-            let depth = self.bound.len();
-            for p in b.iter().flat_map(|b| b.lifetimes.iter()) {
-                if let GenericParam::Lifetime(l) = p {
-                    self.bound.push(l.lifetime.to_string());
-                }
-            }
-            f(self);
-            self.bound.truncate(depth);
-        }
-    }
-    impl<'ast> Visit<'ast> for V<'_> {
-        fn visit_lifetime(&mut self, l: &'ast syn::Lifetime) {
-            let name = l.to_string();
-            let declared = self.bound.contains(&name)
-                || name == "'static"
-                || name == "'_"
-                || self.declared.iter().any(
-                    |p| matches!(p, GenericParam::Lifetime(d) if d.lifetime.to_string() == name),
-                );
-            if !declared && self.found.is_none() {
-                self.found = Some(l.clone());
-            }
-        }
-        fn visit_type_bare_fn(&mut self, f: &'ast syn::TypeBareFn) {
-            self.binder(&f.lifetimes, |v| syn::visit::visit_type_bare_fn(v, f));
-        }
-        fn visit_trait_bound(&mut self, b: &'ast syn::TraitBound) {
-            self.binder(&b.lifetimes, |v| syn::visit::visit_trait_bound(v, b));
-        }
-    }
-    let mut v = V {
-        declared: params,
-        bound: Vec::new(),
-        found: None,
-    };
-    v.visit_type(ty);
-    v.found
-}
-
 /// Names of type-leak's API that its messages use for the options a user of
 /// `#[announce]` does not have.
 const API_NAMES: &[&str] = &[
@@ -451,10 +420,25 @@ fn report(e: type_leak::NotInternableError, opts: &crate::options::Options) -> s
     out.expect("a NotInternableError has at least one item")
 }
 
-/// The types of `item` that would not resolve at a caller, as they appear in
-/// `item`. `None` for items that are not analysed (inline modules: the
-/// documented wrapper pattern).
-pub fn analyze(item: &Item, opts: &crate::options::Options) -> Result<Option<Vec<Type>>> {
+/// Every const generic parameter declared anywhere in `item` (item, methods,
+/// generic associated types): the names that `check_values` accepts in a value
+/// path. A name is enough there: what is carried is decided by type-leak.
+fn const_param_names(item: &Item) -> Vec<String> {
+    struct V(Vec<String>);
+    impl<'ast> Visit<'ast> for V {
+        fn visit_const_param(&mut self, c: &'ast syn::ConstParam) {
+            self.0.push(c.ident.to_string());
+            syn::visit::visit_const_param(self, c);
+        }
+    }
+    let mut v = V(Vec::new());
+    Visit::visit_item(&mut v, item);
+    v.0
+}
+
+/// Analyses `item` with type-leak. `None` for items that are not analysed
+/// (inline modules: the documented wrapper pattern).
+pub fn analyze(item: &Item, opts: &crate::options::Options) -> Result<Option<Analysis>> {
     if !matches!(
         item,
         Item::Struct(_) | Item::Enum(_) | Item::Union(_) | Item::Trait(_) | Item::Type(_)
@@ -462,19 +446,17 @@ pub fn analyze(item: &Item, opts: &crate::options::Options) -> Result<Option<Vec
         return Ok(None);
     }
     check_trait_paths(item, opts.allow_std_prelude)?;
-    let params = scope::collect_params(item);
-    let consts: Vec<String> = params
-        .iter()
-        .filter_map(|p| match p {
-            GenericParam::Const(c) => Some(c.ident.to_string()),
-            _ => None,
-        })
-        .collect();
-    check_values(item, &consts)?;
+    check_values(item, &const_param_names(item))?;
     // Primitives (optionally), `crate::` paths and (optionally) the prelude
     // are allowed.
     let mut config = type_leak::LeakerConfig::new();
     config.allow_crate();
+    // `::std` and `::alloc` are the same crate on both sides. Left optional,
+    // each `::std::vec::Vec<T>` would be an entry of the table, which travels in
+    // every META; allowed, only the relative types inside it are carried.
+    config
+        .allowed_paths
+        .extend([syn::parse_quote!(::std), syn::parse_quote!(::alloc)]);
     if opts.allow_primitive {
         config.allow_primitive();
     }
@@ -498,31 +480,28 @@ pub fn analyze(item: &Item, opts: &crate::options::Options) -> Result<Option<Vec
             .map(|(context, ())| context),
         _ => return Ok(None),
     };
-    analysed.map_err(|e| report(e, opts))?;
+    let context = analysed.map_err(|e| report(e, opts))?;
     // Only the required entries need a repeater; absolute paths of other
-    // crates (`::std::vec::Vec<u8>`) are optional entries. The order is
-    // type-leak's own, which is deterministic. The same type can be an entry
-    // in several contexts (method generics with different bounds); the table
-    // has one impl for it.
+    // crates (`::other::Wrap<u8>`) are optional entries, left as written by a
+    // consumer's Referrer. The order is type-leak's own, which is
+    // deterministic. The same type text is one entry per context (method
+    // generics with different bounds, a generic named like a type): each has
+    // its own impl and its own arguments.
     let referrer = leaker.finish();
-    let mut types: Vec<Type> = Vec::new();
-    for (_, t) in referrer.required() {
-        if let Some(lifetime) = undeclared_lifetime(t, &params) {
-            return Err(syn::Error::new_spanned(
-                t,
-                format!(
-                    "announce: this type names the lifetime `{}`, which a `for<..>` of the item \
-                     binds, and the repeater's impl cannot declare it; write the type with \
-                     absolute paths",
-                    lifetime
-                ),
-            ));
-        }
-        if !types.contains(t) {
-            types.push(t.clone());
-        }
+    Ok(Some(Analysis { referrer, context }))
+}
+
+/// An error of type-leak's encoders, in announce's words.
+fn encode_error(e: type_leak::EncodeError) -> syn::Error {
+    match &e {
+        type_leak::EncodeError::UnsupportedConstType(ty) => syn::Error::new_spanned(
+            ty,
+            "announce: a const generic that a carried (`repeater`) type uses must have a \
+             primitive type (`bool`, `char`, `u8`..`u128`, `i8`..`i128`, `usize`, `isize`); \
+             a type alias or another type cannot be encoded",
+        ),
+        _ => syn::Error::new(e.span(), format!("announce: {}", e)),
     }
-    Ok(Some(types))
 }
 
 /// Enforces `repeater` when it is needed, and builds the table.
@@ -537,8 +516,8 @@ pub fn table(item: &Item, opts: &crate::options::Options, random: u64) -> Result
                 "`repeater` is not supported on type aliases; write the right-hand side with absolute paths",
             ));
         }
-        if let Some(types) = analyze(item, opts)? {
-            if let Some(ty) = types.first() {
+        if let Some(analysis) = analyze(item, opts)? {
+            if let Some((_, ty)) = analysis.required().next() {
                 return Err(syn::Error::new_spanned(
                     ty,
                     format!(
@@ -552,7 +531,7 @@ pub fn table(item: &Item, opts: &crate::options::Options, random: u64) -> Result
         return Ok(None);
     }
     let analysis = analyze(item, opts)?;
-    let (repeater, types) = match (repeater, analysis) {
+    let (repeater, analysis) = match (repeater, analysis) {
         (Some(a), None) => {
             return Err(syn::Error::new_spanned(
                 a,
@@ -560,115 +539,85 @@ pub fn table(item: &Item, opts: &crate::options::Options, random: u64) -> Result
             ))
         }
         (None, None) => return Ok(None),
-        (None, Some(types)) => {
-            let ty = match types.first() {
+        (None, Some(analysis)) => {
+            let n = analysis.required().count();
+            let ty = match analysis.required().next() {
                 None => return Ok(None),
-                Some(t) => t,
+                Some((_, t)) => t,
             };
             return Err(syn::Error::new_spanned(
                 ty,
                 format!(
                     "announce: this type does not resolve outside the defining crate{}; \
-                     add `#[announce(repeater = crate::path::to::Repeater)]` (with \
-                     `pub trait Repeater<const ID: u64, const I: usize, G: ?Sized> {{ type Type: ?Sized; }}`), \
+                     add `#[announce(repeater = crate::path::to::Repeater)]` (define the trait \
+                     with `announce::define_repeater!(pub Repeater);`), \
                      or write it as an absolute path (`crate::..`, `::std::vec::Vec<..>`, `::other_crate::..`; \
                      std prelude names count as relative)",
-                    if types.len() > 1 { format!(" ({} such types)", types.len()) } else { String::new() }
+                    if n > 1 { format!(" ({} such types)", n) } else { String::new() }
                 ),
             ));
         }
-        (Some(a), Some(types)) => (a, types),
+        (Some(a), Some(analysis)) => (a, analysis),
     };
-    let params = scope::collect_params(item);
     let id = syn::LitInt::new(&format!("{}u64", random), Span::call_site());
+    let referrer = &analysis.referrer;
+    // One impl per required entry, written by type-leak from the context of
+    // the entry: its own generics with their bounds and where predicates, and
+    // the trait arguments that encode the ones the type uses (const generics
+    // through the slots of the repeater). The impl is for `()`: no entry names
+    // `Self` (`allow_self = false`), so any marker will do, and `()` is what a
+    // consumer's projection names.
+    let slots = RepeaterSlots::new(repeater.clone());
+    let marker: Type = syn::parse_quote!(());
     let mut impls = TokenStream::new();
-    let mut gs = Vec::new();
-    for (i, ty) in types.iter().enumerate() {
-        // Only the parameters this type mentions, with their own bounds
-        // (AUDIT 3 #1-#3): no `Self` predicates, no cycles through the
-        // item's bounds, valid for method/GAT parameters too.
-        let ps = scope::mentioned_params(ty, &params);
-        for p in &ps {
-            if let GenericParam::Const(c) = p {
-                if !matches!(&c.ty, Type::Path(t) if t.path.is_ident("usize")) {
-                    return Err(syn::Error::new_spanned(
-                        &c.ty,
-                        "`repeater`: only `usize` const generics are supported in interned types",
-                    ));
-                }
-            }
-        }
-        let decl: Vec<TokenStream> = ps
-            .iter()
-            .map(|p| {
-                let mut p = p.clone();
-                match &mut p {
-                    GenericParam::Type(t) => {
-                        t.default = None;
-                        t.eq_token = None;
-                        let names: Vec<String> = ps.iter().map(scope::param_name).collect();
-                        // Keep only bounds that mention no `Self` and no
-                        // parameter outside `ps`.
-                        let keep: syn::punctuated::Punctuated<syn::TypeParamBound, syn::Token![+]> =
-                            t.bounds
-                                .iter()
-                                .filter(|b| {
-                                    let s = b.to_token_stream().to_string();
-                                    !s.split(|c: char| !c.is_alphanumeric() && c != '_')
-                                        .any(|w| w == "Self")
-                                        && scope::collect_params(
-                                            &syn::parse_quote!(fn __x<__P: #b>() {}),
-                                        )
-                                        .iter()
-                                        .all(|q| {
-                                            names.contains(&scope::param_name(q))
-                                                || scope::param_name(q) == "__P"
-                                        })
-                                })
-                                .cloned()
-                                .collect();
-                        t.bounds = keep;
-                        if t.bounds.is_empty() {
-                            t.colon_token = None;
-                        }
-                        let ident = &t.ident;
-                        let bounds = &t.bounds;
-                        if bounds.is_empty() {
-                            quote! { #ident }
-                        } else {
-                            quote! { #ident: #bounds }
-                        }
-                    }
-                    GenericParam::Lifetime(l) => {
-                        let lt = &l.lifetime;
-                        quote! { #lt }
-                    }
-                    GenericParam::Const(c) => {
-                        let ident = &c.ident;
-                        quote! { const #ident: usize }
-                    }
-                }
+    for (ix, _) in analysis.required() {
+        let r = referrer
+            .repeater_impl_with(ix, ImplSelf::Marker(&marker), |value, param| {
+                slots.encode_const(value, &param.ty)
             })
-            .collect();
-        let g = scope::encode(&ps);
+            .map_err(encode_error)?;
+        let (impl_generics, _, where_clause) = r.generics.split_for_impl();
+        let (args, self_ty, ty) = (&r.args, &r.self_ty, &r.ty);
         impls.extend(quote! {
             #[doc(hidden)]
-            impl<#(#decl),*> #repeater<#id, #i, #g> for () {
+            impl #impl_generics #repeater<#args, #id, #ix> for #self_ty #where_clause {
                 type Type = #ty;
             }
         });
-        gs.push(g);
     }
-    let meta = quote! {
-        type_leak(repeater = #repeater, id = #id, generics = [#(#gs),*], types = [#(#types),*])
-    };
+    let table = TypeLeak::new(
+        repeater.clone(),
+        id,
+        referrer.clone(),
+        analysis.context,
+    );
+    // The consumer reads the META back and uses the same indices as the impls
+    // above, so the table must survive its own serialization unchanged.
+    let meta = table.meta();
+    check_round_trip(&meta, referrer)?;
     Ok(Some(Leaked { impls, meta }))
+}
+
+/// The `Referrer` that a consumer parses from `meta` is the one the impls were
+/// written from (same entries, same indices, same contexts).
+fn check_round_trip(meta: &TokenStream, referrer: &Referrer) -> Result<()> {
+    let element: announce_helper::Meta = syn::parse2(meta.clone())?;
+    let read = TypeLeak::from_kv(&mut element.kv()?)?;
+    if read.referrer == *referrer {
+        Ok(())
+    } else {
+        Err(syn::Error::new(
+            Span::call_site(),
+            "announce: internal error: the type-leak table does not read back as written",
+        ))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::options::Options;
+    use template_quote::ToTokens;
 
     fn item(ts: TokenStream) -> Item {
         syn::parse2(ts).unwrap()
@@ -696,8 +645,8 @@ mod tests {
         analyze(&item(it), o)
             .unwrap()
             .unwrap()
-            .iter()
-            .map(squash)
+            .required()
+            .map(|(_, t)| squash(t))
             .collect()
     }
 
@@ -856,6 +805,14 @@ mod tests {
     }
 
     #[test]
+    fn types_in_associated_const_defaults_are_not_read() {
+        // ALGORITHM_FINDINGS #14, still open: type-leak does not read the
+        // default of an associated const, so nothing is carried.
+        let it = quote! { trait Tr { const N: usize = ::core::mem::size_of::<inner::Local>(); } };
+        assert!(analysed(it, &opts()).is_empty());
+    }
+
+    #[test]
     fn trait_paths_must_be_absolute() {
         let e = analyze(&item(quote! { trait T: Base {} }), &opts())
             .err()
@@ -921,31 +878,16 @@ mod tests {
     }
 
     #[test]
-    fn higher_ranked_lifetime_in_a_leaked_type_is_an_error() {
-        let it = item(quote! { struct S { f: for<'b> fn(Local<'b>) } });
-        let e = analyze(&it, &opts()).err().unwrap().to_string();
-        assert!(e.contains("this type names the lifetime `'b`"), "{}", e);
-        assert!(e.contains("a `for<..>` of the item binds"), "{}", e);
-        assert!(!e.contains("mapped back"), "{}", e);
-    }
-
-    #[test]
-    fn undeclared_lifetime_finds_only_foreign_lifetimes() {
-        let params: Vec<GenericParam> = {
-            let g: syn::Generics = syn::parse_quote!(<'a, T>);
-            g.params.into_iter().collect()
-        };
-        let lt = |t: Type| undeclared_lifetime(&t, &params).map(|l| l.to_string());
-        assert_eq!(lt(syn::parse_quote!(Local<'a>)), None);
-        assert_eq!(lt(syn::parse_quote!(Local<'static>)), None);
-        assert_eq!(lt(syn::parse_quote!(Local<'_>)), None);
-        assert_eq!(lt(syn::parse_quote!(Local<'b>)).as_deref(), Some("'b"));
-        // Bound inside the type itself.
-        assert_eq!(lt(syn::parse_quote!(for<'b> fn(Local<'b>))), None);
-        assert_eq!(lt(syn::parse_quote!(Box<dyn for<'b> Fn(&'b u8)>)), None);
-        assert_eq!(
-            lt(syn::parse_quote!(for<'b> fn(Local<'c>))).as_deref(),
-            Some("'c")
+    fn higher_ranked_lifetime_in_a_leaked_type_is_carried() {
+        // The entry's context declares `'b`, so the impl does and the consumer's
+        // projection (inside the `for<'b>`) passes it (ALGORITHM_FINDINGS #7).
+        let impls = squash(
+            &leaked(quote! { struct S { f: for<'b> fn(Local<'b>) } }).impls,
+        );
+        assert!(
+            impls.contains("impl<'b>crate::R<(&'b(),),42u64,0usize>for(){typeType=Local<'b>;}"),
+            "{}",
+            impls
         );
     }
 
@@ -961,6 +903,7 @@ mod tests {
             e
         );
         assert!(e.contains("repeater = crate::path::to::Repeater"), "{}", e);
+        assert!(e.contains("announce::define_repeater!(pub Repeater);"), "{}", e);
         assert!(!e.contains("such types"), "{}", e);
         let e = table(
             &item(quote! { struct S { a: Local, b: Other } }),
@@ -979,19 +922,25 @@ mod tests {
         assert!(table(&it, &opts(), 1).unwrap().is_none());
     }
 
+    /// The table of `it` with the repeater `crate::R` and the id 42.
+    fn leaked(it: TokenStream) -> Leaked {
+        table(&item(it), &with_repeater(), 42).unwrap().unwrap()
+    }
+
     #[test]
     fn repeater_table_has_one_impl_per_type() {
         let it = item(quote! { struct S { a: Local, b: Other, c: Local } });
         let leaked = table(&it, &with_repeater(), 42).unwrap().unwrap();
         let impls = squash(&leaked.impls);
         assert_eq!(impls.matches("for()").count(), 2, "{}", impls);
+        // The arguments come first: `Repeater<ARGS, ID, NTH>`.
         assert!(
-            impls.contains("crate::R<42u64,0usize,()>for()"),
+            impls.contains("crate::R<(),42u64,0usize>for()"),
             "{}",
             impls
         );
         assert!(
-            impls.contains("crate::R<42u64,1usize,()>for()"),
+            impls.contains("crate::R<(),42u64,1usize>for()"),
             "{}",
             impls
         );
@@ -1002,48 +951,163 @@ mod tests {
         );
         let meta = squash(&leaked.meta);
         assert!(
-            meta.starts_with(
-                "type_leak(repeater=crate::R,id=42u64,generics=[(),()],types=[Local,Other])"
-            ),
+            meta.starts_with("type_leak(repeater=crate::R,id=42u64,context=0,referrer=[\"type-leak-format-"),
             "{}",
             meta
         );
     }
 
     #[test]
-    fn repeater_table_carries_only_mentioned_generics() {
-        let it = item(
-            quote! { struct S<'a, T: ::core::fmt::Debug, U, const N: usize> { a: Wrap<T>, b: Ref<'a>, c: Arr<N>, d: Plain } },
-        );
-        let leaked = table(&it, &with_repeater(), 7).unwrap().unwrap();
+    fn repeater_table_carries_only_the_generics_of_the_entry() {
+        let leaked = leaked(quote! {
+            struct S<'a, T: ::core::fmt::Debug, U, const N: usize> { a: Wrap<T>, b: Ref<'a>, c: Arr<N>, d: Plain }
+        });
         let impls = squash(&leaked.impls);
-        let meta = squash(&leaked.meta);
         // `T` keeps its own bound; `U` is never mentioned.
         assert!(
-            impls.contains("impl<T:::core::fmt::Debug>crate::R<7u64,"),
+            impls.contains("impl<T:::core::fmt::Debug>crate::R<(T,),42u64,"),
             "{}",
             impls
         );
         assert!(impls.contains("typeType=Wrap<T>;"), "{}", impls);
-        assert!(!impls.contains("impl<T:::core::fmt::Debug,U"), "{}", impls);
+        assert!(!impls.contains("U"), "{}", impls);
         // Lifetimes appear as `&'a ()`, consts as `[(); N]`.
-        assert!(meta.contains("&'a()"), "{}", meta);
-        assert!(meta.contains("[();N]"), "{}", meta);
-        assert!(meta.contains("(T,)"), "{}", meta);
-        assert!(impls.contains("constN:usize"), "{}", impls);
-        // The unmentioned `U` and the plain type carry nothing.
+        assert!(impls.contains("crate::R<(&'a(),),42u64,"), "{}", impls);
+        assert!(impls.contains("crate::R<([();N],),42u64,"), "{}", impls);
+        assert!(impls.contains("impl<constN:usize>"), "{}", impls);
+        assert!(impls.contains("crate::R<(),42u64,"), "{}", impls);
+    }
+
+    #[test]
+    fn repeater_table_encodes_const_generics_of_every_primitive_type() {
+        let leaked = leaked(quote! {
+            struct S<const A: u8, const B: bool, const C: char, const D: i64, const E: u64, const F: isize>(
+                inner::W<A, B, C, D, E, F>
+            );
+        });
+        let impls = squash(&leaked.impls);
         assert!(
-            meta.ends_with("types=[Wrap<T>,Ref<'a>,Arr<N>,Plain])"),
+            impls.starts_with(
+                "#[doc(hidden)]impl<constA:u8,constB:bool,constC:char,constD:i64,constE:u64,constF:isize>crate::R<("
+            ),
             "{}",
-            meta
+            impls
+        );
+        // Every parameter in its own slot of the repeater; `usize` is a length.
+        for slot in [
+            "*constdyncrate::R<(),0,0,false,'\\0',A,Type=()>",
+            "*constdyncrate::R<(),0,0,B,Type=()>",
+            "*constdyncrate::R<(),0,0,false,C,Type=()>",
+            "*constdyncrate::R<(),E,0,Type=()>",
+        ] {
+            assert!(impls.contains(slot), "{}: {}", slot, impls);
+        }
+        assert!(impls.contains("D,Type=()>"), "{}", impls);
+        assert!(impls.contains("F,Type=()>"), "{}", impls);
+    }
+
+    #[test]
+    fn repeater_table_rejects_an_alias_as_the_type_of_a_const_generic() {
+        // An absolute alias is fine for the analysis, but cannot be encoded.
+        let it = item(quote! { struct S<const N: crate::Idx> { a: Wrap<N> } });
+        let e = table(&it, &with_repeater(), 1).err().map(|e| e.to_string());
+        assert!(
+            e.map_or(false, |e| e.contains("must have a primitive type")),
+            "an error"
+        );
+        // Not used by a carried type: nothing to encode.
+        let it = item(quote! { struct S<const N: crate::Idx> { a: Local, b: [u8; 4] } });
+        assert!(table(&it, &with_repeater(), 1).is_ok());
+    }
+
+    #[test]
+    fn same_text_in_two_contexts_is_two_entries_with_their_own_generics() {
+        // ALGORITHM_FINDINGS A: the bound of `X` in `f` must not reach `g`.
+        let leaked = leaked(quote! {
+            trait T {
+                fn f<X: ::core::clone::Clone>(&self) -> inner::GC<X>;
+                fn g<X>(&self) -> inner::G<X>;
+                fn h<X>(&self) -> inner::GC<X>;
+            }
+        });
+        let impls = squash(&leaked.impls);
+        assert_eq!(impls.matches("for()").count(), 3, "{}", impls);
+        assert!(
+            impls.contains("impl<X:::core::clone::Clone>crate::R<(X,),42u64,"),
+            "{}",
+            impls
+        );
+        assert!(impls.contains("impl<X>crate::R<(X,),42u64,"), "{}", impls);
+        assert_eq!(impls.matches("typeType=inner::GC<X>;").count(), 2, "{}", impls);
+    }
+
+    #[test]
+    fn a_method_generic_named_like_a_type_does_not_make_it_a_generic() {
+        // ALGORITHM_FINDINGS A: `Local` is a generic only inside `f`.
+        let leaked = leaked(quote! {
+            trait U { fn f<Local>(&self, x: Local); fn g(&self) -> Local; }
+        });
+        let impls = squash(&leaked.impls);
+        assert!(
+            impls.contains("implcrate::R<(),42u64,0usize>for(){typeType=Local;}"),
+            "{}",
+            impls
         );
     }
 
     #[test]
-    fn repeater_table_rejects_non_usize_const_generics() {
-        let it = item(quote! { struct S<const N: u8> { a: Wrap<N> } });
-        let e = table(&it, &with_repeater(), 1).err().map(|e| e.to_string());
-        assert!(e.map_or(false, |e| e.contains("only `usize` const generics")));
+    fn bounds_naming_other_parameters_stay_in_the_context() {
+        // ALGORITHM_FINDINGS #1: `T: Into<V>` needs `V`, which comes with it.
+        let impls = squash(
+            &leaked(quote! {
+                struct BF<T: ::core::convert::Into<V>, V>(pub inner::LocalG<T>, pub V);
+            })
+            .impls,
+        );
+        assert!(
+            impls.contains("impl<T:::core::convert::Into<V>,V>crate::R<(T,V,),42u64,")
+                || impls.contains("impl<T:::core::convert::Into<V>,V>crate::R<(T,V),42u64,"),
+            "{}",
+            impls
+        );
+    }
+
+    #[test]
+    fn where_clauses_reach_the_impl() {
+        // ALGORITHM_FINDINGS #2.
+        let impls = squash(
+            &leaked(quote! {
+                struct WC<T>(pub inner::LocalC<T>) where T: ::core::clone::Clone;
+            })
+            .impls,
+        );
+        assert!(
+            impls.contains("impl<T>crate::R<(T,),42u64,0usize>for()where T:::core::clone::Clone")
+                || impls.contains("impl<T:::core::clone::Clone>crate::R<(T,),42u64,0usize>for()"),
+            "{}",
+            impls
+        );
+    }
+
+    #[test]
+    fn a_name_that_is_a_parameter_only_elsewhere_is_not_one() {
+        // ALGORITHM_FINDINGS #3 and #4.
+        let impls = squash(
+            &leaked(quote! {
+                trait MD { fn f<U>(&self, x: inner::LocalG<U>); fn g(&self) -> inner::U; }
+            })
+            .impls,
+        );
+        assert!(impls.contains("impl<U>crate::R<(U,),42u64,0usize>for()"), "{}", impls);
+        assert!(impls.contains("crate::R<(),42u64,1usize>for()"), "{}", impls);
+        let impls = squash(
+            &leaked(quote! {
+                trait K { fn f<N>(&self, x: inner::LocalG<N>); fn g<const N: usize>(&self, x: inner::Arr<N>); }
+            })
+            .impls,
+        );
+        assert!(impls.contains("impl<N>crate::R<(N,),42u64,"), "{}", impls);
+        assert!(impls.contains("impl<constN:usize>crate::R<([();N],),42u64,"), "{}", impls);
     }
 
     #[test]
@@ -1051,10 +1115,29 @@ mod tests {
         let it = item(quote! { struct S { a: u8 } });
         let leaked = table(&it, &with_repeater(), 3).unwrap().unwrap();
         assert!(leaked.impls.is_empty());
-        assert_eq!(
-            squash(&leaked.meta),
-            "type_leak(repeater=crate::R,id=3u64,generics=[],types=[])"
-        );
+        let meta = squash(&leaked.meta);
+        assert!(meta.starts_with("type_leak(repeater=crate::R,id=3u64,context=0,referrer=["), "{}", meta);
+        // The consumer reads it back, with nothing to replace.
+        let m: announce_helper::Meta = syn::parse2(leaked.meta).unwrap();
+        let read = TypeLeak::from_kv(&mut m.kv().unwrap()).unwrap();
+        assert_eq!(read.types().count(), 0);
+    }
+
+    #[test]
+    fn the_meta_reads_back_with_the_indices_of_the_impls() {
+        let leaked = leaked(quote! {
+            struct S<T> { a: Local, b: Wrap<T>, c: ::other::X<u8> }
+        });
+        let m: announce_helper::Meta = syn::parse2(leaked.meta).unwrap();
+        let read = TypeLeak::from_kv(&mut m.kv().unwrap()).unwrap();
+        let impls = squash(&leaked.impls);
+        // The impls are for the required entries; `::other::X<u8>` is optional.
+        assert_eq!(read.types().count(), 2);
+        for (ix, ty) in read.types() {
+            let nth = format!("42u64,{}usize>for()", ix);
+            assert!(impls.contains(&nth), "{}: {}", nth, impls);
+            assert!(impls.contains(&format!("typeType={};", squash(ty))), "{}", impls);
+        }
     }
 
     // --- report(): type-leak's errors in announce's words ---
@@ -1194,10 +1277,6 @@ mod tests {
                 assert!(e.starts_with("announce: "), "{}", e);
                 assert!(e.contains("\n  = help: "), "{}: {}", it, e);
             }
-        }
-        // announce's own error for a `for<..>` lifetime.
-        for e in errors_of(quote! { struct S { f: for<'b> fn(Local<'b>) } }, &opts()) {
-            assert_announce_wording(&e);
         }
     }
 

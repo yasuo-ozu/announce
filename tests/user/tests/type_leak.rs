@@ -32,7 +32,10 @@ mod empty {
 fn repeater_with_only_absolute_types_has_an_empty_table() {
     assert_eq!(
         without_id(empty::re::M[0]),
-        "type_leak(repeater=$crate::empty_table::Repeater,id=ID,generics=[],types=[])"
+        format!(
+            "type_leak(repeater=$crate::empty_table::Repeater,id=ID,context=0,referrer=[\"type-leak-format-{}\"()])",
+            announce::type_leak::Referrer::FORMAT_VERSION
+        )
     );
     // `Entry::type_leak()` is `Some`, with empty lists.
     assert_eq!(empty::ty::T, ["[]"]);
@@ -83,7 +86,7 @@ fn repeater_table_keeps_bounds() {
     assert_eq!(bounds::bounded_ty::T, ["[Local@(),Wrap<T>@(T,)]"]);
     let m = without_id(bounds::bounded::M[0]);
     assert!(
-        m.starts_with("type_leak(repeater=$crate::table_bounds::Repeater,id=ID,generics=["),
+        m.starts_with("type_leak(repeater=$crate::table_bounds::Repeater,id=ID,context=0,referrer=[\"type-leak-format-"),
         "{}",
         m
     );
@@ -212,7 +215,8 @@ fn tuple_carries_only_the_relative_member() {
     assert_eq!(t.t, (Local(1), 2));
     assert_eq!(leak08::tup_ty::T, ["[Local@()]"]);
     let m = without_id(leak08::tup::M[0]);
-    assert!(m.ends_with(",generics=[()],types=[Local])"), "{}", m);
+    assert!(m.contains(",referrer=[\"type-leak-format-"), "{}", m);
+    assert!(m.ends_with("(Local)])"), "{}", m);
 }
 
 #[test]

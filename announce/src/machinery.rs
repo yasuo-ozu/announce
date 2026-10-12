@@ -26,6 +26,13 @@
 //! }
 //! ```
 //!
+//! # The repeater trait
+//!
+//! [`define_repeater`] does what `announce::define_repeater!` does: it returns
+//! the definition of the repeater trait that `repeater = ..` needs (type-leak's
+//! `repeater_definition()`), for a library whose own macro defines it in the
+//! users' crates. It needs Rust 1.59 where it is expanded.
+//!
 //! # The path to the `announce` crate
 //!
 //! The generated code names the `announce` crate, for the hidden derive and
@@ -68,6 +75,6 @@
 //! forms return the `syn::Error`, to combine it with others or to report it
 //! with another span. The API uses the types of `proc-macro2` 1 and `syn` 2.
 pub use announce_core::{
-    announce, derive_announce, derive_announce_with, try_announce, try_derive_announce, Check,
-    Options,
+    announce, define_repeater, derive_announce, derive_announce_with, try_announce,
+    try_define_repeater, try_derive_announce, Check, Options,
 };

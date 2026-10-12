@@ -262,9 +262,7 @@ pub mod transformed {
 pub mod leaky {
     use super::announce;
 
-    pub trait Repeater<const ID: u64, const I: usize, G: ?Sized> {
-        type Type: ?Sized;
-    }
+    ::announce::define_repeater!(pub Repeater);
 
     pub mod inner {
         #[derive(Debug, PartialEq)]
@@ -376,9 +374,7 @@ pub mod trait_paths_ok {
         pub struct Local;
     }
     use inner::Local;
-    pub trait Repeater<const ID: u64, const I: usize, G: ?Sized> {
-        type Type: ?Sized;
-    }
+    ::announce::define_repeater!(pub Repeater);
 
     #[announce(repeater = crate::trait_paths_ok::Repeater)]
     pub struct ArrLocal<const N: usize>(pub [Local; N]);
@@ -388,9 +384,7 @@ pub mod trait_paths_ok {
 pub mod audit3 {
     use super::announce;
 
-    pub trait Repeater<const ID: u64, const I: usize, G: ?Sized> {
-        type Type: ?Sized;
-    }
+    ::announce::define_repeater!(pub Repeater);
     pub trait Base {}
     pub mod inner {
         pub struct LocalG<U>(pub U);
@@ -493,9 +487,7 @@ pub mod crate_opt {
 pub mod empty_table {
     use super::announce;
 
-    pub trait Repeater<const ID: u64, const I: usize, G: ?Sized> {
-        type Type: ?Sized;
-    }
+    ::announce::define_repeater!(pub Repeater);
 
     #[announce(repeater = crate::empty_table::Repeater)]
     pub struct NoLeaks {
@@ -510,9 +502,7 @@ pub mod empty_table {
 pub mod table_bounds {
     use super::announce;
 
-    pub trait Repeater<const ID: u64, const I: usize, G: ?Sized> {
-        type Type: ?Sized;
-    }
+    ::announce::define_repeater!(pub Repeater);
 
     pub mod inner {
         #[derive(Debug, PartialEq, Clone)]
@@ -549,9 +539,7 @@ pub mod table_bounds {
 pub mod prelude_leak {
     use super::announce;
 
-    pub trait Repeater<const ID: u64, const I: usize, G: ?Sized> {
-        type Type: ?Sized;
-    }
+    ::announce::define_repeater!(pub Repeater);
     pub mod inner {
         #[derive(Debug, PartialEq, Clone)]
         pub struct Local(pub u8);
@@ -665,9 +653,7 @@ pub mod gone {
 pub mod leak08 {
     use super::announce;
 
-    pub trait Repeater<const ID: u64, const I: usize, G: ?Sized> {
-        type Type: ?Sized;
-    }
+    ::announce::define_repeater!(pub Repeater);
     pub mod inner {
         #[derive(Debug, PartialEq, Clone, Copy)]
         pub struct Local(pub u8);
@@ -705,5 +691,109 @@ pub mod leak08 {
     pub trait Constrained {
         fn by_self<'a>(&'a self, a: Wrap<'a>) -> &'a u8;
         fn by_arg<'a>(&self, a: Wrap<'a>, b: &'a u8) -> &'a u8;
+    }
+}
+
+/// The repeater of type-leak 0.8: every entry is written from the context of
+/// the scope where its type occurs (ALGORITHM_FINDINGS A and #1-#4), and const
+/// generics of every primitive type are carried.
+pub mod contexts {
+    use super::announce;
+
+    ::announce::define_repeater!(pub Repeater);
+
+    pub mod inner {
+        #[derive(Debug, PartialEq, Clone, Default)]
+        pub struct Local(pub u8);
+        /// Any `X`.
+        #[derive(Debug, PartialEq, Default)]
+        pub struct G<X>(pub X);
+        /// Well-formed only for `X: Clone`.
+        #[derive(Debug, PartialEq, Default)]
+        pub struct GC<X: ::core::clone::Clone>(pub X);
+        #[derive(Debug, PartialEq, Default)]
+        pub struct LocalG<U>(pub U);
+        #[derive(Debug, PartialEq, Default)]
+        pub struct LocalC<T: ::core::clone::Clone>(pub T);
+        /// A type named like a generic of the items below.
+        #[derive(Debug, PartialEq, Default)]
+        pub struct U;
+        #[derive(Debug, PartialEq)]
+        pub struct Arr<const N: usize>(pub [u8; N]);
+        #[derive(Debug, PartialEq, Default)]
+        pub struct W<const A: u8, const B: bool, const C: char, const D: i64>;
+        #[derive(Debug, PartialEq, Default)]
+        pub struct Flag<const B: bool>;
+        #[derive(Debug, PartialEq)]
+        pub struct Wrap<'a>(pub &'a u8);
+    }
+    use inner::{Arr, Flag, Local, LocalC, LocalG, Wrap, G, GC, W};
+
+    /// A: the bound `X: Clone` of `f` must not reach the impl of `G<X>`.
+    #[announce(repeater = crate::contexts::Repeater)]
+    pub trait SameTextTwice {
+        fn f<X: ::core::clone::Clone>(&self, x: X) -> GC<X>;
+        fn g<X>(&self, x: X) -> G<X>;
+    }
+
+    /// A: `Local` is a generic only inside `f`.
+    #[announce(repeater = crate::contexts::Repeater)]
+    pub trait GenericNamedLikeAType {
+        fn f<Local>(&self, x: Local) -> Local;
+        fn g(&self) -> Local;
+    }
+
+    /// #1: `T: Into<V>` needs `V` in the impl of `LocalG<T>`.
+    #[announce(repeater = crate::contexts::Repeater)]
+    pub struct BoundNamesOther<T: ::core::convert::Into<V>, V>(pub LocalG<T>, pub V);
+
+    /// #1: a method bound that names a parameter of the trait.
+    #[announce(repeater = crate::contexts::Repeater)]
+    pub trait MethodBoundNamesTrait<T> {
+        fn f<U: ::core::convert::Into<T>>(&self, x: LocalG<U>) -> T;
+    }
+
+    /// #1: a lifetime bound `T: 'a`.
+    #[announce(repeater = crate::contexts::Repeater)]
+    pub struct OutlivesBound<'a, T: 'a>(pub &'a LocalG<T>);
+
+    /// #2: a where-clause on the carried type's generics.
+    #[announce(repeater = crate::contexts::Repeater)]
+    pub struct WhereClause<T>(pub LocalC<T>)
+    where
+        T: ::core::clone::Clone;
+
+    /// #3: `U` is a generic in `f` and a type in `g`.
+    #[announce(repeater = crate::contexts::Repeater)]
+    pub trait NameOnlyElsewhere {
+        fn f<U>(&self, x: LocalG<U>) -> U;
+        fn g(&self) -> inner::U;
+    }
+
+    /// #4: `N` is a type generic in `f` and a const generic in `g`.
+    #[announce(repeater = crate::contexts::Repeater)]
+    pub trait KindClash {
+        fn f<N>(&self, x: LocalG<N>) -> N;
+        fn g<const N: usize>(&self, x: Arr<N>) -> usize;
+    }
+
+    /// Const generics of primitive types other than `usize` in a carried type.
+    #[announce(repeater = crate::contexts::Repeater)]
+    pub struct ConstParams<const A: u8, const B: bool, const C: char, const D: i64> {
+        pub w: W<A, B, C, D>,
+        pub local: Local,
+    }
+
+    /// A trait with a `bool` const generic and a method with a `char` one.
+    #[announce(repeater = crate::contexts::Repeater)]
+    pub trait ConstTrait<const B: bool> {
+        fn flag(&self) -> Flag<B>;
+        fn pick<const C: char>(&self) -> W<0, B, C, 1>;
+    }
+
+    /// A relative type with a lifetime that a `for<..>` of the item binds.
+    #[announce(repeater = crate::contexts::Repeater)]
+    pub struct HigherRanked {
+        pub f: for<'b> fn(Wrap<'b>) -> u8,
     }
 }

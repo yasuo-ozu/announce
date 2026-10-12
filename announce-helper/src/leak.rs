@@ -1,4 +1,4 @@
-//! Numbering by token text for [`type_leak`] (feature `type-leak`).
+//! Numbering by token text for [`type_leak`].
 //!
 //! `type_leak::Referrer` numbers its entries by context (in order of first
 //! appearance) and then by token text. [`StableReferrer`] numbers the required
@@ -10,7 +10,8 @@
 //! entry payload, and call [`normalize_crate`] on it first.
 //!
 //! With `#[announce(repeater = ..)]` none of this is needed: the definer builds
-//! the table and the callback applies it with `TypeLeak::apply`.
+//! the table, the `type_leak(..)` META carries its `Referrer` with the definer's
+//! indices, and the callback applies it with `TypeLeak::apply`.
 
 use proc_macro2::TokenStream;
 use syn::Type;

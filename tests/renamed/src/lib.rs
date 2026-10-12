@@ -15,9 +15,7 @@ pub trait Marked {
     fn f(&self) -> u8;
 }
 
-pub trait Repeater<const ID: u64, const I: usize, G: ?Sized> {
-    type Type: ?Sized;
-}
+ann::define_repeater!(pub Repeater);
 use inner::Local;
 
 #[ann::announce(repeater = crate::Repeater, meta = info(1))]

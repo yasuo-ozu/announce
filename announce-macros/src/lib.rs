@@ -106,57 +106,74 @@ use proc_macro::TokenStream;
 ///
 /// A relative type is an error ("this type does not resolve outside the defining
 /// crate"), unless the definer gives a `repeater`. The repeater is a trait of the
-/// defining crate that carries the types to the callback. It must have exactly
-/// this shape:
-///
-/// ```text
-/// pub trait Repeater<const ID: u64, const I: usize, G: ?Sized> { type Type: ?Sized; }
-/// ```
-///
-/// (This shape needs rustc 1.59: a type parameter after const parameters is an
-/// error before.) Write it as `crate::path::to::Repeater` in the option, and make
-/// it `pub` so callers can reach it as `$crate::path::to::Repeater`. It has to be a trait of
-/// the defining crate: announce implements it for `()`, and the orphan rule allows
-/// that only for a local trait. A `repeater` works on a struct, enum, union and
-/// trait.
+/// defining crate that carries the types to the callback. Do not write it:
+/// [`define_repeater!`] emits it, once per crate, from `type-leak`'s
+/// `repeater_definition()`.
 ///
 /// ```ignore
 /// mod inner { pub struct Local(pub u8); }
 /// use inner::Local;
 ///
-/// pub trait Repeater<const ID: u64, const I: usize, G: ?Sized> { type Type: ?Sized; }
+/// announce::define_repeater!(pub Repeater);
 ///
 /// // `Local` and `Vec<T>` are relative here.
 /// #[announce(repeater = crate::Repeater)]
 /// pub struct Holder<T> { pub a: Local, pub b: Vec<T>, pub c: u8 }
 /// ```
 ///
-/// The item is announced as written. For each relative type, announce emits an
-/// impl of the repeater for `()` next to the item. The impl has only the generic
-/// parameters that the type mentions, with their own bounds:
+/// Name it as `crate::path::to::Repeater` in the option, and make it `pub` and
+/// reachable from the crate root, so callers can reach it as
+/// `$crate::path::to::Repeater`. It has to be a trait of the defining crate:
+/// announce implements it for `()`, and the orphan rule allows that only for a
+/// local trait. A `repeater` works on a struct, enum, union and trait.
+///
+/// The trait has a type parameter for the generics an entry uses, the id of the
+/// item and the number of the entry, then one defaulted const parameter for each
+/// primitive type, and the associated type `Type`. The crate that expands
+/// `define_repeater!` needs Rust 1.59 (const parameters with defaults) and the
+/// 2018 edition or later; `announce` itself needs 1.57, and so does a crate that
+/// only uses a repeater of another crate.
+///
+/// The item is announced as written. type-leak analyses it and numbers the
+/// relative types it finds, the *entries* `0, 1, ..`. Each entry is a type in
+/// the *context* where it is written (the item, a method, a generic associated
+/// type), with that context's generics: the same text in two methods with
+/// different generics is two entries, and a lifetime that a `for<'b>` of the item
+/// binds (`Local<'b>` in `for<'b> fn(Local<'b>)`) belongs to the context of its
+/// type. For each entry announce emits an impl of the repeater for `()` next to
+/// the item, with the generics of that context, their bounds and where clauses,
+/// and the generics the type uses encoded in the first argument:
 ///
 /// ```text
-/// impl crate::Repeater<ID, 0, ()> for () { type Type = Local; }
-/// impl<T> crate::Repeater<ID, 1, (T,)> for () { type Type = Vec<T>; }
+/// impl crate::Repeater<(), ID, 0> for () { type Type = Local; }
+/// impl<T> crate::Repeater<(T,), ID, 1> for () { type Type = Vec<T>; }
 /// ```
 ///
-/// `ID` is a number chosen for the item. `META` gets one more element:
+/// `ID` is a number chosen for the item. A type parameter is encoded as itself,
+/// a lifetime as `&'a ()`, a `usize` const as `[(); N]`, and a const of any other
+/// primitive type (`bool`, `char`, `u8` .. `u128`, `i8` .. `i128`, `isize`) through
+/// the const parameter that the repeater has for that type. A lifetime bound
+/// (`T: 'a`) is encoded too (`&'a T`), and the impl does not declare it.
+/// `META` gets one more element:
 ///
 /// ```text
-/// type_leak(repeater = $crate::Repeater, id = ID, generics = [(), (T,)], types = [Local, Vec<T>])
+/// type_leak(repeater = $crate::Repeater, id = ID, context = 1, referrer = [ .. ])
 /// ```
 ///
-/// `types` lists the relative types (`&Local`, also with an elided lifetime, lists
-/// `Local`). `generics[i]` is the tuple of the generic
-/// parameters that `types[i]` mentions, in order of first use: a type parameter
-/// as itself (`T`), a lifetime as `&'a ()`, a const as `[(); N]`, and `()` if
-/// there are none. Pair `generics[i]` with `types[i]`, and do not rely on the order
-/// of the list. With a `repeater`, `META` always has `type_leak(..)`, with empty
-/// lists when no type needed it.
+/// `referrer` is the `type_leak::Referrer` of the item, in type-leak's own token
+/// format (do not parse it yourself; its first token is a format tag, and a
+/// version of type-leak that does not match is an error). It holds the entries
+/// (`&Local`, also with an elided lifetime, is the entry `Local`) and the context
+/// of each, and `context` is the context of the item itself, where a callback
+/// rewrites it. The entry numbers are the `I` of the impls. With a `repeater`,
+/// `META` always has `type_leak(..)`, with no entries when no type needed it.
+/// Readers ignore keys they do not know.
 ///
 /// A callback resolves the types with `announce_helper`. `Entry::type_leak()`
-/// reads the `META` element, and `TypeLeak::apply` rewrites every listed type in
-/// an item to `<() as $crate::Repeater<ID, I, G>>::Type`:
+/// reads the `META` element, and `TypeLeak::apply` rewrites every entry in an
+/// item to `<() as $crate::Repeater<ARGS, ID, I>>::Type`, with the `ARGS` that
+/// `type_leak::Referrer::entry_args_with` gives for the item's own scope (every
+/// generic by its own name), the encoding of the impl:
 ///
 /// ```ignore
 /// for entry in input.entries_in_order() {
@@ -172,15 +189,18 @@ use proc_macro::TokenStream;
 ///
 /// ```text
 /// pub struct Holder<T> {
-///     pub a: <() as $crate::Repeater<ID, 0, ()>>::Type,
-///     pub b: <() as $crate::Repeater<ID, 1, (T,)>>::Type,
+///     pub a: <() as $crate::Repeater<(), ID, 0>>::Type,
+///     pub b: <() as $crate::Repeater<(T,), ID, 1>>::Type,
 ///     pub c: u8,
 /// }
 /// ```
 ///
-/// That resolves in any crate, because `$crate` is the defining crate. `TypeLeak`
-/// also has `lookup` (the index of a type) and `projection` (the tokens for an
-/// index) for a callback that rewrites in its own way.
+/// That resolves in any crate, because `$crate` is the defining crate. A
+/// callback that writes the item at another place, such as the `impl Tr<u8> for
+/// X` of a trait, uses `TypeLeak::try_apply_at` with a `UseSite`, which gives
+/// the arguments type-leak would write there (`TypeLeak::entry_args`), and
+/// `TypeLeak::lookup` and `projection` are available for a callback that
+/// rewrites in its own way.
 ///
 /// ## Errors a repeater does not fix
 ///
@@ -199,10 +219,9 @@ use proc_macro::TokenStream;
 /// - **Type aliases** must use absolute paths on the right-hand side, and take no
 ///   `repeater`. `type A = Option<Local>` is an error; write
 ///   `::core::option::Option<crate::Local>`.
-/// - A relative type that names a higher-ranked lifetime (`Local<'b>` in
-///   `for<'b> fn(Local<'b>)`) cannot be carried either; write it with absolute
-///   paths. Higher-ranked bounds in code that is already absolute are fine.
-/// - A relative type may mention a const parameter only if it is a `usize`.
+/// - A relative type may mention a const parameter only if its type is a
+///   primitive one (`bool`, `char`, any integer): a const parameter of a type
+///   alias (`const N: Idx`, even an absolute alias) cannot be encoded.
 ///
 /// The type analysis rejects more, and says so at the offending type
 /// ("use absolute path: ..."), whatever the `repeater`. In each case, writing
@@ -226,8 +245,8 @@ use proc_macro::TokenStream;
 /// - **A macro call in an array length**, unless it is absolute:
 ///   `[u8; two!()]` is an error, `[u8; crate::two!()]` is fine.
 /// - **The type of a const parameter**, if it is relative: `const N: Idx` with
-///   `type Idx = usize` is an error; write `usize`, `bool`, `char` or an
-///   absolute path.
+///   `type Idx = usize` is an error; write the primitive type (`usize`, `bool`,
+///   `char`, ..).
 /// - **A method lifetime that only a relative type keeps** (E0195). In a trait,
 ///   `fn f<'a>(&self, a: Local<'a>) -> &'a u8` is an error, because the copy
 ///   would have `'a` only inside a projection. Keep `'a` in another argument
@@ -266,6 +285,33 @@ use proc_macro::TokenStream;
 #[proc_macro_attribute]
 pub fn announce(attr: TokenStream, item: TokenStream) -> TokenStream {
     announce_core::announce(attr.into(), item.into()).into()
+}
+
+/// Defines the repeater trait that `#[announce(repeater = ..)]` needs.
+///
+/// ```ignore
+/// // In the defining crate, at a path that callers can reach (here the crate root).
+/// announce::define_repeater!(pub Repeater);
+///
+/// #[announce::announce(repeater = crate::Repeater)]
+/// pub struct Holder { pub a: Local }
+/// ```
+///
+/// The input is a visibility and a name (`pub Repeater`, `pub(crate) Rep`, `Rep`).
+/// The output is the trait that `type_leak::repeater_definition()` returns: a
+/// trait with the type, the item's id, the entry's number and defaulted const
+/// parameters for the const generics of every primitive type. Do not write that
+/// trait yourself, and do not implement it: `#[announce]` writes the impls and
+/// the callbacks of other crates write the paths through it.
+///
+/// The trait needs Rust 1.59 (const parameters with defaults) and the 2018
+/// edition or later in the crate that expands this macro; `announce` itself
+/// needs only 1.57. It must be `pub` and reachable from the crate root, so
+/// that callers name it as `$crate::path::to::Repeater`, and a trait of the
+/// defining crate, because announce implements it for `()`.
+#[proc_macro]
+pub fn define_repeater(input: TokenStream) -> TokenStream {
+    announce_core::define_repeater(input.into()).into()
 }
 
 /// Announces a struct, enum or union as written, and implements `Announce` for it.

@@ -72,6 +72,49 @@ pub fn try_announce(attr: TokenStream, item: TokenStream) -> syn::Result<TokenSt
     })
 }
 
+/// Does what `define_repeater!($vis $ident)` does: the definition of the
+/// repeater trait, as type-leak writes it (`type_leak::repeater_definition`).
+///
+/// ```
+/// let out = announce_core::define_repeater("pub Repeater".parse().unwrap());
+/// let out = out.to_string();
+/// assert!(out.contains("pub trait Repeater"), "{}", out);
+/// ```
+///
+/// `$vis` may be empty (a private trait), `pub`, `pub(crate)`, .. The output
+/// is the trait, whose const parameters with defaults need Rust 1.59 in the
+/// crate that expands it. An error comes back as a `compile_error!`
+/// invocation; see [`try_define_repeater`] for a [`syn::Error`].
+pub fn define_repeater(input: TokenStream) -> TokenStream {
+    try_define_repeater(input).unwrap_or_else(|e| e.to_compile_error())
+}
+
+/// [`define_repeater()`] with the error returned as a [`syn::Error`].
+pub fn try_define_repeater(input: TokenStream) -> syn::Result<TokenStream> {
+    use syn::parse::Parser;
+    const USAGE: &str = "announce: expected `define_repeater!(<visibility> <Name>)`, \
+                         e.g. `define_repeater!(pub Repeater)`";
+    let (vis, ident) = (|input: syn::parse::ParseStream| {
+        let vis: syn::Visibility = input.parse()?;
+        let ident: Ident = input
+            .parse()
+            .map_err(|e: syn::Error| syn::Error::new(e.span(), USAGE))?;
+        if !input.is_empty() {
+            return Err(input.error(USAGE));
+        }
+        Ok((vis, ident))
+    })
+    .parse2(input)?;
+    let mut definition = type_leak::repeater_definition(&vis, &ident);
+    definition.attrs.push(syn::parse_quote! {
+        #[doc = "The repeater of `#[announce(repeater = ..)]`: it carries the types of \
+                 announced items, which do not resolve in other crates, to the macros \
+                 that copy them. Defined by `announce::define_repeater!`; do not \
+                 implement it or write its paths yourself."]
+    });
+    Ok(quote! { #definition })
+}
+
 /// Does what `#[derive(Announce)]` does to its input.
 ///
 /// `input` is the struct, enum or union, including its attributes. Options come
@@ -235,6 +278,40 @@ mod tests {
             "crate=::l::announce,macro_name=N,mock=a::B,repeater=crate::R,\
              allow_primitive=false,allow_std_prelude=true,emit_item=false,\
              meta=m::info(1,2),meta=m::bare,c::check(x),c::bare"
+        );
+    }
+
+    #[test]
+    fn define_repeater_is_type_leaks_definition() {
+        // The tokens are `type_leak::repeater_definition()`'s, with the docs on top.
+        for (input, vis) in [
+            ("pub Repeater", "pub"),
+            ("pub(crate) Repeater", "pub(crate)"),
+            ("Repeater", ""),
+        ] {
+            let out = try_define_repeater(ts(input)).unwrap();
+            let def = type_leak::repeater_definition(
+                &syn::parse_str::<syn::Visibility>(vis).unwrap(),
+                &Ident::new("Repeater", Span::call_site()),
+            );
+            let expected = norm(&def.to_token_stream());
+            let got = norm(&out);
+            assert!(got.ends_with(&expected), "{}\n{}", got, expected);
+            assert!(got.starts_with("#[doc="), "{}", got);
+        }
+    }
+
+    #[test]
+    fn define_repeater_reports_a_bad_input() {
+        for bad in ["", "pub", "pub Repeater extra", "pub 1", "Rep, pub"] {
+            let e = try_define_repeater(ts(bad)).err();
+            assert!(e.is_some(), "{:?} was accepted", bad);
+        }
+        let out = norm(&define_repeater(ts("pub")));
+        assert!(
+            out.starts_with("::core::compile_error!") && out.contains("expected`define_repeater!(<visibility><Name>)`"),
+            "{}",
+            out
         );
     }
 

@@ -211,9 +211,10 @@ announce_helper::callback! {
 announce_helper::callback! {
     /// Reads the `type_leak(..)` META through `Entry::type_leak` and records,
     /// for every entry in visiting order, `pub const <REST>: &[&str]` with
-    /// `"-"` when the entry has no table, else `"[Type@Generics,..]"` (types
-    /// and generics without spaces, sorted by text, so the unspecified order
-    /// of `types` does not matter).
+    /// `"-"` when the entry has no table, else `"[Type@Args,..]"`: each
+    /// replaced type (type-leak's required entries) and the first argument of
+    /// its repeater at the scope of the item (types and arguments without
+    /// spaces, sorted by text, so the order of the table does not matter).
     pub fn leak_types(input) {
         let name: syn::Ident = input.rest_as()?;
         let squash = |t: &dyn template_quote::ToTokens| {
@@ -224,18 +225,11 @@ announce_helper::callback! {
             rows.push(match e.type_leak()? {
                 None => "-".to_string(),
                 Some(tl) => {
-                    if tl.generics.len() != tl.types.len() {
-                        return Err(syn::Error::new(
-                            proc_macro2::Span::call_site(),
-                            "generics and types are not aligned",
-                        ));
+                    let mut pairs = Vec::new();
+                    for (ix, ty) in tl.types() {
+                        let args = tl.entry_args(ix, &announce_helper::type_leak::UseSite::identity())?;
+                        pairs.push(format!("{}@{}", squash(ty), squash(&args)));
                     }
-                    let mut pairs: Vec<String> = tl
-                        .types
-                        .iter()
-                        .zip(&tl.generics)
-                        .map(|(t, g)| format!("{}@{}", squash(t), squash(g)))
-                        .collect();
                     pairs.sort();
                     format!("[{}]", pairs.join(","))
                 }

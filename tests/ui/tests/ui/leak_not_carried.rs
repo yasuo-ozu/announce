@@ -1,9 +1,7 @@
 // Types that a repeater cannot carry. The errors are type-leak's, re-worded by
 // announce: no mention of its API, `crate::..` for a path of this crate, types
 // printed as written, one error for every offending type.
-pub trait Repeater<const ID: u64, const I: usize, G: ?Sized> {
-    type Type: ?Sized;
-}
+::announce::define_repeater!(pub Repeater);
 pub mod inner {
     pub struct G<T>(pub T);
     pub struct Wrap<'a>(pub &'a u8);
