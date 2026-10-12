@@ -213,9 +213,9 @@ fn random_u64() -> u64 {
 /// - **A reference with an elided lifetime to a relative type**, such as `&Local`,
 ///   cannot be carried. Name the lifetime (`&'a Local`, with a `repeater`) or write
 ///   `&crate::Local`.
-/// - A relative type that mentions a higher-ranked lifetime (`for<'b> Fn(&'b
-///   Local)`) cannot be carried either; write it with absolute paths. Higher-ranked
-///   bounds in code that is already absolute are fine.
+/// - A relative type that names a higher-ranked lifetime (`Local<'b>` in
+///   `for<'b> fn(Local<'b>)`) cannot be carried either; write it with absolute
+///   paths. Higher-ranked bounds in code that is already absolute are fine.
 /// - A relative type may mention a const parameter only if it is a `usize`.
 ///
 /// ## What is not checked

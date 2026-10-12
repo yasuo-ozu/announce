@@ -13,7 +13,7 @@ repository.workspace = true
 type-leak = ["dep:type-leak"]
 
 [dependencies]
-type-leak = { version = "0.7", optional = true }
+type-leak = { version = "0.8", optional = true }
 syn = { workspace = true, features = ["visit", "visit-mut"] }
 proc-macro2.workspace = true
 template-quote.workspace = true

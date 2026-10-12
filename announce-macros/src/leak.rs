@@ -3,18 +3,20 @@
 //!
 //! On the cfg-evaluated item, type-leak finds the types that would not
 //! resolve at a caller: relative paths such as `Local` or `super::X`.
-//! The decision is type-leak's own: `Referrer::is_empty()` after
-//! `reduce_roots()`, with primitives and `crate::` paths allowed. Std items
+//! The decision is type-leak's own: `Referrer::required()` after
+//! `Leaker::finish()`, with primitives and `crate::` paths allowed. Std items
 //! must be written absolutely (`::std::vec::Vec<u8>`); prelude names such as
-//! `Vec` or `Option` count as relative unless `allow_std_prelude = true`.
+//! `Vec` or `Option` count as relative unless `allow_std_prelude = true`
+//! (type-leak's `allowed_paths`, with the names in [`PRELUDE`]).
 //!
-//! type-leak runs on an *analysis copy* of the item, in which
-//! - higher-ranked lifetimes (`for<'b>`) are replaced by `'static`,
-//! - array lengths, enum discriminants, const generic arguments and const
-//!   defaults are erased (after checking that the value paths in them are
-//!   absolute: a repeater only carries types),
-//! - with `allow_std_prelude = true`, bare prelude names are temporarily made
-//!   absolute (and restored in the result).
+//! type-leak sees the item as written. `Self` is not internable
+//! (`allow_self = false`): it has no meaning in an `impl .. for ()`, and it
+//! resolves everywhere. On top of type-leak, announce checks
+//! - trait paths (supertraits, bounds, `impl`/`dyn` bounds): absolute only,
+//! - value paths in array lengths, enum discriminants, const generic arguments
+//!   and const defaults: absolute, `Self::..` or a const parameter (type-leak
+//!   does not read const defaults, and a repeater only carries types),
+//! - that no type to carry names a lifetime bound by a `for<..>` of the item.
 //!
 //! If any relative type remains, `repeater = ..` is **required** (for type
 //! aliases, which are not a type-leak target, it is an error instead). Each
@@ -34,7 +36,7 @@
 
 use announce_helper::scope;
 use proc_macro2::{Ident, Span, TokenStream};
-use syn::visit_mut::VisitMut;
+use syn::visit::Visit;
 use syn::{GenericParam, Item, Path, Result, Type};
 use template_quote::{quote, ToTokens};
 
@@ -70,9 +72,6 @@ const PRELUDE: &[&str] = &[
     "AsMut", "Into", "From", "Default", "Iterator", "Extend", "IntoIterator", "DoubleEndedIterator",
     "ExactSizeIterator", "TryFrom", "TryInto", "FromIterator",
 ];
-
-/// Marker root for the reversible prelude rewrite.
-const PRELUDE_ROOT: &str = "__announce_prelude";
 
 fn is_absolute(p: &Path) -> bool {
     let first = p.segments.first().map(|s| s.ident.to_string()).unwrap_or_default();
@@ -112,26 +111,17 @@ fn check_trait_paths(item: &Item, allow_prelude: bool) -> Result<()> {
 /// discriminants, const generic arguments, const defaults) are copied to
 /// callers like the types around them, but a repeater cannot carry values:
 /// every path in them must be absolute, `Self::..`, or a const parameter
-/// (AUDIT 3 #5). Then they are erased in the analysis copy.
-fn check_and_erase_values(item: &mut Item, const_params: &[String]) -> Result<Vec<syn::Expr>> {
+/// (AUDIT 3 #5). type-leak reads the values in types, but not const defaults,
+/// and a relative array length would make it carry the whole array type.
+fn check_values(item: &Item, const_params: &[String]) -> Result<()> {
     struct V<'a> {
         consts: &'a [String],
         err: Option<syn::Error>,
-        /// Original expressions of the array lengths / const arguments that
-        /// were replaced by `::__announce_len::L{k}` (restored afterwards).
-        saved: Vec<syn::Expr>,
-    }
-    impl V<'_> {
-        fn marker(&mut self, e: &syn::Expr) -> syn::Expr {
-            let k = Ident::new(&format!("L{}", self.saved.len()), Span::call_site());
-            self.saved.push(e.clone());
-            syn::parse_quote!(::__announce_len::#k)
-        }
     }
     impl V<'_> {
         fn check(&mut self, e: &syn::Expr) {
             struct P<'b, 'a>(&'b mut V<'a>);
-            impl<'ast> syn::visit::Visit<'ast> for P<'_, '_> {
+            impl<'ast> Visit<'ast> for P<'_, '_> {
                 fn visit_expr_path(&mut self, p: &'ast syn::ExprPath) {
                     let path = &p.path;
                     let first = path.segments.first().map(|s| s.ident.to_string()).unwrap_or_default();
@@ -150,225 +140,126 @@ fn check_and_erase_values(item: &mut Item, const_params: &[String]) -> Result<Ve
                     syn::visit::visit_expr_path(self, p);
                 }
             }
-            syn::visit::Visit::visit_expr(&mut P(self), e);
+            Visit::visit_expr(&mut P(self), e);
         }
     }
-    impl VisitMut for V<'_> {
-        fn visit_type_array_mut(&mut self, a: &mut syn::TypeArray) {
+    impl<'ast> Visit<'ast> for V<'_> {
+        fn visit_type_array(&mut self, a: &'ast syn::TypeArray) {
             self.check(&a.len);
-            let len = a.len.clone();
-            a.len = self.marker(&len);
-            syn::visit_mut::visit_type_array_mut(self, a);
+            syn::visit::visit_type_array(self, a);
         }
-        fn visit_variant_mut(&mut self, v: &mut syn::Variant) {
+        fn visit_variant(&mut self, v: &'ast syn::Variant) {
             if let Some((_, e)) = &v.discriminant {
                 self.check(e);
             }
-            v.discriminant = None;
-            syn::visit_mut::visit_variant_mut(self, v);
+            syn::visit::visit_variant(self, v);
         }
-        fn visit_trait_item_const_mut(&mut self, c: &mut syn::TraitItemConst) {
+        fn visit_trait_item_const(&mut self, c: &'ast syn::TraitItemConst) {
             if let Some((_, e)) = &c.default {
                 self.check(e);
             }
-            c.default = None;
-            syn::visit_mut::visit_trait_item_const_mut(self, c);
+            syn::visit::visit_trait_item_const(self, c);
         }
-        fn visit_const_param_mut(&mut self, c: &mut syn::ConstParam) {
+        fn visit_const_param(&mut self, c: &'ast syn::ConstParam) {
             if let Some(e) = &c.default {
                 self.check(e);
             }
-            c.default = None;
-            c.eq_token = None;
-            syn::visit_mut::visit_const_param_mut(self, c);
+            syn::visit::visit_const_param(self, c);
         }
-        fn visit_generic_argument_mut(&mut self, a: &mut syn::GenericArgument) {
+        fn visit_generic_argument(&mut self, a: &'ast syn::GenericArgument) {
             if let syn::GenericArgument::Const(e) = a {
                 self.check(e);
-                let e = e.clone();
-                let m = self.marker(&e);
-                *a = syn::GenericArgument::Const(syn::parse_quote!({ #m }));
-                return;
             }
-            syn::visit_mut::visit_generic_argument_mut(self, a);
+            syn::visit::visit_generic_argument(self, a);
         }
         // Provided-method bodies are not analysed (documented gap).
-        fn visit_block_mut(&mut self, _: &mut syn::Block) {}
+        fn visit_block(&mut self, _: &'ast syn::Block) {}
     }
-    let mut v = V { consts: const_params, err: None, saved: Vec::new() };
-    v.visit_item_mut(item);
-    match v.err {
-        Some(e) => Err(e),
-        None => Ok(v.saved),
-    }
+    let mut v = V { consts: const_params, err: None };
+    Visit::visit_item(&mut v, item);
+    v.err.map_or(Ok(()), Err)
 }
 
-/// Puts the original array lengths / const arguments back into an interned
-/// type (inverse of the markers of `check_and_erase_values`).
-fn restore_values(ty: &mut Type, saved: &[syn::Expr]) {
-    struct V<'a>(&'a [syn::Expr]);
+/// The first lifetime of `ty` that is neither `'static` nor `'_`, nor declared
+/// by a generic parameter of the item, nor bound inside `ty` itself: one bound
+/// by a `for<..>` of the item (`for<'b> fn(Local<'b>)`). The table could not
+/// declare it.
+fn undeclared_lifetime(ty: &Type, params: &[GenericParam]) -> Option<syn::Lifetime> {
+    struct V<'a> {
+        declared: &'a [GenericParam],
+        bound: Vec<String>,
+        found: Option<syn::Lifetime>,
+    }
     impl V<'_> {
-        fn lookup(&self, e: &syn::Expr) -> Option<syn::Expr> {
-            let p = match e {
-                syn::Expr::Path(p) => p,
-                syn::Expr::Block(b) if b.block.stmts.len() == 1 => match &b.block.stmts[0] {
-                    syn::Stmt::Expr(syn::Expr::Path(p), None) => p,
-                    _ => return None,
-                },
-                _ => return None,
-            };
-            let segs: Vec<String> = p.path.segments.iter().map(|s| s.ident.to_string()).collect();
-            if p.path.leading_colon.is_some() && segs.len() == 2 && segs[0] == "__announce_len" {
-                let k: usize = segs[1].trim_start_matches('L').parse().ok()?;
-                return self.0.get(k).cloned();
-            }
-            None
-        }
-    }
-    impl VisitMut for V<'_> {
-        fn visit_type_array_mut(&mut self, a: &mut syn::TypeArray) {
-            if let Some(e) = self.lookup(&a.len) {
-                a.len = e;
-            }
-            syn::visit_mut::visit_type_array_mut(self, a);
-        }
-        fn visit_generic_argument_mut(&mut self, a: &mut syn::GenericArgument) {
-            if let syn::GenericArgument::Const(e) = a {
-                if let Some(orig) = self.lookup(e) {
-                    *e = orig;
-                    return;
+        fn binder(&mut self, b: &Option<syn::BoundLifetimes>, f: impl FnOnce(&mut Self)) {
+            let depth = self.bound.len();
+            for p in b.iter().flat_map(|b| b.lifetimes.iter()) {
+                if let GenericParam::Lifetime(l) = p {
+                    self.bound.push(l.lifetime.to_string());
                 }
             }
-            syn::visit_mut::visit_generic_argument_mut(self, a);
+            f(self);
+            self.bound.truncate(depth);
         }
     }
-    V(saved).visit_type_mut(ty);
+    impl<'ast> Visit<'ast> for V<'_> {
+        fn visit_lifetime(&mut self, l: &'ast syn::Lifetime) {
+            let name = l.to_string();
+            let declared = self.bound.contains(&name)
+                || name == "'static"
+                || name == "'_"
+                || self.declared.iter().any(|p| matches!(p, GenericParam::Lifetime(d) if d.lifetime.to_string() == name));
+            if !declared && self.found.is_none() {
+                self.found = Some(l.clone());
+            }
+        }
+        fn visit_type_bare_fn(&mut self, f: &'ast syn::TypeBareFn) {
+            self.binder(&f.lifetimes, |v| syn::visit::visit_type_bare_fn(v, f));
+        }
+        fn visit_trait_bound(&mut self, b: &'ast syn::TraitBound) {
+            self.binder(&b.lifetimes, |v| syn::visit::visit_trait_bound(v, b));
+        }
+    }
+    let mut v = V { declared: params, bound: Vec::new(), found: None };
+    v.visit_type(ty);
+    v.found
 }
 
-/// Higher-ranked lifetimes (`for<'b> Fn(&'b u8)`) are not in type-leak's
-/// scope; replace them by `'static` in the analysis copy (AUDIT 3 #4).
-fn erase_hrtb(item: &mut Item) {
-    struct Rename(Vec<String>);
-    impl VisitMut for Rename {
-        fn visit_lifetime_mut(&mut self, l: &mut syn::Lifetime) {
-            if self.0.contains(&l.to_string()) {
-                *l = syn::Lifetime::new("'static", l.span());
-            }
+/// The errors of type-leak, one `syn::Error` per offending path or type: the
+/// headline, the notes that say why, and what to write instead.
+fn report(e: type_leak::NotInternableError) -> syn::Error {
+    let mut out: Option<syn::Error> = None;
+    for item in e.items() {
+        let mut message = format!("announce: {}", item.message);
+        for (_, note) in &item.notes {
+            message.push_str(&format!("\n  = note: {}", note));
+        }
+        // The options of type-leak's help that name its own API (`LeakerConfig`,
+        // `allow_self`) mean nothing to a user of `#[announce]`.
+        let help = item
+            .help_text()
+            .unwrap_or("write the paths in it as absolute paths")
+            .replace(", or allow it with `LeakerConfig::allowed_paths`", "")
+            .replace(", allow it with `LeakerConfig::allowed_paths`", "")
+            .replace(", or analyze the item with `allow_self = true`", "")
+            .replace(", analyze the item with `allow_self = true`", "");
+        message.push_str(&format!("\n  = help: {}", help));
+        let err = syn::Error::new(item.span, message);
+        match &mut out {
+            Some(o) => o.combine(err),
+            None => out = Some(err),
         }
     }
-    struct V;
-    impl V {
-        fn names(b: &Option<syn::BoundLifetimes>) -> Vec<String> {
-            b.as_ref()
-                .map(|b| b.lifetimes.iter().map(|p| match p {
-                    GenericParam::Lifetime(l) => l.lifetime.to_string(),
-                    other => other.to_token_stream().to_string(),
-                }).collect())
-                .unwrap_or_default()
-        }
-    }
-    impl VisitMut for V {
-        fn visit_trait_bound_mut(&mut self, b: &mut syn::TraitBound) {
-            let names = Self::names(&b.lifetimes);
-            if !names.is_empty() {
-                b.lifetimes = None;
-                Rename(names).visit_path_mut(&mut b.path);
-            }
-            syn::visit_mut::visit_trait_bound_mut(self, b);
-        }
-        fn visit_type_bare_fn_mut(&mut self, f: &mut syn::TypeBareFn) {
-            let names = Self::names(&f.lifetimes);
-            if !names.is_empty() {
-                f.lifetimes = None;
-                let mut r = Rename(names);
-                for i in &mut f.inputs {
-                    r.visit_type_mut(&mut i.ty);
-                }
-                r.visit_return_type_mut(&mut f.output);
-            }
-            syn::visit_mut::visit_type_bare_fn_mut(self, f);
-        }
-        fn visit_predicate_type_mut(&mut self, p: &mut syn::PredicateType) {
-            let names = Self::names(&p.lifetimes);
-            if !names.is_empty() {
-                p.lifetimes = None;
-                let mut r = Rename(names);
-                r.visit_type_mut(&mut p.bounded_ty);
-                for b in &mut p.bounds {
-                    r.visit_type_param_bound_mut(b);
-                }
-            }
-            syn::visit_mut::visit_predicate_type_mut(self, p);
-        }
-    }
-    V.visit_item_mut(item);
-}
-
-/// With `allow_std_prelude = true`: bare prelude names become
-/// `::__announce_prelude::Name` in the analysis copy, so type-leak treats them
-/// as absolute even with generic arguments (AUDIT 3 #6). [`unprelude`]
-/// restores them in the result.
-fn prelude_to_marker(item: &mut Item) {
-    struct V;
-    impl VisitMut for V {
-        fn visit_path_mut(&mut self, p: &mut Path) {
-            if p.leading_colon.is_none() && p.segments.len() == 1 {
-                let name = p.segments[0].ident.to_string();
-                if PRELUDE.contains(&name.as_str()) {
-                    let root = Ident::new(PRELUDE_ROOT, p.segments[0].ident.span());
-                    p.leading_colon = Some(Default::default());
-                    p.segments.insert(0, syn::PathSegment::from(root));
-                }
-            }
-            syn::visit_mut::visit_path_mut(self, p);
-        }
-    }
-    V.visit_item_mut(item);
-}
-
-fn unprelude(ty: &mut Type) {
-    struct V;
-    impl VisitMut for V {
-        fn visit_path_mut(&mut self, p: &mut Path) {
-            if p.leading_colon.is_some() && p.segments.len() >= 2 && p.segments[0].ident == PRELUDE_ROOT {
-                p.leading_colon = None;
-                let rest: syn::punctuated::Punctuated<syn::PathSegment, syn::Token![::]> =
-                    p.segments.iter().skip(1).cloned().collect();
-                p.segments = rest;
-            }
-            syn::visit_mut::visit_path_mut(self, p);
-        }
-    }
-    V.visit_type_mut(ty);
-}
-
-/// Every type occurring in `item` (for checking that an interned type maps
-/// back to the original item).
-fn all_types(item: &Item) -> Vec<Type> {
-    struct V(Vec<Type>);
-    impl<'ast> syn::visit::Visit<'ast> for V {
-        fn visit_type(&mut self, t: &'ast Type) {
-            self.0.push(t.clone());
-            syn::visit::visit_type(self, t);
-        }
-    }
-    let mut v = V(Vec::new());
-    syn::visit::Visit::visit_item(&mut v, item);
-    v.0
+    out.expect("a NotInternableError has at least one item")
 }
 
 /// The types of `item` that would not resolve at a caller, as they appear in
 /// `item`. `None` for items that are not analysed (inline modules: the
 /// documented wrapper pattern).
 pub fn analyze(item: &Item, opts: &crate::options::Options) -> Result<Option<Vec<Type>>> {
-    let generics = match item {
-        Item::Struct(s) => &s.generics,
-        Item::Enum(s) => &s.generics,
-        Item::Union(s) => &s.generics,
-        Item::Trait(s) => &s.generics,
-        Item::Type(s) => &s.generics,
-        _ => return Ok(None),
-    };
+    if !matches!(item, Item::Struct(_) | Item::Enum(_) | Item::Union(_) | Item::Trait(_) | Item::Type(_)) {
+        return Ok(None);
+    }
     check_trait_paths(item, opts.allow_std_prelude)?;
     let params = scope::collect_params(item);
     let consts: Vec<String> = params
@@ -378,48 +269,55 @@ pub fn analyze(item: &Item, opts: &crate::options::Options) -> Result<Option<Vec
             _ => None,
         })
         .collect();
-    let mut analysed = item.clone();
-    let saved = check_and_erase_values(&mut analysed, &consts)?;
-    erase_hrtb(&mut analysed);
-    if opts.allow_std_prelude {
-        prelude_to_marker(&mut analysed);
-    }
-    // Primitives (optionally) and `crate::` paths are allowed; the prelude is
-    // handled by the marker rewrite above.
+    check_values(item, &consts)?;
+    // Primitives (optionally), `crate::` paths and (optionally) the prelude
+    // are allowed.
     let mut config = type_leak::LeakerConfig::new();
     config.allow_crate();
     if opts.allow_primitive {
         config.allow_primitive();
     }
-    // `Self` has no meaning in an `impl .. for ()`, and resolves everywhere.
-    config.self_ty_can_be_interned = false;
+    if opts.allow_std_prelude {
+        config
+            .allowed_paths
+            .extend(PRELUDE.iter().map(|n| Path::from(Ident::new(n, Span::call_site()))));
+    }
     let mut leaker = type_leak::Leaker::from_config(config);
-    leaker.intern_with(generics, |v| v.visit_item(&analysed)).map_err(|e| {
-        syn::Error::new(
-            e.span(),
-            "announce: type-leak cannot analyse this type; write it with absolute paths \
-             (a reference with an elided lifetime, `&Local`, needs a named lifetime or `&crate::Local`)",
-        )
-    })?;
-    // `finish()` is empty unless `reduce_roots()` ran first.
-    leaker.reduce_roots();
-    let originals = all_types(item);
-    let mut types = Vec::new();
-    for t in leaker.finish().iter() {
-        let mut t = t.clone();
-        unprelude(&mut t);
-        restore_values(&mut t, &saved);
-        if !originals.contains(&t) {
+    // `Self` has no meaning in an `impl .. for ()`, and resolves everywhere:
+    // `allow_self = false`.
+    let analysed = match item {
+        Item::Struct(s) => leaker.intern_struct(s, false),
+        Item::Enum(e) => leaker.intern_enum(e, false),
+        Item::Union(u) => leaker.intern_union(u, false),
+        Item::Trait(t) => leaker.intern_trait(t, false),
+        Item::Type(a) => leaker
+            .enter_generics(&a.generics, |view| syn::visit::visit_item_type(view, a))
+            .map(|(context, ())| context),
+        _ => return Ok(None),
+    };
+    analysed.map_err(report)?;
+    // Only the required entries need a repeater; absolute paths of other
+    // crates (`::std::vec::Vec<u8>`) are optional entries. The order is
+    // type-leak's own, which is deterministic. The same type can be an entry
+    // in several contexts (method generics with different bounds); the table
+    // has one impl for it.
+    let referrer = leaker.finish();
+    let mut types: Vec<Type> = Vec::new();
+    for (_, t) in referrer.required() {
+        if let Some(lifetime) = undeclared_lifetime(t, &params) {
             return Err(syn::Error::new_spanned(
-                &t,
-                "announce: this type could not be mapped back to the item after analysis; \
-                 write it with absolute paths",
+                t,
+                format!(
+                    "announce: this type could not be mapped back to the item after analysis; \
+                     write it with absolute paths (it names the higher-ranked lifetime `{}`)",
+                    lifetime
+                ),
             ));
         }
-        types.push(t);
+        if !types.contains(t) {
+            types.push(t.clone());
+        }
     }
-    // type-leak's order comes from a `HashSet`; sort for reproducible output.
-    types.sort_by_cached_key(|t| t.to_token_stream().to_string());
     Ok(Some(types))
 }
 

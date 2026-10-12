@@ -1,8 +1,9 @@
-//! Deterministic numbering for [`type_leak`] (feature `type-leak`).
+//! Numbering by token text for [`type_leak`] (feature `type-leak`).
 //!
-//! `type_leak::Referrer` numbers types in an order that changes between macro
-//! invocations. [`StableReferrer`] numbers them by token text instead, so a
-//! definer and a consumer get the same indices.
+//! `type_leak::Referrer` numbers its entries by context (in order of first
+//! appearance) and then by token text. [`StableReferrer`] numbers the required
+//! entries by token text alone, so a definer and a consumer get the same
+//! indices even when their analyses give the contexts other ids.
 //!
 //! Both sides must see the same tokens. A definer sees the item before `#[cfg]`
 //! evaluation and before `crate::` becomes `$crate::`. Run both sides on the
@@ -33,20 +34,32 @@ pub fn normalize_crate(item: &mut syn::Item) {
     syn::visit_mut::VisitMut::visit_item_mut(&mut V, item);
 }
 
-/// A `type_leak::Referrer` with a deterministic order.
+/// A `type_leak::Referrer` whose required entries are numbered by token text.
+///
+/// Optional entries (absolute paths of other crates, which a `Referrer`
+/// replaces only when it is made strict) have no number: they are left as
+/// written.
 #[derive(Clone, Debug)]
 pub struct StableReferrer {
     inner: type_leak::Referrer,
+    /// The distinct types of the required entries, sorted by token text.
     order: Vec<Type>,
+    /// The stable index of each entry of `inner`, `None` for an optional one.
+    stable: Vec<Option<usize>>,
 }
 
 impl StableReferrer {
-    /// Renumbers `referrer`'s types by their token text.
+    /// Renumbers `referrer`'s required entries by their token text.
     pub fn new(referrer: type_leak::Referrer) -> Self {
-        let mut order: Vec<Type> = referrer.iter().cloned().collect();
+        let mut order: Vec<Type> = referrer.required().map(|(_, t)| t.clone()).collect();
         order.sort_by_cached_key(|t| t.to_token_stream().to_string());
         order.dedup();
-        StableReferrer { inner: referrer, order }
+        let stable = referrer
+            .iter()
+            .enumerate()
+            .map(|(ix, t)| referrer.must(ix).then(|| order.iter().position(|o| o == t)).flatten())
+            .collect();
+        StableReferrer { inner: referrer, order, stable }
     }
 
     /// The leaked types in stable order: `types()[i]` has index `i`.
@@ -65,27 +78,32 @@ impl StableReferrer {
     }
 
     fn stable_fn<'a>(
-        order: &'a [Type],
+        stable: &'a [Option<usize>],
         mut f: impl FnMut(Type, usize) -> Type + 'a,
     ) -> impl FnMut(Type, usize) -> Type + 'a {
-        move |ty, _unstable| {
-            let i = order
-                .iter()
-                .position(|t| *t == ty)
-                .expect("type-leak returned a type outside its own list");
-            f(ty, i)
+        // An optional entry is replaced only by a strict `Referrer`, which
+        // this is not: leave it as written if it ever shows up.
+        move |ty, unstable| match stable[unstable] {
+            Some(i) => f(ty, i),
+            None => ty,
         }
     }
 
-    /// `Referrer::expand` with stable indices.
-    pub fn expand(&self, ty: Type, f: impl FnMut(Type, usize) -> Type) -> Type {
-        self.inner.expand(ty, Self::stable_fn(&self.order, f))
+    /// `Referrer::expand` with stable indices. `context` is what the `intern_*`
+    /// method of the `Leaker` returned.
+    pub fn expand(&self, context: type_leak::ContextId, ty: Type, f: impl FnMut(Type, usize) -> Type) -> Type {
+        self.inner.expand(context, ty, Self::stable_fn(&self.stable, f))
     }
 
-    /// `Referrer::into_visitor` with stable indices: rewrites every leaked type
-    /// in an item.
-    pub fn visit_item_mut(&self, item: &mut syn::Item, f: impl FnMut(Type, usize) -> Type) {
-        let mut v = self.inner.clone().into_visitor(Self::stable_fn(&self.order, f));
+    /// `Referrer::visitor` with stable indices: rewrites every leaked type in an
+    /// item. `context` is what the `intern_*` method of the `Leaker` returned.
+    pub fn visit_item_mut(
+        &self,
+        context: type_leak::ContextId,
+        item: &mut syn::Item,
+        f: impl FnMut(Type, usize) -> Type,
+    ) {
+        let mut v = self.inner.clone().visitor(context, Self::stable_fn(&self.stable, f));
         syn::visit_mut::VisitMut::visit_item_mut(&mut v, item);
     }
 

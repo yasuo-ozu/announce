@@ -16,4 +16,4 @@ syn = { workspace = true, features = ["visit", "visit-mut"] }
 proc-macro2.workspace = true
 template-quote.workspace = true
 announce-helper.workspace = true
-type-leak = "0.7"
+type-leak = "0.8"

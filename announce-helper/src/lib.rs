@@ -933,10 +933,13 @@ mod kv_tests {
         let item: syn::ItemStruct = syn::parse_quote! {
             pub struct S { a: Foo, b: Bar, c: Baz, d: Qux, e: Quux, f: Corge }
         };
+        let analyse = || {
+            let mut l = type_leak::Leaker::new();
+            let context = l.intern_struct(&item, true).unwrap();
+            (crate::leak::StableReferrer::new(l.finish()), context)
+        };
         let order = || {
-            let mut l = type_leak::Leaker::from_struct(&item).unwrap();
-            l.reduce_roots();
-            let r = crate::leak::StableReferrer::new(l.finish());
+            let (r, _) = analyse();
             r.types().iter().map(|t| t.to_token_stream().to_string()).collect::<Vec<_>>()
         };
         let first = order();
@@ -947,13 +950,33 @@ mod kv_tests {
         for _ in 0..20 {
             assert_eq!(order(), first);
         }
-        let mut l = type_leak::Leaker::from_struct(&item).unwrap();
-        l.reduce_roots();
-        let r = crate::leak::StableReferrer::new(l.finish());
+        let (r, context) = analyse();
         let mut it: syn::Item = syn::Item::Struct(item.clone());
-        r.visit_item_mut(&mut it, |_, i| syn::parse_str(&format!("T{}", i)).unwrap());
+        r.visit_item_mut(context, &mut it, |_, i| syn::parse_str(&format!("T{}", i)).unwrap());
         let s = it.to_token_stream().to_string();
         assert!(s.contains("a : T3") && s.contains("b : T0") && s.contains("f : T2"), "{}", s);
+        let ty: syn::Type = syn::parse_quote!(Qux);
+        assert_eq!(r.index_of(&ty), Some(5));
+        let ty = r.expand(context, ty, |_, i| syn::parse_str(&format!("T{}", i)).unwrap());
+        assert_eq!(ty.to_token_stream().to_string(), "T5");
+    }
+
+    #[cfg(feature = "type-leak")]
+    #[test]
+    fn stable_referrer_numbers_required_entries_only() {
+        // `::other::X` names another crate: an optional entry, left as written.
+        let item: syn::ItemStruct = syn::parse_quote! {
+            pub struct S { a: Foo, b: ::other::X, c: Bar, d: ::std::string::String }
+        };
+        let mut l = type_leak::Leaker::new();
+        let context = l.intern_struct(&item, true).unwrap();
+        let r = crate::leak::StableReferrer::new(l.finish());
+        let types: Vec<String> = r.types().iter().map(|t| t.to_token_stream().to_string()).collect();
+        assert_eq!(types, ["Bar", "Foo"]);
+        let mut it = syn::Item::Struct(item);
+        r.visit_item_mut(context, &mut it, |_, i| syn::parse_str(&format!("T{}", i)).unwrap());
+        let s = it.to_token_stream().to_string();
+        assert!(s.contains("a : T1") && s.contains("b : :: other :: X") && s.contains("c : T0"), "{}", s);
     }
 }
 
