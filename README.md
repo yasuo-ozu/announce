@@ -1,3 +1,5 @@
+<p align="center"><img src="logo.png" alt="announce logo" width="200"></p>
+
 # announce
 
 Make a definition visible to proc macros in any crate.
