@@ -102,7 +102,9 @@ fn random_u64() -> u64 {
 /// - the item's own generic parameters, and the generic parameters of its methods
 ///   and generic associated types;
 /// - `Self`, and associated types of `Self` or of a parameter (`Self::Out`,
-///   `T::Output`);
+///   `T::Output`), on their own or inside an absolute type
+///   (`::std::boxed::Box<Self::Out>`). Inside a *relative* type, `Self` and
+///   `Self::Out` are errors; `T::Output` is fine (see below);
 /// - std prelude names (`String`, `Vec<u8>`, `Option<T>`, `Clone`, ...), only with
 ///   `allow_std_prelude = true`. This goes by the bare name, with or without
 ///   generic arguments. It is off by default, because the caller's prelude may
@@ -158,7 +160,8 @@ fn random_u64() -> u64 {
 /// type_leak(repeater = $crate::Repeater, id = ID, generics = [(), (T,)], types = [Local, Vec<T>])
 /// ```
 ///
-/// `types` lists the relative types. `generics[i]` is the tuple of the generic
+/// `types` lists the relative types (`&Local`, also with an elided lifetime, lists
+/// `Local`). `generics[i]` is the tuple of the generic
 /// parameters that `types[i]` mentions, in order of first use: a type parameter
 /// as itself (`T`), a lifetime as `&'a ()`, a const as `[(); N]`, and `()` if
 /// there are none. Pair `generics[i]` with `types[i]`, and do not rely on the order
@@ -210,19 +213,49 @@ fn random_u64() -> u64 {
 /// - **Type aliases** must use absolute paths on the right-hand side, and take no
 ///   `repeater`. `type A = Option<Local>` is an error; write
 ///   `::core::option::Option<crate::Local>`.
-/// - **A reference with an elided lifetime to a relative type**, such as `&Local`,
-///   cannot be carried. Name the lifetime (`&'a Local`, with a `repeater`) or write
-///   `&crate::Local`.
 /// - A relative type that names a higher-ranked lifetime (`Local<'b>` in
 ///   `for<'b> fn(Local<'b>)`) cannot be carried either; write it with absolute
 ///   paths. Higher-ranked bounds in code that is already absolute are fine.
 /// - A relative type may mention a const parameter only if it is a `usize`.
+///
+/// The type analysis rejects more, and says so at the offending type
+/// ("use absolute path: ..."), whatever the `repeater`. In each case, writing
+/// the relative type with an absolute path (`crate::..`, `::other_crate::..`)
+/// makes it something that resolves everywhere, so nothing is carried:
+///
+/// - **`Self` in a relative type.** `Self` has no meaning in the impl of the
+///   repeater, so `fn f(&self) -> Local<Self>` and `Local<Self::Out>` are errors,
+///   while `::std::boxed::Box<Self::Out>` and a bare `Self::Out` are fine. In a
+///   struct, enum or union, `Local<Self::A>` asks for the trait to be written
+///   out (`Local<<Self as crate::Trait>::A>`). `Local<T::Output>` is fine, `T`
+///   being a parameter of the item.
+/// - **A bound cycle.** A relative type in a bound or `where` clause that
+///   mentions the bounded parameter, as in
+///   `struct S<T: ::core::convert::From<Local<T>>>(T)`, is an error: the
+///   rewritten bound would have to hold before it can be checked.
+///   `T: ::core::convert::From<Local<u8>>` and
+///   `U: ::core::convert::From<Local<T>>` are fine.
+/// - **A relative type with `'_`** among its own arguments (`Local<'_>`); an
+///   elided lifetime of a reference around it (`&Local`) is fine.
+/// - **A macro call in an array length**, unless it is absolute:
+///   `[u8; two!()]` is an error, `[u8; crate::two!()]` is fine.
+/// - **The type of a const parameter**, if it is relative: `const N: Idx` with
+///   `type Idx = usize` is an error; write `usize`, `bool`, `char` or an
+///   absolute path.
+/// - **A method lifetime that only a relative type keeps** (E0195). In a trait,
+///   `fn f<'a>(&self, a: Local<'a>) -> &'a u8` is an error, because the copy
+///   would have `'a` only inside a projection. Keep `'a` in another argument
+///   (`&'a self`, `b: &'a u8`) or write `Local` with an absolute path.
 ///
 /// ## What is not checked
 ///
 /// - Bodies of provided trait methods. `fn g(&self) -> u8 { helper() }` passes,
 ///   but a callback that re-emits the body needs `helper` to resolve.
 ///   `signature_only!` replaces such bodies.
+/// - Types named in the default of an associated const. `const N: usize =
+///   ::core::mem::size_of::<Local>();` passes the value-path check, but `Local`
+///   is not read, so it is not carried (array lengths, const arguments,
+///   discriminants and the defaults of const parameters are read).
 /// - Attribute arguments, such as `#[serde(with = "m")]`. They are neither
 ///   checked nor rewritten.
 ///
@@ -301,14 +334,20 @@ fn derive_announce_impl(input: TokenStream2) -> syn::Result<TokenStream2> {
         syn::Item::Enum(e) => &mut e.attrs,
         syn::Item::Union(u) => &mut u.attrs,
         other => {
-            return Err(syn::Error::new_spanned(other, "`#[derive(Announce)]` supports struct, enum and union items"))
+            return Err(syn::Error::new_spanned(
+                other,
+                "`#[derive(Announce)]` supports struct, enum and union items",
+            ))
         }
     };
     let mut opts = options::Options::default();
     let mut seen = false;
     for a in attrs.iter().filter(|a| a.path().is_ident("announce")) {
         if seen {
-            return Err(syn::Error::new_spanned(a, "announce: only one `#[announce(..)]` helper attribute is allowed"));
+            return Err(syn::Error::new_spanned(
+                a,
+                "announce: only one `#[announce(..)]` helper attribute is allowed",
+            ));
         }
         seen = true;
         if let syn::Meta::List(l) = &a.meta {
@@ -320,7 +359,10 @@ fn derive_announce_impl(input: TokenStream2) -> syn::Result<TokenStream2> {
         if opts.given.iter().any(|g| g == key) {
             return Err(syn::Error::new(
                 Span::call_site(),
-                format!("`{}` does not apply to `#[derive(Announce)]`: the item is emitted as written", key),
+                format!(
+                    "`{}` does not apply to `#[derive(Announce)]`: the item is emitted as written",
+                    key
+                ),
             ));
         }
     }

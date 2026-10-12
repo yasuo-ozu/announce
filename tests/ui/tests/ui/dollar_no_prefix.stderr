@@ -1,0 +1,19 @@
+error: announce: `with_macro!` carries `$` tokens and was invoked through the derive/attribute route without the `@__announce_dollar { $ }` prefix; route it with `announce_helper::redirect`
+ --> tests/ui/dollar_no_prefix.rs:6:1
+  |
+6 | / announce_test_defs::kinds::with_macro! {
+7 | |     [#[derive(announce_test_defs::conflict::Parse)] N, cb!]
+8 | | }
+  | |_^
+  |
+  = note: this error originates in the macro `announce_test_defs::kinds::with_macro` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: announce: `with_macro2!` carries `$` tokens and was invoked through the derive/attribute route without the `@__announce_dollar { $ }` prefix; route it with `announce_helper::redirect`
+  --> tests/ui/dollar_no_prefix.rs:10:1
+   |
+10 | / announce_test_defs::kinds::with_macro2! {
+11 | |     [#[announce_test_defs::conflict::parse_attr], cb!]
+12 | | }
+   | |_^
+   |
+   = note: this error originates in the macro `announce_test_defs::kinds::with_macro2` (in Nightly builds, run with -Z macro-backtrace for more info)

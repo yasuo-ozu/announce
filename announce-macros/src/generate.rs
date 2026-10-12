@@ -130,9 +130,7 @@ fn trait_is_simple_dyn(t: &syn::ItemTrait) -> bool {
     let mentions_self = |ts: TokenStream| mentions(ts, "Self");
     // Any generic parameter, lifetimes included (AUDIT #4: `impl Announce for
     // dyn L` does not compile for `trait L<'a>`).
-    if !t.generics.params.is_empty()
-        || t.generics.where_clause.is_some()
-        || t.auto_token.is_some()
+    if !t.generics.params.is_empty() || t.generics.where_clause.is_some() || t.auto_token.is_some()
     {
         return false;
     }
@@ -145,7 +143,10 @@ fn trait_is_simple_dyn(t: &syn::ItemTrait) -> bool {
             tb.lifetimes.is_none()
                 && matches!(
                     p.trim_start_matches("::"),
-                    "core::marker::Send" | "core::marker::Sync" | "std::marker::Send" | "std::marker::Sync"
+                    "core::marker::Send"
+                        | "core::marker::Sync"
+                        | "std::marker::Send"
+                        | "std::marker::Sync"
                 )
         }
         _ => false,
@@ -230,7 +231,11 @@ pub struct Variant {
 /// (DESIGN.md section 4.6). Payloads without `$` accept the prefix optionally
 /// and ignore it.
 fn variant_arms(fallback: &Ident, v: &Variant) -> TokenStream {
-    let Variant { meta, payload, needs_dollar } = v;
+    let Variant {
+        meta,
+        payload,
+        needs_dollar,
+    } = v;
     let prefix = if *needs_dollar {
         quote! { @__announce_dollar { $__dollar:tt } }
     } else {
@@ -297,7 +302,8 @@ fn arms(self_name: &str, fallback: &Ident, plain: &Variant) -> TokenStream {
     let any_prefix = quote! { $( @__announce_dollar { $__announce_ignored:tt } )? };
     // The derive/attribute route emits an item (the dummy enum): an error in
     // expression position (`(expr)`, section 4.6). Payload-free arms.
-    let derive_in_expr = "announce: the derive/attribute route (`#[derive(..)]`/`#[attr]` in the list) \
+    let derive_in_expr =
+        "announce: the derive/attribute route (`#[derive(..)]`/`#[attr]` in the list) \
                           emits items and cannot be used in expression position (`(expr)`)";
     out.extend(quote! {
         (#any_prefix (expr $($__announce_eo:tt)*) [ $($hp:ident)? $(:: $hs:ident)* ! , #[$($na:tt)*] $($tail:tt)* ] $($r:tt)*) => { compile_error! { #derive_in_expr } };
@@ -382,7 +388,11 @@ pub fn trampoline(
     // Global options other than a leading `expr` are not interpreted by the
     // trampoline; they are forwarded unchanged (a namespace for helpers, e.g.
     // `gather`'s bookkeeping; AUDIT 3 #9).
-    let plain = Variant { meta, payload, needs_dollar };
+    let plain = Variant {
+        meta,
+        payload,
+        needs_dollar,
+    };
     let arms = arms(&macro_name.to_string(), &fallback, &plain);
     quote! {
         #[doc(hidden)]
@@ -440,4 +450,175 @@ pub fn generate(mut item: Item, opts: &Options, random: u64) -> Result<TokenStre
         #mock_copy
         #marker
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proc_macro2::{Delimiter, Spacing};
+
+    fn squash(ts: impl ToTokens) -> String {
+        ts.to_token_stream()
+            .to_string()
+            .split_whitespace()
+            .collect()
+    }
+
+    fn dc(ts: TokenStream) -> String {
+        squash(crate_to_dollar_crate(ts))
+    }
+
+    #[test]
+    fn hex_is_sixteen_lowercase_digits() {
+        assert_eq!(hex(0), "0000000000000000");
+        assert_eq!(hex(255), "00000000000000ff");
+        assert_eq!(hex(u64::MAX), "ffffffffffffffff");
+    }
+
+    #[test]
+    fn escape_dollar_sets_the_flag_and_escapes_every_dollar() {
+        let mut found = false;
+        let out = escape_dollar(quote! { a $ b $ c }, &mut found);
+        assert!(found);
+        assert_eq!(squash(out), "a$__dollarb$__dollarc");
+    }
+
+    #[test]
+    fn escape_dollar_recurses_into_nested_groups() {
+        let mut found = false;
+        let out = escape_dollar(quote! { f($x, [{ $y }]) }, &mut found);
+        assert!(found);
+        assert_eq!(squash(out), "f($__dollarx,[{$__dollary}])");
+    }
+
+    #[test]
+    fn escape_dollar_keeps_delimiters_and_leaves_dollar_free_input_alone() {
+        let mut found = false;
+        let input = quote! { fn f(a: u8) -> [u8; 2] { (1, 2) } };
+        let out = escape_dollar(input.clone(), &mut found);
+        assert!(!found);
+        assert_eq!(squash(&out), squash(&input));
+        let delims: Vec<Delimiter> = out
+            .into_iter()
+            .filter_map(|t| {
+                if let TokenTree::Group(g) = t {
+                    Some(g.delimiter())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(
+            delims,
+            [Delimiter::Parenthesis, Delimiter::Bracket, Delimiter::Brace]
+        );
+    }
+
+    #[test]
+    fn escape_dollar_never_clears_the_flag() {
+        let mut found = true;
+        escape_dollar(quote! { a b }, &mut found);
+        assert!(found);
+        let mut found = false;
+        escape_dollar(TokenStream::new(), &mut found);
+        assert!(!found);
+    }
+
+    #[test]
+    fn rewrites_path_leading_crate() {
+        assert_eq!(dc(quote! { crate::x }), "$crate::x");
+        assert_eq!(dc(quote! { crate::a::b::c() }), "$crate::a::b::c()");
+        assert_eq!(dc(quote! { struct S(crate::T); }), "structS($crate::T);");
+        assert_eq!(
+            dc(quote! { <crate::T as crate::Tr>::X }),
+            "<$crate::Tas$crate::Tr>::X"
+        );
+        assert_eq!(dc(quote! { &crate::T }), "&$crate::T");
+    }
+
+    #[test]
+    fn inserted_dollar_is_a_lone_punct_with_the_span_of_crate() {
+        let out = crate_to_dollar_crate(quote! { crate::x });
+        let tts: Vec<TokenTree> = out.into_iter().collect();
+        match (&tts[0], &tts[1]) {
+            (TokenTree::Punct(d), TokenTree::Ident(c)) => {
+                assert_eq!(d.as_char(), '$');
+                assert_eq!(d.spacing(), Spacing::Alone);
+                assert_eq!(c.to_string(), "crate");
+            }
+            other => panic!("{:?}", other),
+        }
+    }
+
+    #[test]
+    fn rewrites_inside_nested_groups() {
+        assert_eq!(
+            dc(quote! { f(crate::a, [crate::b], { crate::c }) }),
+            "f($crate::a,[$crate::b],{$crate::c})"
+        );
+    }
+
+    #[test]
+    fn keeps_pub_crate_and_pub_in_crate() {
+        assert_eq!(dc(quote! { pub(crate) struct S; }), "pub(crate)structS;");
+        assert_eq!(
+            dc(quote! { pub(in crate::m) struct S; }),
+            "pub(incrate::m)structS;"
+        );
+        assert_eq!(
+            dc(quote! { pub(in crate) fn f() {} }),
+            "pub(incrate)fnf(){}"
+        );
+        // A bare `crate` that is not followed by `::`.
+        assert_eq!(dc(quote! { use crate; }), "usecrate;");
+        assert_eq!(dc(quote! { a.crate }), "a.crate");
+    }
+
+    #[test]
+    fn keeps_an_escaped_dollar_crate() {
+        // `$crate` written by the user is escaped first (`$ __dollar crate`):
+        // adding a `$` would unescape nothing and break the pair (AUDIT #2).
+        let mut found = false;
+        let escaped = escape_dollar(quote! { $crate::x }, &mut found);
+        assert!(found);
+        assert_eq!(squash(crate_to_dollar_crate(escaped)), "$__dollarcrate::x");
+        // An unescaped `$ crate` is left alone as well.
+        assert_eq!(dc(quote! { $crate::x }), "$crate::x");
+        // Both side by side.
+        let mut found = false;
+        let both =
+            crate_to_dollar_crate(escape_dollar(quote! { $crate::x + crate::y }, &mut found));
+        assert_eq!(squash(both), "$__dollarcrate::x+$crate::y");
+    }
+
+    #[test]
+    fn keeps_crate_after_a_path_separator_but_not_after_a_single_colon() {
+        // `a::crate::b`: `crate` is a path segment after `::`.
+        assert_eq!(dc(quote! { a::crate::b }), "a::crate::b");
+        assert_eq!(dc(quote! { ::crate::b }), "::crate::b");
+        // `x: crate::T` is a type ascription after a single colon (AUDIT #1).
+        assert_eq!(dc(quote! { fn f(x: crate::T) {} }), "fnf(x:$crate::T){}");
+        assert_eq!(
+            dc(quote! { struct S { a: crate::T, b: Vec<crate::U> } }),
+            "structS{a:$crate::T,b:Vec<$crate::U>}"
+        );
+        assert_eq!(dc(quote! { x: crate::T }), "x:$crate::T");
+        // A first colon that is not joined to the second is not a `::`.
+        let colon = |spacing| TokenTree::Punct(proc_macro2::Punct::new(':', spacing));
+        let split: TokenStream = [
+            TokenTree::Ident(Ident::new("crate", Span::call_site())),
+            colon(Spacing::Alone),
+            colon(Spacing::Alone),
+            TokenTree::Ident(Ident::new("x", Span::call_site())),
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(squash(crate_to_dollar_crate(split)), "crate::x");
+    }
+
+    #[test]
+    fn crate_to_dollar_crate_is_not_applied_twice_to_the_same_path() {
+        let once = crate_to_dollar_crate(quote! { crate::x });
+        assert_eq!(squash(crate_to_dollar_crate(once)), "$crate::x");
+    }
 }

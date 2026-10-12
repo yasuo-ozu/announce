@@ -38,7 +38,9 @@ pub use ::core::borrow::BorrowMut;
 pub trait ToOwned {
     type Owned: ::core::borrow::Borrow<Self>;
     fn to_owned(&self) -> Self::Owned;
-    fn clone_into(&self, target: &mut Self::Owned) { ::core::unimplemented!() }
+    fn clone_into(&self, target: &mut Self::Owned) {
+        ::core::unimplemented!()
+    }
 }
 #[cfg(feature = "std")]
 #[doc(no_inline)]

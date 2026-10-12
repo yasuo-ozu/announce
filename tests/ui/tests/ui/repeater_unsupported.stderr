@@ -1,0 +1,11 @@
+error: `repeater` is not supported on type aliases; write the right-hand side with absolute paths
+ --> tests/ui/repeater_unsupported.rs:6:33
+  |
+6 | #[announce::announce(repeater = crate::Repeater)]
+  |                                 ^^^^^^^^^^^^^^^
+
+error: `repeater` is supported on struct, enum, union and trait items
+ --> tests/ui/repeater_unsupported.rs:9:33
+  |
+9 | #[announce::announce(repeater = crate::Repeater)]
+  |                                 ^^^^^^^^^^^^^^^

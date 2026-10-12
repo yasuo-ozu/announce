@@ -1,0 +1,19 @@
+error: announce: only one `#[announce(..)]` helper attribute is allowed
+ --> tests/ui/derive_helper_errors.rs:4:1
+  |
+4 | #[announce(macro_name = Other)]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: `mock` does not apply to `#[derive(Announce)]`: the item is emitted as written
+ --> tests/ui/derive_helper_errors.rs:8:10
+  |
+8 | #[derive(announce::Announce)]
+  |          ^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the derive macro `announce::Announce` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: unknown announce option; expected one of `macro_name`, `mock`, `repeater`, `allow_primitive`, `allow_std_prelude`, `crate`, `emit_item`, `meta` (a bare path is a check)
+  --> tests/ui/derive_helper_errors.rs:16:12
+   |
+16 | #[announce(macro_nam = X)]
+   |            ^^^^^^^^^

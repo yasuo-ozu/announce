@@ -368,7 +368,7 @@ pub mod trait_paths_ok {
         fn get<T: ?Sized + Send>(&self, t: &T);
     }
 
-    /// A const generic array length (type-leak cannot analyse it itself).
+    /// A const generic array length: a const parameter resolves everywhere.
     #[announce]
     pub struct Arr<const N: usize>(pub [u8; N]);
 
@@ -457,5 +457,253 @@ pub mod audit3 {
     pub trait PreludeBounds {
         fn it<T: DoubleEndedIterator + AsRef<str>>(&self, t: T) -> Vec<Option<u8>>;
         fn fns<F: Fn(u8) -> u8>(&self, f: F) -> Box<dyn Iterator<Item = u8>>;
+    }
+}
+
+/// `crate = path`: an explicit path to the announce crate in generated code.
+pub mod crate_opt {
+    use super::announce;
+
+    /// A stand-in facade: `Capture` and `remove` come from announce, but
+    /// `Announce` is a trait of this module, so `impl Announce for ..` can only
+    /// name it when the option is honoured.
+    pub mod spy {
+        pub use ::announce::__private;
+        pub trait Announce {}
+    }
+
+    #[announce(crate = crate::crate_opt::spy)]
+    pub struct ViaSpy {
+        pub a: u8,
+    }
+
+    #[announce(crate = crate::crate_opt::spy)]
+    pub trait SpyTrait {
+        fn f(&self) -> u8;
+    }
+
+    #[announce(crate = ::announce)]
+    pub struct Explicit {
+        pub a: u8,
+    }
+}
+
+/// With a `repeater` but only absolute types, META still has `type_leak(..)`
+/// with empty lists.
+pub mod empty_table {
+    use super::announce;
+
+    pub trait Repeater<const ID: u64, const I: usize, G: ?Sized> {
+        type Type: ?Sized;
+    }
+
+    #[announce(repeater = crate::empty_table::Repeater)]
+    pub struct NoLeaks {
+        pub a: u8,
+        pub b: ::std::vec::Vec<u8>,
+        pub c: ::core::option::Option<crate::empty_table::NoLeaks2>,
+    }
+    pub struct NoLeaks2;
+}
+
+/// Repeater tables keep the bounds and const generics of the item.
+pub mod table_bounds {
+    use super::announce;
+
+    pub trait Repeater<const ID: u64, const I: usize, G: ?Sized> {
+        type Type: ?Sized;
+    }
+
+    pub mod inner {
+        #[derive(Debug, PartialEq, Clone)]
+        pub struct Local(pub u8);
+        /// Well-formed only for `T: Clone`.
+        #[derive(Debug, PartialEq)]
+        pub struct Wrap<T: ::core::clone::Clone>(pub T);
+        #[derive(Debug, PartialEq)]
+        pub struct Buf<const N: usize>(pub [u8; N]);
+        #[derive(Debug, PartialEq)]
+        pub struct Lt<'a>(pub &'a u8);
+    }
+    use inner::{Buf, Local, Lt, Wrap};
+
+    #[announce(repeater = crate::table_bounds::Repeater)]
+    pub struct Bounded<T: ::core::clone::Clone>(pub ::std::vec::Vec<T>, pub Wrap<T>, pub Local);
+
+    #[announce(repeater = crate::table_bounds::Repeater)]
+    pub struct ArrOfLocal<const N: usize>(pub [Local; N]);
+
+    #[announce(repeater = crate::table_bounds::Repeater)]
+    pub struct ConstArg<const N: usize>(pub Buf<N>);
+
+    #[announce(repeater = crate::table_bounds::Repeater)]
+    pub struct Both<'a, T: ::core::clone::Clone, const N: usize>(
+        pub Lt<'a>,
+        pub Wrap<T>,
+        pub Buf<N>,
+    );
+}
+
+/// `allow_std_prelude = true` with a repeater: prelude names stay, the
+/// relative types inside them are carried.
+pub mod prelude_leak {
+    use super::announce;
+
+    pub trait Repeater<const ID: u64, const I: usize, G: ?Sized> {
+        type Type: ?Sized;
+    }
+    pub mod inner {
+        #[derive(Debug, PartialEq, Clone)]
+        pub struct Local(pub u8);
+    }
+    use inner::Local;
+
+    #[announce(allow_std_prelude = true, repeater = crate::prelude_leak::Repeater)]
+    pub struct Holder {
+        pub a: Vec<Local>,
+        pub b: Option<Box<Local>>,
+        pub s: String,
+    }
+}
+
+/// `signature_only!` on a module with `const fn`, `impl Trait` and impl blocks.
+pub mod sig_full {
+    use super::announce;
+
+    #[announce]
+    pub mod m {
+        pub const fn zero() -> u32 {
+            0
+        }
+        pub fn opaque() -> impl ::core::fmt::Display {
+            8
+        }
+        pub fn plain() -> u32 {
+            7
+        }
+        pub struct S;
+        impl S {
+            pub fn method(&self) -> u32 {
+                9
+            }
+            pub const fn cmethod() -> u32 {
+                11
+            }
+            pub fn opaque_method(&self) -> impl ::core::fmt::Debug {
+                12
+            }
+        }
+        pub mod nested {
+            pub fn deep() -> u32 {
+                13
+            }
+        }
+        pub const ZERO: u32 = zero();
+    }
+}
+
+/// The module-wrapper pattern of the README: `emit_item = false` on a
+/// same-named module next to the real item.
+pub mod wrapper {
+    use super::announce;
+
+    pub trait Base {}
+    pub struct Local(pub u8);
+
+    #[announce]
+    pub trait Gadget {
+        fn f(&self) -> u8;
+    }
+
+    /// Modules are not analysed: the relative `Base` and `Local` pass, and the
+    /// copy is not emitted, so it does not clash with the trait `Gadget`.
+    #[announce(emit_item = false, macro_name = GadgetWrapped, meta = crate::info(wrapped))]
+    pub mod Gadget {
+        pub trait Gadget: Base {
+            fn f(&self) -> Local;
+        }
+    }
+
+    /// A wrapper whose paths all resolve in other crates.
+    #[announce(emit_item = false, macro_name = ResolvedWrapped)]
+    pub mod Resolved {
+        pub trait Resolved: crate::wrapper::Base {
+            fn f(&self) -> crate::wrapper::Local;
+        }
+    }
+}
+
+/// Used across crates: a derived union.
+pub mod derived_union {
+    #[derive(::announce::Announce, Clone, Copy)]
+    #[announce(meta = crate::info(union))]
+    pub union Raw {
+        pub i: u32,
+        pub f: f32,
+    }
+}
+
+/// Item-level `#[cfg]` that is false: no trampoline exists.
+pub mod gone {
+    use super::announce;
+
+    #[announce]
+    #[cfg(any())]
+    pub struct AnnounceFirst;
+
+    #[cfg(any())]
+    #[announce]
+    pub struct CfgFirst;
+
+    #[announce]
+    #[cfg(not(any()))]
+    pub struct Present;
+}
+
+/// type-leak 0.8: elided lifetimes, higher-ranked bounds and tuples with a
+/// repeater.
+pub mod leak08 {
+    use super::announce;
+
+    pub trait Repeater<const ID: u64, const I: usize, G: ?Sized> {
+        type Type: ?Sized;
+    }
+    pub mod inner {
+        #[derive(Debug, PartialEq, Clone, Copy)]
+        pub struct Local(pub u8);
+    }
+    use inner::Local;
+
+    /// `&Local` with an elided lifetime in method signatures.
+    #[announce(repeater = crate::leak08::Repeater)]
+    pub trait Elided {
+        fn get(&self, l: &Local) -> u8;
+        fn pick<'a>(&'a self, l: &'a Local) -> &'a Local;
+    }
+
+    /// A higher-ranked `Fn` bound whose argument is `&Local`.
+    #[announce(repeater = crate::leak08::Repeater)]
+    pub struct Hr {
+        pub f: ::std::boxed::Box<dyn for<'b> ::core::ops::Fn(&'b Local) -> u8>,
+    }
+
+    /// A tuple: only `Local` is carried, `u8` is a primitive.
+    #[announce(repeater = crate::leak08::Repeater)]
+    pub struct Tup {
+        pub t: (Local, u8),
+    }
+
+    pub mod wrap {
+        pub struct Wrap<'a>(pub &'a u8);
+    }
+    use wrap::Wrap;
+
+    /// A method lifetime that a relative type mentions is fine when another
+    /// argument keeps it as written (`&'a self`, a plain `&'a u8`). Without that,
+    /// type-leak 0.8 rejects the definition (`tests/ui/repeater_lifetime_unconstrained.rs`).
+    #[announce(repeater = crate::leak08::Repeater)]
+    pub trait Constrained {
+        fn by_self<'a>(&'a self, a: Wrap<'a>) -> &'a u8;
+        fn by_arg<'a>(&self, a: Wrap<'a>, b: &'a u8) -> &'a u8;
     }
 }

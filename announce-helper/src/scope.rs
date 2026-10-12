@@ -42,7 +42,12 @@ pub fn param_name(p: &GenericParam) -> String {
 /// The parameters of `params` that `ty` mentions, in order of first
 /// appearance in `ty`.
 pub fn mentioned_params(ty: &Type, params: &[GenericParam]) -> Vec<GenericParam> {
-    fn walk(ts: TokenStream, params: &[GenericParam], out: &mut Vec<GenericParam>, prev_quote: &mut bool) {
+    fn walk(
+        ts: TokenStream,
+        params: &[GenericParam],
+        out: &mut Vec<GenericParam>,
+        prev_quote: &mut bool,
+    ) {
         for tt in ts {
             match tt {
                 TokenTree::Group(g) => {
@@ -51,7 +56,11 @@ pub fn mentioned_params(ty: &Type, params: &[GenericParam]) -> Vec<GenericParam>
                 }
                 TokenTree::Punct(p) => *prev_quote = p.as_char() == '\'',
                 TokenTree::Ident(i) => {
-                    let name = if *prev_quote { format!("'{}", i) } else { i.to_string() };
+                    let name = if *prev_quote {
+                        format!("'{}", i)
+                    } else {
+                        i.to_string()
+                    };
                     *prev_quote = false;
                     if let Some(p) = params.iter().find(|p| param_name(p) == name) {
                         if !out.iter().any(|q| param_name(q) == name) {

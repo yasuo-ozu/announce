@@ -152,8 +152,12 @@ impl syn::parse::Parse for GatherRest {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
         let content;
         syn::parenthesized!(content in input);
-        let paths = syn::punctuated::Punctuated::<syn::Path, syn::Token![,]>::parse_terminated(&content)?;
-        Ok(GatherRest { paths: paths.into_iter().collect(), name: input.parse()? })
+        let paths =
+            syn::punctuated::Punctuated::<syn::Path, syn::Token![,]>::parse_terminated(&content)?;
+        Ok(GatherRest {
+            paths: paths.into_iter().collect(),
+            name: input.parse()?,
+        })
     }
 }
 
@@ -201,5 +205,42 @@ announce_helper::callback! {
             out.extend(quote! { #item });
         }
         Ok(quote! { #out pub const #name: &[&str] = &[ #(#metas),* ]; })
+    }
+}
+
+announce_helper::callback! {
+    /// Reads the `type_leak(..)` META through `Entry::type_leak` and records,
+    /// for every entry in visiting order, `pub const <REST>: &[&str]` with
+    /// `"-"` when the entry has no table, else `"[Type@Generics,..]"` (types
+    /// and generics without spaces, sorted by text, so the unspecified order
+    /// of `types` does not matter).
+    pub fn leak_types(input) {
+        let name: syn::Ident = input.rest_as()?;
+        let squash = |t: &dyn template_quote::ToTokens| {
+            template_quote::ToTokens::to_token_stream(t).to_string().split_whitespace().collect::<String>()
+        };
+        let mut rows = Vec::new();
+        for e in input.entries_in_order() {
+            rows.push(match e.type_leak()? {
+                None => "-".to_string(),
+                Some(tl) => {
+                    if tl.generics.len() != tl.types.len() {
+                        return Err(syn::Error::new(
+                            proc_macro2::Span::call_site(),
+                            "generics and types are not aligned",
+                        ));
+                    }
+                    let mut pairs: Vec<String> = tl
+                        .types
+                        .iter()
+                        .zip(&tl.generics)
+                        .map(|(t, g)| format!("{}@{}", squash(t), squash(g)))
+                        .collect();
+                    pairs.sort();
+                    format!("[{}]", pairs.join(","))
+                }
+            });
+        }
+        Ok(quote! { pub const #name: &[&str] = &[ #(#rows),* ]; })
     }
 }

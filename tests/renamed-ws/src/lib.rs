@@ -13,7 +13,9 @@ pub trait MarkedWs {
 macro_rules! capture {
     ([$($l:tt)*] $($t:tt)*) => { pub const OUT: &str = stringify!($($t)*); };
 }
-pub mod check { crate::ViaWorkspace! { [crate::ViaWorkspace!, capture!] } }
+pub mod check {
+    crate::ViaWorkspace! { [crate::ViaWorkspace!, capture!] }
+}
 
 fn _assert_marker<T: ?Sized + ann_ws::Announce>() {}
 const _: fn() = _assert_marker::<ViaWorkspace>;

@@ -12,10 +12,10 @@
 //! - Read META: [`Entry::find_meta`] and [`KvArgs`] parse `key = value` lists.
 
 mod kv;
-#[doc(hidden)]
-pub mod scope;
 #[cfg(feature = "type-leak")]
 pub mod leak;
+#[doc(hidden)]
+pub mod scope;
 mod transformer;
 
 pub use kv::KvArgs;
@@ -76,7 +76,8 @@ impl Cont {
             Cont::Bang(p) => p.clone(),
             Cont::Attr { attr, .. } => {
                 if attr.path().is_ident("derive") {
-                    let paths = attr.parse_args_with(Punctuated::<Path, Token![,]>::parse_terminated);
+                    let paths =
+                        attr.parse_args_with(Punctuated::<Path, Token![,]>::parse_terminated);
                     if let Some(p) = paths.ok().and_then(|p| p.into_iter().next()) {
                         return p;
                     }
@@ -216,7 +217,11 @@ impl ContList {
     }
 
     /// Like [`invoke`](Self::invoke), with a global options group `(options) [..] ..`.
-    pub fn invoke_with_options(&self, options: Option<&TokenStream>, body: TokenStream) -> TokenStream {
+    pub fn invoke_with_options(
+        &self,
+        options: Option<&TokenStream>,
+        body: TokenStream,
+    ) -> TokenStream {
         let opts = options.map(|o| quote! { ( #o ) });
         let in_expr = options.is_some_and(|o| {
             o.clone()
@@ -348,7 +353,12 @@ impl TypeLeak {
                 if !self.shadowed.contains(ty) {
                     if let Some(i) = self.tl.lookup(ty) {
                         // `projection` returns tokens (the repeater may be `$crate`).
-                        let g = self.tl.generics.get(i).cloned().unwrap_or_else(|| syn::parse_quote!(()));
+                        let g = self
+                            .tl
+                            .generics
+                            .get(i)
+                            .cloned()
+                            .unwrap_or_else(|| syn::parse_quote!(()));
                         *ty = syn::Type::Verbatim(self.tl.projection(i, &g));
                         return;
                     }
@@ -368,7 +378,11 @@ impl TypeLeak {
                 self.shadow(&g, |v| syn::visit_mut::visit_item_fn_mut(v, f));
             }
         }
-        V { tl: self, shadowed: Vec::new() }.visit_item_mut(item);
+        V {
+            tl: self,
+            shadowed: Vec::new(),
+        }
+        .visit_item_mut(item);
     }
 
     /// `<() as REPEATER<ID, index, generics>>::Type`, as tokens to emit.
@@ -484,7 +498,10 @@ impl Parse for Input {
         if input.peek(Token![@]) {
             let fork = input.fork();
             let _: Token![@] = fork.parse()?;
-            if fork.parse::<Ident>().is_ok_and(|i| i == "__announce_dollar") {
+            if fork
+                .parse::<Ident>()
+                .is_ok_and(|i| i == "__announce_dollar")
+            {
                 let _g: proc_macro2::Group = fork.parse()?;
                 syn::parse::discouraged::Speculative::advance_to(input, &fork);
             }
@@ -584,7 +601,8 @@ impl Input {
             let parsed: Result<Meta> = syn::parse2(item);
             if let Ok(m) = parsed {
                 if m.path.is_ident("__announce_fetched") {
-                    let paths: Result<Punctuated<Path, Token![,]>> = m.parse_args_with(Punctuated::parse_terminated);
+                    let paths: Result<Punctuated<Path, Token![,]>> =
+                        m.parse_args_with(Punctuated::parse_terminated);
                     if let Ok(paths) = paths {
                         out.extend(paths.iter().map(path_key));
                     }
@@ -603,7 +621,9 @@ impl Input {
     /// arguments ignored), newest first.
     pub fn entry_for(&self, cont: &Cont) -> Option<&Entry> {
         let want = path_key(&cont.path());
-        self.entries.iter().find(|e| path_key(&e.key.path()) == want)
+        self.entries
+            .iter()
+            .find(|e| path_key(&e.key.path()) == want)
     }
 
     /// "Give me these definitions, then call me again."
@@ -623,7 +643,10 @@ impl Input {
         // A callback asking for itself (or for its own head path) would
         // re-fetch forever (AUDIT #15).
         if let Some(head) = self.list.0.first() {
-            if let Some(c) = needed.iter().find(|c| path_key(&c.path()) == path_key(&head.path())) {
+            if let Some(c) = needed
+                .iter()
+                .find(|c| path_key(&c.path()) == path_key(&head.path()))
+            {
                 let msg = format!(
                     "announce: `gather` asked for `{}`, which is the callback itself; \
                      request the definitions' trampolines instead",
@@ -634,17 +657,29 @@ impl Input {
         }
         let mut missing: Vec<Cont> = Vec::new();
         for c in &needed {
-            if self.entry_for(c).is_none() && !missing.iter().any(|m| path_key(&m.path()) == path_key(&c.path())) {
+            if self.entry_for(c).is_none()
+                && !missing
+                    .iter()
+                    .any(|m| path_key(&m.path()) == path_key(&c.path()))
+            {
                 missing.push(c.clone());
             }
         }
         if missing.is_empty() {
-            return Gather::Ready(needed.iter().map(|c| self.entry_for(c).expect("checked above")).collect());
+            return Gather::Ready(
+                needed
+                    .iter()
+                    .map(|c| self.entry_for(c).expect("checked above"))
+                    .collect(),
+            );
         }
         // Already fetched once, but no entry came back: not a trampoline
         // (AUDIT 3 #9). The bookkeeping travels in the options group.
         let fetched = self.fetched_paths();
-        if let Some(c) = missing.iter().find(|c| fetched.contains(&path_key(&c.path()))) {
+        if let Some(c) = missing
+            .iter()
+            .find(|c| fetched.contains(&path_key(&c.path())))
+        {
             let msg = format!(
                 "announce: `{}` was fetched but did not provide a definition; is it an `#[announce]` trampoline?",
                 c.to_token_stream()
@@ -654,7 +689,10 @@ impl Input {
         let mut options: Vec<TokenStream> = self.option_items();
         let paths = missing.iter().map(|c| c.path());
         options.push(quote! { __announce_fetched(#(#paths),*) });
-        let list: ContList = missing.into_iter().chain(self.list.0.iter().cloned()).collect();
+        let list: ContList = missing
+            .into_iter()
+            .chain(self.list.0.iter().cloned())
+            .collect();
         let (entries, rest) = (&self.entries, &self.rest);
         let opts = quote! { #(#options),* };
         Gather::Fetch(list.invoke_with_options(Some(&opts), quote! { #(#entries)* #rest }))
@@ -910,9 +948,15 @@ mod kv_tests {
         let m: Meta = syn::parse_quote!(lib::info(ty = ::std::collections::HashMap<u8, Vec<u8>>, out = fn() -> u8, xs = [A, b::C], on));
         let mut kv = m.kv().unwrap();
         let ty: syn::Type = kv.require("ty").unwrap();
-        assert_eq!(ty.to_token_stream().to_string().replace(' ', ""), "::std::collections::HashMap<u8,Vec<u8>>");
+        assert_eq!(
+            ty.to_token_stream().to_string().replace(' ', ""),
+            "::std::collections::HashMap<u8,Vec<u8>>"
+        );
         let out: syn::Type = kv.require("out").unwrap();
-        assert_eq!(out.to_token_stream().to_string().replace(' ', ""), "fn()->u8");
+        assert_eq!(
+            out.to_token_stream().to_string().replace(' ', ""),
+            "fn()->u8"
+        );
         let xs: Vec<Path> = kv.list("xs").unwrap().unwrap();
         assert_eq!(xs.len(), 2);
         assert!(kv.flag("on").unwrap());
@@ -921,10 +965,18 @@ mod kv_tests {
 
         let mut kv: KvArgs = syn::parse_quote!(a = 1, b = 2);
         let _: syn::LitInt = kv.require("a").unwrap();
-        assert!(kv.finish().unwrap_err().to_string().contains("unknown key `b`"));
+        assert!(kv
+            .finish()
+            .unwrap_err()
+            .to_string()
+            .contains("unknown key `b`"));
         assert!(syn::parse2::<KvArgs>(template_quote::quote!(a = 1, a = 2)).is_err());
         let mut kv: KvArgs = syn::parse_quote!();
-        assert!(kv.require::<syn::Type>("x").unwrap_err().to_string().contains("missing `x`"));
+        assert!(kv
+            .require::<syn::Type>("x")
+            .unwrap_err()
+            .to_string()
+            .contains("missing `x`"));
     }
 
     #[cfg(feature = "type-leak")]
@@ -940,7 +992,10 @@ mod kv_tests {
         };
         let order = || {
             let (r, _) = analyse();
-            r.types().iter().map(|t| t.to_token_stream().to_string()).collect::<Vec<_>>()
+            r.types()
+                .iter()
+                .map(|t| t.to_token_stream().to_string())
+                .collect::<Vec<_>>()
         };
         let first = order();
         assert_eq!(first.len(), 6);
@@ -952,12 +1007,20 @@ mod kv_tests {
         }
         let (r, context) = analyse();
         let mut it: syn::Item = syn::Item::Struct(item.clone());
-        r.visit_item_mut(context, &mut it, |_, i| syn::parse_str(&format!("T{}", i)).unwrap());
+        r.visit_item_mut(context, &mut it, |_, i| {
+            syn::parse_str(&format!("T{}", i)).unwrap()
+        });
         let s = it.to_token_stream().to_string();
-        assert!(s.contains("a : T3") && s.contains("b : T0") && s.contains("f : T2"), "{}", s);
+        assert!(
+            s.contains("a : T3") && s.contains("b : T0") && s.contains("f : T2"),
+            "{}",
+            s
+        );
         let ty: syn::Type = syn::parse_quote!(Qux);
         assert_eq!(r.index_of(&ty), Some(5));
-        let ty = r.expand(context, ty, |_, i| syn::parse_str(&format!("T{}", i)).unwrap());
+        let ty = r.expand(context, ty, |_, i| {
+            syn::parse_str(&format!("T{}", i)).unwrap()
+        });
         assert_eq!(ty.to_token_stream().to_string(), "T5");
     }
 
@@ -971,12 +1034,22 @@ mod kv_tests {
         let mut l = type_leak::Leaker::new();
         let context = l.intern_struct(&item, true).unwrap();
         let r = crate::leak::StableReferrer::new(l.finish());
-        let types: Vec<String> = r.types().iter().map(|t| t.to_token_stream().to_string()).collect();
+        let types: Vec<String> = r
+            .types()
+            .iter()
+            .map(|t| t.to_token_stream().to_string())
+            .collect();
         assert_eq!(types, ["Bar", "Foo"]);
         let mut it = syn::Item::Struct(item);
-        r.visit_item_mut(context, &mut it, |_, i| syn::parse_str(&format!("T{}", i)).unwrap());
+        r.visit_item_mut(context, &mut it, |_, i| {
+            syn::parse_str(&format!("T{}", i)).unwrap()
+        });
         let s = it.to_token_stream().to_string();
-        assert!(s.contains("a : T1") && s.contains("b : :: other :: X") && s.contains("c : T0"), "{}", s);
+        assert!(
+            s.contains("a : T1") && s.contains("b : :: other :: X") && s.contains("c : T0"),
+            "{}",
+            s
+        );
     }
 }
 
@@ -993,14 +1066,28 @@ mod options_tests {
         };
         assert!(input.has_option("type_leak"));
         let fwd = input.forward().unwrap().to_string().replace(' ', "");
-        assert!(fwd.starts_with("next!{(type_leak)[next!]a::F!=>"), "{}", fwd);
-        let fetch = input.fetch([Cont::bang(syn::parse_quote!(g::G))]).to_string().replace(' ', "");
-        assert!(fetch.starts_with("g::G!{(type_leak)[g::G!,me!,next!]"), "{}", fetch);
+        assert!(
+            fwd.starts_with("next!{(type_leak)[next!]a::F!=>"),
+            "{}",
+            fwd
+        );
+        let fetch = input
+            .fetch([Cont::bang(syn::parse_quote!(g::G))])
+            .to_string()
+            .replace(' ', "");
+        assert!(
+            fetch.starts_with("g::G!{(type_leak)[g::G!,me!,next!]"),
+            "{}",
+            fetch
+        );
         let tl = input.entries[0].type_leak().unwrap().unwrap();
         assert_eq!(tl.types.len(), 2);
         assert_eq!(tl.id.base10_digits(), "7");
         let proj = tl.projection(1, &syn::parse_quote!((u8,)));
-        assert_eq!(proj.to_string().replace(' ', ""), "<()as$crate::A<7u64,1usize,(u8,)>>::Type");
+        assert_eq!(
+            proj.to_string().replace(' ', ""),
+            "<()as$crate::A<7u64,1usize,(u8,)>>::Type"
+        );
         let plain: Input = syn::parse_quote! { [me!] a::F! => [] { struct F; } };
         assert!(!plain.has_option("type_leak"));
         assert!(plain.entries[0].type_leak().unwrap().is_none());
@@ -1014,7 +1101,11 @@ mod kv_balance_tests {
     #[test]
     fn unbalanced_angle_is_an_error() {
         let e = syn::parse2::<KvArgs>(template_quote::quote!(a = x < y, b = 1)).unwrap_err();
-        assert!(e.to_string().contains("unbalanced `<` in the value of `a`"), "{}", e);
+        assert!(
+            e.to_string().contains("unbalanced `<` in the value of `a`"),
+            "{}",
+            e
+        );
         assert!(syn::parse2::<KvArgs>(template_quote::quote!(a = 1 << 2, b = 3)).is_err());
         let mut kv: KvArgs = syn::parse_quote!(a = (x < y), b = 1, f = fn() -> u8);
         assert!(kv.tokens("a").is_some() && kv.tokens("b").is_some() && kv.tokens("f").is_some());
@@ -1028,13 +1119,22 @@ mod low_audit_tests {
 
     #[test]
     fn cont_equality_ignores_dummy_name_and_generics() {
-        let a: Cont = syn::parse_quote!(#[derive(p::D)] N1);
-        let b: Cont = syn::parse_quote!(#[derive(p::D)] N2);
+        let a: Cont = syn::parse_quote!(
+            #[derive(p::D)]
+            N1
+        );
+        let b: Cont = syn::parse_quote!(
+            #[derive(p::D)]
+            N2
+        );
         assert_eq!(a, b);
         let c = Cont::Bang(syn::parse_quote!(a::E<T>));
         assert_eq!(c.to_token_stream().to_string().replace(' ', ""), "a::E!");
         let d: Cont = syn::parse_quote!(#[derive(x::A, y::B)]);
-        assert_eq!(d.path().to_token_stream().to_string().replace(' ', ""), "x::A");
+        assert_eq!(
+            d.path().to_token_stream().to_string().replace(' ', ""),
+            "x::A"
+        );
     }
 
     #[test]
@@ -1051,5 +1151,557 @@ mod low_audit_tests {
             Gather::Fetch(ts) => assert!(ts.to_string().contains("which is the callback itself")),
             Gather::Ready(_) => panic!(),
         }
+    }
+}
+
+#[cfg(test)]
+mod kv_error_tests {
+    use super::*;
+
+    fn parse(ts: TokenStream) -> Result<KvArgs> {
+        syn::parse2(ts)
+    }
+
+    #[test]
+    fn missing_value_after_equals_is_an_error() {
+        let e = parse(template_quote::quote!(a =)).unwrap_err().to_string();
+        assert_eq!(e, "missing value for `a`");
+        let e = parse(template_quote::quote!(a = , b = 1))
+            .unwrap_err()
+            .to_string();
+        assert_eq!(e, "missing value for `a`");
+        let e = parse(template_quote::quote!(ok = 1, b =))
+            .unwrap_err()
+            .to_string();
+        assert_eq!(e, "missing value for `b`");
+    }
+
+    #[test]
+    fn get_on_a_flag_key_needs_a_value() {
+        let mut kv: KvArgs = syn::parse_quote!(f, a = 1);
+        let e = kv.get::<syn::Type>("f").unwrap_err().to_string();
+        assert_eq!(e, "`f` needs a value");
+        // `require` reports the same error, not "missing".
+        let mut kv: KvArgs = syn::parse_quote!(f);
+        assert_eq!(
+            kv.require::<syn::Type>("f").unwrap_err().to_string(),
+            "`f` needs a value"
+        );
+    }
+
+    #[test]
+    fn list_on_a_flag_key_needs_a_bracketed_value() {
+        let mut kv: KvArgs = syn::parse_quote!(f, a = 1);
+        let e = kv.list::<syn::Path>("f").unwrap_err().to_string();
+        assert_eq!(e, "`f` needs a `[..]` value");
+    }
+
+    #[test]
+    fn flag_on_a_key_with_a_value_takes_no_value() {
+        let mut kv: KvArgs = syn::parse_quote!(a = 1);
+        let e = kv.flag("a").unwrap_err().to_string();
+        assert_eq!(e, "`a` takes no value");
+        // An absent flag is false and does not consume anything else.
+        let mut kv: KvArgs = syn::parse_quote!(b = 1);
+        assert!(!kv.flag("a").unwrap());
+        assert!(kv.tokens("b").is_some());
+    }
+
+    #[test]
+    fn list_on_a_non_bracketed_value_is_an_error() {
+        let mut kv: KvArgs = syn::parse_quote!(a = 1);
+        let e = kv.list::<syn::LitInt>("a").unwrap_err().to_string();
+        assert!(e.contains("expected square brackets"), "{}", e);
+        let mut kv: KvArgs = syn::parse_quote!(a = (x, y));
+        let e = kv.list::<syn::Path>("a").unwrap_err().to_string();
+        assert!(e.contains("expected square brackets"), "{}", e);
+        let mut kv: KvArgs = syn::parse_quote!(a = [1, 2] extra);
+        assert!(kv.list::<syn::LitInt>("a").is_err());
+    }
+
+    #[test]
+    fn list_element_and_value_parse_errors_surface() {
+        let mut kv: KvArgs = syn::parse_quote!(a = [x, 1]);
+        assert!(kv.list::<syn::Path>("a").is_err());
+        let mut kv: KvArgs = syn::parse_quote!(a = 1);
+        assert!(kv.get::<syn::Path>("a").is_err());
+    }
+
+    #[test]
+    fn list_accepts_empty_and_trailing_comma() {
+        let mut kv: KvArgs = syn::parse_quote!(a = [], b = [x::Y, z,]);
+        assert!(kv.list::<Path>("a").unwrap().unwrap().is_empty());
+        assert_eq!(kv.list::<Path>("b").unwrap().unwrap().len(), 2);
+        kv.finish().unwrap();
+    }
+
+    #[test]
+    fn taken_keys_are_gone_and_finish_names_the_first_leftover() {
+        let mut kv: KvArgs = syn::parse_quote!(a = 1, b, c = 2);
+        assert!(kv.tokens("a").is_some());
+        assert!(kv.tokens("a").is_none());
+        assert_eq!(kv.finish().unwrap_err().to_string(), "unknown key `b`");
+    }
+
+    #[test]
+    fn duplicate_keys_and_keywords() {
+        let e = parse(template_quote::quote!(a, a)).unwrap_err().to_string();
+        assert_eq!(e, "duplicate key `a`");
+        // Keywords are fine as keys.
+        let mut kv: KvArgs = syn::parse_quote!(type = u8, crate = a::b, fn);
+        assert!(kv.get::<syn::Type>("type").unwrap().is_some());
+        assert!(kv.get::<Path>("crate").unwrap().is_some());
+        assert!(kv.flag("fn").unwrap());
+        kv.finish().unwrap();
+    }
+
+    #[test]
+    fn values_run_to_the_next_top_level_comma() {
+        // `1 b = 2` is all one value; two flags need a comma between them.
+        let mut kv = parse(template_quote::quote!(a = 1 b = 2)).unwrap();
+        assert_eq!(kv.tokens("a").unwrap().to_string().replace(' ', ""), "1b=2");
+        assert!(parse(template_quote::quote!(a b)).is_err());
+    }
+
+    #[test]
+    fn equality_comparison_is_a_flag_followed_by_junk() {
+        // `a == b` is not `a = (= b)`: `==` ends neither value nor key.
+        assert!(parse(template_quote::quote!(a == b)).is_err());
+    }
+}
+
+#[cfg(test)]
+mod gap_tests {
+    use super::*;
+    use proc_macro2::{Punct, Spacing};
+
+    fn s(ts: impl ToTokens) -> String {
+        ts.to_token_stream()
+            .to_string()
+            .split_whitespace()
+            .collect()
+    }
+
+    fn mk_dollar() -> Punct {
+        Punct::new('$', Spacing::Alone)
+    }
+
+    #[test]
+    fn check_trait_asserts_the_dyn_trait_is_announced() {
+        let out = s(check_trait(
+            &syn::parse_quote!(::announce),
+            &syn::parse_quote!(my::Tr),
+        ));
+        assert!(out.contains("dynmy::Tr"), "{}", out);
+        assert!(out.contains("::announce::Announce"), "{}", out);
+        assert!(out.contains("?::core::marker::Sized"), "{}", out);
+        assert!(out.starts_with("const_:()="), "{}", out);
+        // `check_trait` is `check_type` of the `dyn` type.
+        let direct = s(check_type(
+            &syn::parse_quote!(::announce),
+            &syn::parse_quote!(dyn my::Tr),
+        ));
+        assert_eq!(out, direct);
+    }
+
+    #[test]
+    fn check_type_uses_the_given_krate_path() {
+        let out = s(check_type(
+            &syn::parse_quote!(::renamed),
+            &syn::parse_quote!(Vec<u8>),
+        ));
+        assert!(out.contains("::renamed::Announce"), "{}", out);
+        assert!(out.contains("__announce_chk::<Vec<u8>>"), "{}", out);
+    }
+
+    #[test]
+    fn meta_name_values_parse_expression_values() {
+        let m: Meta = syn::parse_quote!(lib::info(a = 1, b = "x", c = 1 + 2));
+        let nv = m.name_values().unwrap();
+        assert_eq!(nv.len(), 3);
+        assert_eq!(s(&nv[0].path), "a");
+        assert_eq!(s(&nv[1].value), "\"x\"");
+        assert_eq!(s(&nv[2].value), "1+2");
+        // No args: empty list.
+        let m: Meta = syn::parse_quote!(lib::info);
+        assert!(m.name_values().unwrap().is_empty());
+        // A flag, or a non-expression value, is an error; `kv` accepts them.
+        let m: Meta = syn::parse_quote!(lib::info(a = 1, on));
+        assert!(m.name_values().is_err());
+        let m: Meta = syn::parse_quote!(lib::info(a = 1, on));
+        assert!(m.kv().is_ok());
+        // Array expressions are expressions; types are not.
+        let m: Meta = syn::parse_quote!(lib::info(xs = [A, B]));
+        assert_eq!(m.name_values().unwrap().len(), 1);
+        let m: Meta = syn::parse_quote!(lib::info(ty = Vec<u8, A>));
+        assert!(m.name_values().is_err());
+        assert!(m.kv().is_ok());
+    }
+
+    #[test]
+    fn meta_args_default_to_empty() {
+        let m: Meta = syn::parse_quote!(lib::info);
+        assert!(m.args.is_none());
+        assert!(m.kv().unwrap().finish().is_ok());
+        assert_eq!(s(&m), "lib::info");
+        let m: Meta = syn::parse_quote!(lib::info(1, 2));
+        assert_eq!(s(&m), "lib::info(1,2)");
+    }
+
+    fn hash_of<T: std::hash::Hash>(t: &T) -> u64 {
+        use std::hash::Hasher;
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        t.hash(&mut h);
+        h.finish()
+    }
+
+    #[test]
+    fn cont_hash_agrees_with_eq() {
+        let a: Cont = syn::parse_quote!(
+            #[derive(p::D)]
+            N1
+        );
+        let b: Cont = syn::parse_quote!(
+            #[derive(p::D)]
+            N2
+        );
+        let c: Cont = syn::parse_quote!(#[derive(p::D)]);
+        assert_eq!(a, b);
+        assert_eq!(hash_of(&a), hash_of(&b));
+        assert_eq!(hash_of(&a), hash_of(&c));
+        let bang = Cont::bang(syn::parse_quote!(p::D));
+        let bang_generic = Cont::Bang(syn::parse_quote!(p::D<T>));
+        assert_eq!(bang, bang_generic);
+        assert_eq!(hash_of(&bang), hash_of(&bang_generic));
+        // Different continuations differ, and a derive is not the bang of the same path.
+        let other: Cont = syn::parse_quote!(
+            #[derive(p::E)]
+            N1
+        );
+        assert_ne!(a, other);
+        assert_ne!(a, bang);
+        let set: std::collections::HashSet<Cont> = [a.clone(), b, c, other].into_iter().collect();
+        assert_eq!(set.len(), 2);
+        assert!(set.contains(&a));
+    }
+
+    #[test]
+    fn cont_path_of_attribute_and_derive() {
+        let c: Cont = syn::parse_quote!(
+            #[my::attr(x, y)]
+            N
+        );
+        assert_eq!(s(c.path()), "my::attr");
+        let d = Cont::derive(syn::parse_quote!(::p::D));
+        assert_eq!(s(d.path()), "::p::D");
+        assert_eq!(s(&d), "#[derive(::p::D)]");
+        // A `derive` without a usable path falls back to the attribute path.
+        let e: Cont = syn::parse_quote!(
+            #[derive()]
+            N
+        );
+        assert_eq!(s(e.path()), "derive");
+    }
+
+    #[test]
+    fn input_skips_a_leading_dollar_prefix() {
+        let dollar = mk_dollar();
+        let ts = template_quote::quote! {
+            @ __announce_dollar { #dollar }
+            (opt) [cb!, n!]
+            a::F! => [x::check(1)] { struct S; }
+            (rest)
+        };
+        let input: Input = syn::parse2(ts).unwrap();
+        assert_eq!(s(input.options.as_ref().unwrap()), "opt");
+        assert!(input.has_option("opt"));
+        assert_eq!(input.list.0.len(), 2);
+        assert_eq!(s(&input.list), "[cb!,n!]");
+        assert_eq!(input.entries.len(), 1);
+        assert_eq!(s(input.entries[0].key.path()), "a::F");
+        assert_eq!(s(&input.entries[0].meta[0]), "x::check(1)");
+        assert_eq!(s(&input.rest), "(rest)");
+        // The prefix is dropped on `forward` and `fetch`.
+        let out = s(input.forward().unwrap());
+        assert!(!out.contains("__announce_dollar"), "{}", out);
+    }
+
+    #[test]
+    fn input_dollar_prefix_without_options() {
+        let dollar = mk_dollar();
+        let ts = template_quote::quote! { @ __announce_dollar { #dollar } [cb!] };
+        let input: Input = syn::parse2(ts).unwrap();
+        assert!(input.options.is_none());
+        assert_eq!(input.list.0.len(), 1);
+        assert!(input.entries.is_empty());
+        assert!(input.rest.is_empty());
+    }
+
+    #[test]
+    fn input_rejects_other_prefixes() {
+        assert!(syn::parse2::<Input>(template_quote::quote! { @ other { x } [cb!] }).is_err());
+        assert!(syn::parse2::<Input>(template_quote::quote! { @ [cb!] }).is_err());
+        // The prefix alone is not an input.
+        let dollar = mk_dollar();
+        let ts = template_quote::quote! { @ __announce_dollar { #dollar } };
+        assert!(syn::parse2::<Input>(ts).is_err());
+    }
+
+    #[test]
+    fn invoke_with_an_empty_list_is_a_compile_error() {
+        let out = s(ContList::default().invoke(template_quote::quote!(x y)));
+        assert_eq!(out, "compile_error!{\"announce:emptycontinuationlist\"}");
+        let opts = template_quote::quote!(expr);
+        let out = s(ContList::default().invoke_with_options(Some(&opts), TokenStream::new()));
+        assert!(out.contains("emptycontinuationlist"), "{}", out);
+    }
+
+    #[test]
+    fn invoke_in_expression_position_refuses_the_derive_route() {
+        let list: ContList = [
+            Cont::derive(syn::parse_quote!(p::D)),
+            Cont::bang(syn::parse_quote!(cb)),
+        ]
+        .into_iter()
+        .collect();
+        let opts = template_quote::quote!(expr);
+        let out = s(list.invoke_with_options(Some(&opts), template_quote::quote!(body)));
+        assert!(out.starts_with("compile_error!{"), "{}", out);
+        assert!(out.contains("cannotbeusedinexpressionposition"), "{}", out);
+        assert!(out.contains("(`(expr)`)"), "{}", out);
+        assert!(!out.contains("__AnnouncePayload"), "{}", out);
+        // The same with `expr` leading other options. (Only a *leading* `expr` is
+        // the position option for the generated trampolines; this helper looks
+        // for `expr` anywhere. That difference is AUDIT Part 4 #11, not decided
+        // here, so no test pins how a later `expr` is read.)
+        let opts = template_quote::quote!(expr, type_leak);
+        let out = s(list.invoke_with_options(Some(&opts), TokenStream::new()));
+        assert!(out.contains("expressionposition"), "{}", out);
+    }
+
+    #[test]
+    fn expression_option_is_fine_for_a_bang_head_and_other_options_for_derives() {
+        let bang: ContList = [Cont::bang(syn::parse_quote!(p::cb))].into_iter().collect();
+        let opts = template_quote::quote!(expr);
+        let out = s(bang.invoke_with_options(Some(&opts), template_quote::quote!(body)));
+        assert_eq!(out, "p::cb!{(expr)[p::cb!]body}");
+        let derive: ContList = [Cont::derive(syn::parse_quote!(p::D))]
+            .into_iter()
+            .collect();
+        let opts = template_quote::quote!(type_leak);
+        let out = s(derive.invoke_with_options(Some(&opts), template_quote::quote!(body)));
+        assert!(out.contains("__AnnouncePayload"), "{}", out);
+        assert!(
+            out.contains("stringify!{(type_leak)[#[derive(p::D)]__AnnounceT_"),
+            "{}",
+            out
+        );
+    }
+
+    #[test]
+    fn name_dummies_keeps_existing_names_and_gives_distinct_new_ones() {
+        let mut list: ContList = [
+            Cont::derive(syn::parse_quote!(p::A)),
+            Cont::derive(syn::parse_quote!(p::B)),
+            syn::parse_quote!(
+                #[derive(p::C)]
+                Fixed
+            ),
+            Cont::bang(syn::parse_quote!(cb)),
+        ]
+        .into_iter()
+        .collect();
+        list.name_dummies();
+        let names: Vec<String> = list
+            .0
+            .iter()
+            .filter_map(|c| match c {
+                Cont::Attr { name: Some(n), .. } => Some(n.to_string()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(names.len(), 3);
+        assert_eq!(names[2], "Fixed");
+        assert!(names[0].starts_with("__AnnounceT_") && names[1].starts_with("__AnnounceT_"));
+        assert_ne!(names[0], names[1]);
+        // `name_dummies` is idempotent.
+        let before = s(&list);
+        list.name_dummies();
+        assert_eq!(s(&list), before);
+    }
+
+    #[test]
+    fn redirect_ignores_ordinary_items() {
+        let target: Path = syn::parse_quote!(::x::Y);
+        for item in [
+            template_quote::quote! { struct S; },
+            template_quote::quote! { enum E { A, B } },
+            template_quote::quote! { enum E { __AnnouncePayload } },
+            template_quote::quote! { enum E { __AnnouncePayload = 1 } },
+            template_quote::quote! { enum E { __AnnouncePayload = (1, 0).1 } },
+            template_quote::quote! { enum E { __AnnouncePayload = (other!{ x }, 0).1 } },
+            template_quote::quote! { enum E { __AnnouncePayload = (stringify!{ x }, 0).1, B } },
+            template_quote::quote! { enum E { Other = (stringify!{ x }, 0).1 } },
+            template_quote::quote! { fn f() {} },
+        ] {
+            assert!(payload(item.clone()).is_none(), "{}", item);
+            assert!(redirect(item.clone(), &target).is_none(), "{}", item);
+        }
+    }
+
+    #[test]
+    fn redirect_wraps_the_payload_with_the_dollar_prefix() {
+        let list: ContList = [
+            Cont::derive(syn::parse_quote!(p::D)),
+            Cont::bang(syn::parse_quote!(cb)),
+        ]
+        .into_iter()
+        .collect();
+        let dummy = list.invoke(template_quote::quote!(body));
+        let out = redirect(dummy.clone(), &syn::parse_quote!(::x::Y)).unwrap();
+        let out_s = s(&out);
+        assert!(
+            out_s.starts_with("::x::Y!{@__announce_dollar{$}[#[derive(p::D)]__AnnounceT_"),
+            "{}",
+            out_s
+        );
+        assert!(out_s.ends_with("cb!]body}"), "{}", out_s);
+        // The `$` is a real punct, not a string.
+        let has_dollar = out.into_iter().any(|tt| match tt {
+            proc_macro2::TokenTree::Group(g) => g
+                .stream()
+                .into_iter()
+                .any(|t| matches!(t, proc_macro2::TokenTree::Group(g2) if g2.stream().into_iter().any(|x| matches!(x, proc_macro2::TokenTree::Punct(p) if p.as_char() == '$')))),
+            _ => false,
+        });
+        assert!(has_dollar);
+        // What `redirect` produces parses as an `Input` (the prefix is skipped).
+        let input: Input = syn::parse2(
+            match redirect(dummy, &syn::parse_quote!(::x::Y))
+                .unwrap()
+                .into_iter()
+                .last()
+            {
+                Some(proc_macro2::TokenTree::Group(g)) => g.stream(),
+                other => panic!("{:?}", other),
+            },
+        )
+        .unwrap();
+        assert_eq!(input.list.0.len(), 2);
+        assert_eq!(s(input.rest), "body");
+    }
+
+    fn leak() -> TypeLeak {
+        TypeLeak {
+            repeater: template_quote::quote!(::my::R),
+            id: syn::parse_quote!(7u64),
+            generics: vec![syn::parse_quote!(()), syn::parse_quote!((T,))],
+            types: vec![syn::parse_quote!(Local), syn::parse_quote!(Wrap<T>)],
+        }
+    }
+
+    #[test]
+    fn type_leak_lookup_and_projection() {
+        let tl = leak();
+        assert_eq!(tl.lookup(&syn::parse_quote!(Local)), Some(0));
+        assert_eq!(tl.lookup(&syn::parse_quote!(Wrap<T>)), Some(1));
+        assert_eq!(tl.lookup(&syn::parse_quote!(Wrap<U>)), None);
+        assert_eq!(tl.lookup(&syn::parse_quote!(T)), None);
+        assert_eq!(
+            s(tl.projection(1, &syn::parse_quote!((u8,)))),
+            "<()as::my::R<7u64,1usize,(u8,)>>::Type"
+        );
+        assert_eq!(
+            s(tl.projection(0, &syn::parse_quote!(()))),
+            "<()as::my::R<7u64,0usize,()>>::Type"
+        );
+    }
+
+    #[test]
+    fn type_leak_apply_rewrites_listed_types_only() {
+        let tl = leak();
+        let mut it: syn::Item = syn::parse_quote! {
+            struct S<T> { a: Local, b: Wrap<T>, c: Vec<Local>, d: u8, e: T }
+        };
+        tl.apply(&mut it);
+        let out = s(&it);
+        let local = "<()as::my::R<7u64,0usize,()>>::Type";
+        let wrap = "<()as::my::R<7u64,1usize,(T,)>>::Type";
+        assert!(out.contains(&format!("a:{}", local)), "{}", out);
+        assert!(out.contains(&format!("b:{}", wrap)), "{}", out);
+        // An unlisted outer type keeps its shape; listed types inside it are rewritten.
+        assert!(out.contains(&format!("c:Vec<{}>", local)), "{}", out);
+        assert!(out.contains("d:u8") && out.contains("e:T}"), "{}", out);
+    }
+
+    #[test]
+    fn type_leak_apply_with_missing_generics_uses_unit() {
+        let mut tl = leak();
+        tl.generics.clear();
+        let mut it: syn::Item = syn::parse_quote! { struct S { a: Wrap<T> } };
+        tl.apply(&mut it);
+        assert!(
+            s(&it).contains("<()as::my::R<7u64,1usize,()>>::Type"),
+            "{}",
+            s(&it)
+        );
+    }
+
+    #[test]
+    fn type_leak_apply_respects_shadowing_generics() {
+        let tl = TypeLeak {
+            repeater: template_quote::quote!(::my::R),
+            id: syn::parse_quote!(7u64),
+            generics: vec![syn::parse_quote!(())],
+            types: vec![syn::parse_quote!(T)],
+        };
+        let proj = "<()as::my::R<7u64,0usize,()>>::Type";
+
+        // Free fn: its own `T` shadows the interned `T`.
+        let mut it: syn::Item = syn::parse_quote! { fn f<T>(x: T) -> T { let y: T = x; y } };
+        tl.apply(&mut it);
+        let out = s(&it);
+        assert!(!out.contains(proj), "{}", out);
+        assert_eq!(out, "fnf<T>(x:T)->T{lety:T=x;y}");
+
+        // Trait fn: only the generic method is shadowed, and only inside it.
+        let mut it: syn::Item = syn::parse_quote! {
+            trait Tr { fn m<T>(x: T) -> T; fn n(x: T) -> T; }
+        };
+        tl.apply(&mut it);
+        let out = s(&it);
+        assert!(out.contains("fnm<T>(x:T)->T;"), "{}", out);
+        assert!(
+            out.contains(&format!("fnn(x:{})->{};", proj, proj)),
+            "{}",
+            out
+        );
+
+        // Impl fn.
+        let mut it: syn::Item = syn::parse_quote! {
+            impl Tr for S { fn m<T>(x: T) -> T { x } fn n(x: T) -> T { x } }
+        };
+        tl.apply(&mut it);
+        let out = s(&it);
+        assert!(out.contains("fnm<T>(x:T)->T{x}"), "{}", out);
+        assert!(
+            out.contains(&format!("fnn(x:{})->{}{{x}}", proj, proj)),
+            "{}",
+            out
+        );
+
+        // A lifetime or const parameter of the same text does not shadow a type.
+        let mut it: syn::Item = syn::parse_quote! { fn f<'a>(x: T) {} };
+        tl.apply(&mut it);
+        assert!(s(&it).contains(&format!("x:{}", proj)), "{}", s(&it));
+
+        // The shadow ends with the fn: the next item sees `T` again.
+        let mut it: syn::Item = syn::parse_quote! {
+            mod m { fn f<T>(x: T) {} struct S { a: T } }
+        };
+        tl.apply(&mut it);
+        let out = s(&it);
+        assert!(out.contains("fnf<T>(x:T){}"), "{}", out);
+        assert!(out.contains(&format!("structS{{a:{}}}", proj)), "{}", out);
     }
 }

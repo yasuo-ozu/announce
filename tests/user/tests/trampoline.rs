@@ -93,7 +93,11 @@ mod sig {
 fn signature_only_transformer_strips_bodies() {
     let out = norm(sig::OUT);
     assert!(out.contains("fnrequired(&self)->u32;"), "{}", out);
-    assert!(out.contains("fnbody(&self)->u32{::core::unimplemented!()}"), "{}", out);
+    assert!(
+        out.contains("fnbody(&self)->u32{::core::unimplemented!()}"),
+        "{}",
+        out
+    );
     assert!(!out.contains("42"), "{}", out);
     // Re-emitted module: the placeholder panics, the `impl Trait` fn keeps its body.
     assert_eq!(sig::module::sig_mod::opaque().to_string(), "8");
@@ -277,10 +281,22 @@ fn type_leak_info_lets_callbacks_resolve_local_types() {
     use announce_test_defs::leaky::inner::Local;
     // Original payload plus type_leak(..) META.
     let raw = norm(leaked::raw::OUT);
-    assert!(raw.contains("{pubstructLeaky<T>{puba:Local,pubb:Vec<T>,pubc:u8"), "{}", raw);
-    assert!(raw.contains("type_leak(repeater=$crate::leaky::Repeater,id="), "{}", raw);
+    assert!(
+        raw.contains("{pubstructLeaky<T>{puba:Local,pubb:Vec<T>,pubc:u8"),
+        "{}",
+        raw
+    );
+    assert!(
+        raw.contains("type_leak(repeater=$crate::leaky::Repeater,id="),
+        "{}",
+        raw
+    );
     // `Local` is not in scope in `leaked::s`; `TypeLeak::apply` resolves it.
-    let v = leaked::s::Leaky::<u32> { a: Local(1), b: vec![2], c: 3 };
+    let v = leaked::s::Leaky::<u32> {
+        a: Local(1),
+        b: vec![2],
+        c: 3,
+    };
     assert_eq!(v.a, Local(1));
     struct X;
     impl leaked::t::LeakTrait for X {
@@ -307,7 +323,9 @@ mod crate_paths2 {
 
 #[test]
 fn crate_after_single_colon_and_dollar_crate() {
-    let f = crate_paths2::Field { a: ::announce_test_defs::crate_paths2::Foo(1) };
+    let f = crate_paths2::Field {
+        a: ::announce_test_defs::crate_paths2::Foo(1),
+    };
     assert_eq!(f.a.0, 1);
     let out = norm(crate_paths2::OUT);
     assert!(out.contains("$crate::crate_paths2::Foo(9)"), "{}", out);
@@ -363,11 +381,24 @@ fn chains_of_dollar_payloads_and_dollar_rest() {
     assert_eq!(two_dollar_payloads::with_macro::six(), 6);
     assert_eq!(two_dollar_payloads::with_macro2::twenty_four(), 24);
     let rest = norm(two_dollar_payloads::rest::OUT);
-    assert!(rest.ends_with("macro_rules!in_rest{($($x:tt)*)=>{$($x)*};}"), "{}", rest);
-    let kinds: Vec<&str> = two_dollar_payloads::via_summary::S.iter().map(|r| r.2).collect();
+    assert!(
+        rest.ends_with("macro_rules!in_rest{($($x:tt)*)=>{$($x)*};}"),
+        "{}",
+        rest
+    );
+    let kinds: Vec<&str> = two_dollar_payloads::via_summary::S
+        .iter()
+        .map(|r| r.2)
+        .collect();
     assert_eq!(kinds, ["mod with_macro", "mod with_macro2"]);
-    let kinds: Vec<&str> = two_dollar_payloads::via_derive::S.iter().map(|r| r.2).collect();
-    assert_eq!(kinds, ["mod with_macro2", "trait Parse (1 items)", "mod with_macro"]);
+    let kinds: Vec<&str> = two_dollar_payloads::via_derive::S
+        .iter()
+        .map(|r| r.2)
+        .collect();
+    assert_eq!(
+        kinds,
+        ["mod with_macro2", "trait Parse (1 items)", "mod with_macro"]
+    );
 }
 
 mod raw_ident {
@@ -376,7 +407,11 @@ mod raw_ident {
 
 #[test]
 fn raw_identifier_items_work() {
-    assert!(norm(raw_ident::OUT).contains("pubstructr#match;"), "{}", raw_ident::OUT);
+    assert!(
+        norm(raw_ident::OUT).contains("pubstructr#match;"),
+        "{}",
+        raw_ident::OUT
+    );
 }
 
 // Positions: expression (with `(expr)` for `$`-payloads) and type.
@@ -393,15 +428,22 @@ macro_rules! expr_two {
     };
 }
 macro_rules! ty_cb {
-    ([$($l:tt)*] $($t:tt)*) => { u32 };
+    ([$($l:tt)*] $($t:tt)*) => {
+        u32
+    };
 }
-type FromTypePosition = ::announce_test_defs::kinds::Named! { [::announce_test_defs::kinds::Named!, ty_cb!] };
+type FromTypePosition =
+    ::announce_test_defs::kinds::Named! { [::announce_test_defs::kinds::Named!, ty_cb!] };
 
 #[test]
 fn expression_and_type_positions() {
     // `$`-payload in expression position needs `(expr)`.
     let m: &str = ::announce_test_defs::kinds::with_macro! { (expr) [::announce_test_defs::kinds::with_macro!, expr_cb!] };
-    assert!(norm(m).contains("macro_rules!sum{($($x:expr),*)=>{0$(+$x)*};}"), "{}", m);
+    assert!(
+        norm(m).contains("macro_rules!sum{($($x:expr),*)=>{0$(+$x)*};}"),
+        "{}",
+        m
+    );
     // Two `$`-payloads in one chain.
     let both = ::announce_test_defs::kinds::with_macro! {
         (expr) [::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro2!, expr_two!]
@@ -409,7 +451,8 @@ fn expression_and_type_positions() {
     assert!(norm(both[0]).contains("modwith_macro2"));
     assert!(norm(both[1]).contains("modwith_macro{"));
     // A plain payload works in expression position without the option.
-    let g: &str = ::announce_test_defs::kinds::Greet! { [::announce_test_defs::kinds::Greet!, expr_cb!] };
+    let g: &str =
+        ::announce_test_defs::kinds::Greet! { [::announce_test_defs::kinds::Greet!, expr_cb!] };
     assert!(norm(g).starts_with("pubtraitGreet"));
     // With a transformer in the chain.
     let t: &str = ::announce_test_defs::kinds::Sig! { (expr) [::announce_test_defs::kinds::Sig!, ::announce::signature_only!, expr_cb!] };
@@ -479,7 +522,9 @@ fn options_are_forwarded() {
 // `$`-payloads no longer emit helper items: they work in type position and in
 // expression position without `(expr)`.
 macro_rules! dollar_ty_cb {
-    ($($t:tt)*) => { u64 };
+    ($($t:tt)*) => {
+        u64
+    };
 }
 type DollarInTypePosition = ::announce_test_defs::kinds::with_macro! { [::announce_test_defs::kinds::with_macro!, dollar_ty_cb!] };
 
@@ -488,7 +533,11 @@ fn dollar_payloads_in_any_position() {
     let x: DollarInTypePosition = 5;
     assert_eq!(x, 5u64);
     let m: &str = ::announce_test_defs::kinds::with_macro! { [::announce_test_defs::kinds::with_macro!, expr_cb!] };
-    assert!(norm(m).contains("macro_rules!sum{($($x:expr),*)=>{0$(+$x)*};}"), "{}", m);
+    assert!(
+        norm(m).contains("macro_rules!sum{($($x:expr),*)=>{0$(+$x)*};}"),
+        "{}",
+        m
+    );
     let both = ::announce_test_defs::kinds::with_macro! {
         [::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro2!, expr_two!]
     };
@@ -509,7 +558,234 @@ fn derive_announce() {
     is_announced::<announce_test_defs::markers::DerivedEnum>();
     let out = norm(derive_announce_m::OUT);
     // The helper attribute and the cfg'd-out field are gone; META is kept.
-    assert!(out.contains("=>[$crate::info(1)]{#[doc=") && out.ends_with("pubstructDerived{puba:u8,}}"), "{}", out);
-    assert!(!out.contains("Debug") && !out.contains("#[announce(meta"), "{}", out);
+    assert!(
+        out.contains("=>[$crate::info(1)]{#[doc=") && out.ends_with("pubstructDerived{puba:u8,}}"),
+        "{}",
+        out
+    );
+    assert!(
+        !out.contains("Debug") && !out.contains("#[announce(meta"),
+        "{}",
+        out
+    );
     assert!(norm(derive_announce_m::e::OUT).contains("pubenumDerivedEnum"));
+}
+
+// `Probe::<T>::IS` is true exactly when `T: announce::Announce`.
+mod probe {
+    pub trait NotAnnounced {
+        const IS: bool = false;
+    }
+    impl<T: ?Sized> NotAnnounced for T {}
+    pub struct Probe<T: ?Sized>(std::marker::PhantomData<T>);
+    impl<T: ?Sized + announce::Announce> Probe<T> {
+        pub const IS: bool = true;
+    }
+}
+use probe::{NotAnnounced as _, Probe};
+
+/// `T: announce::Announce`, as a value clippy does not take for a constant.
+macro_rules! announced {
+    ($t:ty) => {
+        std::hint::black_box(Probe::<$t>::IS)
+    };
+}
+
+mod crate_opt {
+    use announce_test_defs::crate_opt as d;
+    // `crate = crate::crate_opt::spy`: the marker impl names the spy's `Announce`.
+    pub fn spy<T: ?Sized + d::spy::Announce>() {}
+    pub fn real<T: ?Sized + announce::Announce>() {}
+    d::ViaSpy! { [d::ViaSpy!, capture!] }
+}
+
+#[test]
+fn crate_option_names_the_announce_crate() {
+    use announce_test_defs::crate_opt as d;
+    crate_opt::spy::<d::ViaSpy>();
+    crate_opt::spy::<dyn d::SpyTrait>();
+    // The default path (`::announce`) was not used for these items.
+    assert!(!announced!(d::ViaSpy));
+    assert!(!announced!(dyn d::SpyTrait));
+    // `crate = ::announce` is the same as the default.
+    crate_opt::real::<d::Explicit>();
+    assert!(announced!(d::Explicit));
+    // The trampoline does not depend on the option.
+    assert!(
+        norm(crate_opt::OUT).contains("pubstructViaSpy"),
+        "{}",
+        crate_opt::OUT
+    );
+}
+
+// M8: `signature_only!` on a module with const fn, `impl Trait`, plain fns, nested
+// modules and an impl block. The module is re-emitted and used.
+mod sig_full {
+    ::announce_test_defs::sig_full::m! { [::announce_test_defs::sig_full::m!, ::announce::signature_only!, reemit!] }
+}
+
+#[test]
+fn signature_only_on_a_module_keeps_const_and_opaque_fns() {
+    use sig_full::m;
+    // `const fn` keeps its body: it is usable in a `const`, also through a `const` item.
+    const Z: u32 = m::zero();
+    const C: u32 = m::S::cmethod();
+    assert_eq!((Z, m::ZERO, C), (0, 0, 11));
+    // `impl Trait` fns keep their bodies, also in impl blocks.
+    assert_eq!(m::opaque().to_string(), "8");
+    assert_eq!(format!("{:?}", m::S.opaque_method()), "12");
+    // The other fns, in impl blocks and nested modules too, now panic.
+    let panics =
+        |f: &dyn Fn() -> u32| std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).is_err();
+    assert!(panics(&|| m::plain()));
+    assert!(panics(&|| m::S.method()));
+    assert!(panics(&|| m::nested::deep()));
+}
+
+// M9: the module-wrapper pattern.
+mod wrapper {
+    use announce_test_defs::wrapper as w;
+    use announce_test_derive::summary;
+    pub mod real {
+        use super::*;
+        w::Gadget! { [w::Gadget!, summary!] S }
+    }
+    pub mod wrapped {
+        use super::*;
+        w::GadgetWrapped! { [w::GadgetWrapped!, summary!] S }
+        pub mod raw {
+            use announce_test_defs::wrapper as w;
+            w::GadgetWrapped! { [w::GadgetWrapped!, capture!] }
+        }
+    }
+    // Everything in the wrapped copy resolves in this crate: unwrap and use it.
+    pub mod resolved {
+        use announce_test_defs::wrapper as w;
+        w::ResolvedWrapped! { [w::ResolvedWrapped!, reemit!] }
+    }
+}
+
+#[test]
+fn module_wrapper_pattern() {
+    use announce_test_defs::wrapper as w;
+    // The real trait is announced as usual.
+    assert_eq!(wrapper::real::S[0].2, "trait Gadget (1 items)");
+    // The wrapper's trampoline hands out the module, with its META.
+    assert_eq!(wrapper::wrapped::S[0].2, "mod Gadget");
+    assert_eq!(norm(wrapper::wrapped::S[0].1), "$crate::info(wrapped)");
+    let raw = norm(wrapper::wrapped::raw::OUT);
+    assert!(
+        raw.ends_with("pubmodGadget{pubtraitGadget:Base{fnf(&self)->Local;}}}"),
+        "{}",
+        raw
+    );
+    // The trait `Gadget` is not shadowed or duplicated: it is the real one, with
+    // exactly one `Announce` impl for `dyn Gadget` (a second would not compile).
+    struct X;
+    impl w::Gadget for X {
+        fn f(&self) -> u8 {
+            4
+        }
+    }
+    assert_eq!(w::Gadget::f(&X), 4);
+    assert!(announced!(dyn w::Gadget));
+    // The unwrapped, resolved copy.
+    impl w::Base for X {}
+    impl wrapper::resolved::Resolved::Resolved for X {
+        fn f(&self) -> w::Local {
+            w::Local(6)
+        }
+    }
+    assert_eq!(wrapper::resolved::Resolved::Resolved::f(&X).0, 6);
+}
+
+// M10: `#[derive(Announce)]` on a union, used across crates.
+mod derived_union {
+    ::announce_test_defs::derived_union::Raw! { [::announce_test_defs::derived_union::Raw!, reemit!] }
+    pub mod meta {
+        use announce_test_derive::summary;
+        ::announce_test_defs::derived_union::Raw! { [::announce_test_defs::derived_union::Raw!, summary!] S }
+    }
+}
+
+#[test]
+fn derive_announce_on_a_union() {
+    assert!(announced!(announce_test_defs::derived_union::Raw));
+    assert_eq!(derived_union::meta::S[0].2, "union Raw");
+    assert_eq!(norm(derived_union::meta::S[0].1), "$crate::info(union)");
+    // The re-emitted union is the one as written.
+    let r = derived_union::Raw { f: 1.0 };
+    assert_eq!(unsafe { r.i }, 1.0f32.to_bits());
+}
+
+// M11: pattern and statement positions.
+macro_rules! struct_pat {
+    ([$($l:tt)*] $($p:ident)? $(:: $s:ident)* ! => [$($m:tt)*]
+     { $(#[$($a:tt)*])* $v:vis struct $name:ident $($body:tt)* } $($r:tt)*) => {
+        $name { .. }
+    };
+}
+macro_rules! first_variant_pat {
+    ([$($l:tt)*] $($p:ident)? $(:: $s:ident)* ! => [$($m:tt)*]
+     { $(#[$($a:tt)*])* $v:vis enum $name:ident { $first:ident $($body:tt)* } } $($r:tt)*) => {
+        $name::$first(..)
+    };
+}
+macro_rules! let_cb {
+    ([$($l:tt)*] $($p:ident)? $(:: $s:ident)* ! => [$($m:tt)*] { $($item:tt)* } $bound:ident) => {
+        let $bound = stringify!($($item)*);
+    };
+}
+
+#[test]
+fn pattern_position() {
+    use announce_test_defs::kinds::{Named, Shape};
+    let n = Named {
+        a: 1,
+        only_without_x: 2,
+        c: 3,
+    };
+    assert!(matches!(
+        n,
+        ::announce_test_defs::kinds::Named! { [::announce_test_defs::kinds::Named!, struct_pat!] }
+    ));
+    // A `let` is a pattern position too.
+    let ::announce_test_defs::kinds::Named! { [::announce_test_defs::kinds::Named!, struct_pat!] } =
+        n;
+    let classify = |s: &Shape| match s {
+        ::announce_test_defs::kinds::Shape! { [::announce_test_defs::kinds::Shape!, first_variant_pat!] } => {
+            "circle"
+        }
+        _ => "other",
+    };
+    assert_eq!(classify(&Shape::Circle(1.0)), "circle");
+    assert_eq!(classify(&Shape::Rect { w: 1.0, h: 2.0 }), "other");
+}
+
+#[test]
+fn statement_position() {
+    // A `let` produced by the callback; `bound` comes from REST, so it is visible here.
+    ::announce_test_defs::kinds::Named! { [::announce_test_defs::kinds::Named!, let_cb!] bound }
+    assert!(norm(bound).contains("pubstructNamed"), "{}", bound);
+    // Items re-emitted into a function body, followed by a use.
+    ::announce_test_defs::kinds::Tuple! { [::announce_test_defs::kinds::Tuple!, reemit!] }
+    let t = Tuple::<&str>("x", 1);
+    assert_eq!((t.0, t.1), ("x", 1));
+    // A union through the same derive-free route (`!` only), still in statement position.
+    ::announce_test_defs::kinds::Bits! { [::announce_test_defs::kinds::Bits!, reemit!] }
+    let b = Bits { i: 0 };
+    assert_eq!(unsafe { b.f }, 0.0);
+}
+
+// M12: the item-level `#[cfg]` is false in the defining crate: the other half is
+// `tests/ui/cfg_gone.rs`. A true cfg leaves the trampoline.
+mod cfg_present {
+    ::announce_test_defs::gone::Present! { [::announce_test_defs::gone::Present!, capture!] }
+}
+
+#[test]
+fn item_level_true_cfg_keeps_the_trampoline() {
+    let out = norm(cfg_present::OUT);
+    assert!(out.contains("pubstructPresent;"), "{}", out);
+    assert!(!out.contains("cfg"), "{}", out);
 }

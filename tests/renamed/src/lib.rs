@@ -27,3 +27,30 @@ pub struct WithRepeater<T>(pub T, pub Local);
 pub trait MarkedMock {
     fn f(&self) -> u8;
 }
+
+/// `crate = path` names the (renamed) dependency explicitly.
+#[ann::announce(crate = ::ann)]
+pub struct Explicit {
+    pub a: u8,
+}
+
+#[ann::announce(crate = ::ann)]
+pub trait ExplicitTrait {
+    fn f(&self) -> u8;
+}
+
+#[derive(ann::Announce)]
+#[announce(crate = ::ann, meta = info(2))]
+pub struct DerivedExplicit {
+    pub a: u8,
+}
+
+/// The option wins over the name read from `Cargo.toml`: the `Announce` impl
+/// names this module's trait, not `ann::Announce`.
+pub mod spy {
+    pub use ::ann::__private;
+    pub trait Announce {}
+}
+
+#[ann::announce(crate = crate::spy)]
+pub struct ViaSpy;

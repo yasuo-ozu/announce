@@ -1,0 +1,29 @@
+error: announce: trait paths must be absolute (`::core::fmt::Display`, `crate::Base`, `?::core::marker::Sized`); a repeater only covers types, not traits
+ --> tests/ui/trait_paths_relative.rs:8:8
+  |
+8 |     T: Rel,
+  |        ^^^
+
+error: announce: trait paths must be absolute (`::core::fmt::Display`, `crate::Base`, `?::core::marker::Sized`); a repeater only covers types, not traits
+  --> tests/ui/trait_paths_relative.rs:16:25
+   |
+16 |     fn f(&self, x: impl Rel);
+   |                         ^^^
+
+error: announce: trait paths must be absolute (`::core::fmt::Display`, `crate::Base`, `?::core::marker::Sized`); a repeater only covers types, not traits
+  --> tests/ui/trait_paths_relative.rs:22:25
+   |
+22 |     fn f(&self) -> impl Rel;
+   |                         ^^^
+
+error: announce: trait paths must be absolute (`::core::fmt::Display`, `crate::Base`, `?::core::marker::Sized`); a repeater only covers types, not traits
+  --> tests/ui/trait_paths_relative.rs:28:42
+   |
+28 |     fn g(&self) -> ::std::boxed::Box<dyn Rel>;
+   |                                          ^^^
+
+error: announce: trait paths must be absolute (`::core::fmt::Display`, `crate::Base`, `?::core::marker::Sized`); a repeater only covers types, not traits
+  --> tests/ui/trait_paths_relative.rs:36:28
+   |
+36 | pub struct WithRepeater<T: Rel>(pub T, pub Local);
+   |                            ^^^

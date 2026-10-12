@@ -60,7 +60,10 @@ impl Parse for KvArgs {
                     ts.push(tt);
                 }
                 if ts.is_empty() {
-                    return Err(Error::new(key.span(), format!("missing value for `{}`", key)));
+                    return Err(Error::new(
+                        key.span(),
+                        format!("missing value for `{}`", key),
+                    ));
                 }
                 if depth != 0 {
                     // A comparison or shift (`x < y`, `1 << 2`) looks like an
@@ -86,7 +89,10 @@ impl Parse for KvArgs {
             }
             input.parse::<Token![,]>()?;
         }
-        Ok(KvArgs { entries, span: Some(span) })
+        Ok(KvArgs {
+            entries,
+            span: Some(span),
+        })
     }
 }
 
@@ -122,7 +128,10 @@ impl KvArgs {
     pub fn list<T: Parse>(&mut self, key: &str) -> Result<Option<Vec<T>>> {
         match self.remove(key) {
             None => Ok(None),
-            Some((k, None)) => Err(Error::new(k.span(), format!("`{}` needs a `[..]` value", k))),
+            Some((k, None)) => Err(Error::new(
+                k.span(),
+                format!("`{}` needs a `[..]` value", k),
+            )),
             Some((_, Some(v))) => {
                 let parser = |input: ParseStream| {
                     let content;

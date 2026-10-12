@@ -1,0 +1,11 @@
+error: `repeater`: only `usize` const generics are supported in interned types
+  --> tests/ui/leak_unsupported.rs:12:31
+   |
+12 | pub struct BoolConst<const B: bool>(pub Flag<B>);
+   |                               ^^^^
+
+error: announce: this type names the lifetime `'b`, which a `for<..>` of the item binds, and the repeater's impl cannot declare it; write the type with absolute paths
+  --> tests/ui/leak_unsupported.rs:17:23
+   |
+17 |     pub f: for<'b> fn(LocalL<'b>) -> u8,
+   |                       ^^^^^^^^^^

@@ -1,0 +1,8 @@
+error: announce: `Wrap<'a>` leaves the lifetime `'a` of the method unconstrained in the copy (E0195)
+         = note: it names `'a`, a lifetime of the method which its return type mentions and no other argument keeps as written (e.g. `&'a self`), so the copy would have `'a` only in a projection, and rustc rejects the implementation of a method whose lifetime is early-bound where the trait's is late-bound (E0195)
+         = note: it cannot be leaked as a whole because of `'a`
+         = help: keep `'a` in another argument of the method (for example `&'a self`), or write `Wrap<'a>` with an absolute path
+  --> tests/ui/repeater_lifetime_unconstrained.rs:16:24
+   |
+16 |     fn i<'a>(&self, a: Wrap<'a>) -> &'a u8;
+   |                        ^^^^^^^^
