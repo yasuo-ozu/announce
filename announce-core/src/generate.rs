@@ -1,4 +1,4 @@
-use crate::options::Options;
+use crate::options::{Layout, Options};
 use proc_macro2::{Group, Ident, Span, TokenStream, TokenTree};
 use syn::{Item, Result, Visibility};
 use template_quote::{quote, ToTokens};
@@ -279,8 +279,134 @@ pub struct Variant {
     pub needs_dollar: bool,
 }
 
-/// The arms that pass the definition on, for every (head shape × next
-/// shape) (DESIGN.md section 4.1).
+/// Tokens (delimiters of a group counted) from which `layout = auto` holds the
+/// item once (`Layout::Single`) instead of copying it into each arm
+/// (`Layout::Direct`), counted on the escaped payload plus META.
+///
+/// Chosen by measurement (DESIGN.md section 4.1): a direct trampoline copies
+/// the item into three arms and takes one expansion; a single-copy one holds it
+/// once and takes three expansions (two through the derive route). The single
+/// copy has the smaller `.rmeta` from about 90 tokens; 300 weighs that against
+/// the expansions, which cost time and recursion depth on the calling side.
+pub const SINGLE_COPY_THRESHOLD: usize = 300;
+
+/// Number of tokens in `ts`; a group counts its two delimiters and its contents.
+pub(crate) fn token_count(ts: &TokenStream) -> usize {
+    ts.clone()
+        .into_iter()
+        .map(|tt| match tt {
+            TokenTree::Group(g) => 2 + token_count(&g.stream()),
+            _ => 1,
+        })
+        .sum()
+}
+
+/// Whether the trampoline of an item of `size` tokens (payload and META) holds
+/// the item once.
+pub(crate) fn is_single(layout: Layout, size: usize) -> bool {
+    match layout {
+        Layout::Single => true,
+        Layout::Direct => false,
+        Layout::Auto => size > SINGLE_COPY_THRESHOLD,
+    }
+}
+
+/// One text for every malformed call, so that the macros of all definitions
+/// share one string. Rustc's note names the macro.
+const BAD_INPUT: &str =
+    "announce: invalid trampoline input; expected `Item! { [Item!, next!, ..] .. }` \
+     (a head and at least one continuation; a derive or attribute head goes through \
+     `announce_helper::redirect`)";
+
+/// The derive/attribute route emits an item (the dummy enum): an error in
+/// expression position (`(expr)`, section 4.6).
+const DERIVE_IN_EXPR: &str =
+    "announce: a derive/attribute continuation emits items, so it cannot be used with `(expr)`";
+
+/// `$( ( $($__announce_o:tt)* ) )?`: the global options group.
+fn opts_pat() -> TokenStream {
+    quote! { $( ( $($__announce_o:tt)* ) )? }
+}
+
+fn opts_out() -> TokenStream {
+    quote! { $( ( $($__announce_o)* ) )? }
+}
+
+/// The head of the list: `path::to::macro!`, or `#[attr] Name?`. One pattern
+/// for both, with an optional group for each, instead of an arm for each
+/// (rare) head shape.
+fn head_pat() -> TokenStream {
+    quote! { $( $($hp:ident)? $(:: $hs:ident)* ! )? $( #[$($ha:tt)*] $($hid:ident)? )? }
+}
+
+/// The head as the `KEY` of an entry.
+fn head_key() -> TokenStream {
+    quote! { $( $($hp)? $(:: $hs)* ! )? $( #[$($ha)*] $($hid)? )? }
+}
+
+/// The error for `(expr)` followed by a derive or attribute continuation.
+/// `lead` is what the pattern starts with.
+fn expr_error_arm(lead: &TokenStream) -> TokenStream {
+    let head = head_pat();
+    quote! {
+        (#lead (expr $($__announce_eo:tt)*) [ #head , #[$($na:tt)*] $($tail:tt)* ] $($r:tt)*) => {
+            compile_error! { #DERIVE_IN_EXPR }
+        };
+    }
+}
+
+/// The arms that pass an entry on, one for every next shape (a bang, a named
+/// attribute, an anonymous attribute) (DESIGN.md section 4.1). `lead` is what
+/// each pattern starts with, and `entry` is `KEY => [META] { ITEM }` for the
+/// head `key`.
+fn shape_arms(
+    lead: &TokenStream,
+    entry: &dyn Fn(&TokenStream) -> TokenStream,
+    fallback: &Ident,
+) -> TokenStream {
+    let (opts_pat, opts_out) = (opts_pat(), opts_out());
+    let (head, key) = (head_pat(), head_key());
+    let entry = entry(&key);
+    let bang = quote! {
+        $($np)? $(:: $ns)* ! {
+            #opts_out
+            [ $($np)? $(:: $ns)* ! $($tail)* ]
+            #entry
+            $($r)*
+        }
+    };
+    let named = quote! {
+        #[$($na)*]
+        #[allow(dead_code, non_camel_case_types)]
+        enum $nid {
+            __AnnouncePayload = (stringify! {
+                #opts_out
+                [ #[$($na)*] $nid $(, $($tail)*)? ]
+                #entry
+                $($r)*
+            }, 0).1
+        }
+    };
+    let anon = quote! {
+        #[$($na)*]
+        #[allow(dead_code, non_camel_case_types)]
+        enum #fallback {
+            __AnnouncePayload = (stringify! {
+                #opts_out
+                [ #[$($na)*] #fallback $($tail)* ]
+                #entry
+                $($r)*
+            }, 0).1
+        }
+    };
+    quote! {
+        (#lead #opts_pat [ #head , $($np:ident)? $(:: $ns:ident)* ! $($tail:tt)* ] $($r:tt)*) => { #bang };
+        (#lead #opts_pat [ #head , #[$($na:tt)*] $nid:ident $(, $($tail:tt)*)? ] $($r:tt)*) => { #named };
+        (#lead #opts_pat [ #head , #[$($na:tt)*] $($tail:tt)* ] $($r:tt)*) => { #anon };
+    }
+}
+
+/// `Layout::Direct`: every arm holds its own copy of the item.
 ///
 /// A payload containing `$` is escaped as `$__dollar`, and the arms that pass
 /// it on require a leading `@__announce_dollar { $ }`: `$__dollar:tt` binds a
@@ -289,118 +415,98 @@ pub struct Variant {
 /// once through its own path (the head) with the prefix added, and
 /// `announce_helper::redirect` adds it for the derive route. No helper items
 /// are emitted, so the expansion is a single macro call in every position
-/// (DESIGN.md section 4.6). Payloads without `$` accept the prefix optionally
-/// and ignore it.
-fn variant_arms(fallback: &Ident, v: &Variant) -> TokenStream {
+/// (DESIGN.md section 4.6).
+///
+/// `redirect` writes `@__announce_self { path } @__announce_dollar { $ }`
+/// before the list, for the layouts that call themselves again (DESIGN.md
+/// section 4.1); the arms of this layout ignore the self path. A payload
+/// without `$` ignores the dollar prefix too.
+fn direct_arms(fallback: &Ident, v: &Variant) -> TokenStream {
     let Variant {
         meta,
         payload,
         needs_dollar,
     } = v;
     let prefix = if *needs_dollar {
-        quote! { @__announce_dollar { $__dollar:tt } }
+        quote! { $( @__announce_self { $($__announce_s:tt)* } )? @__announce_dollar { $__dollar:tt } }
     } else {
-        quote! { $( @__announce_dollar { $__announce_ignored:tt } )? }
+        quote! { $( @__announce_self { $($__announce_s:tt)* } @__announce_dollar { $__announce_d:tt } )? }
     };
-    let opts_pat = quote! { $( ( $($__announce_o:tt)* ) )? };
-    let opts_out = quote! { $( ( $($__announce_o)* ) )? };
-    let heads: Vec<(TokenStream, TokenStream)> = vec![
-        (
-            quote! { $($hp:ident)? $(:: $hs:ident)* ! },
-            quote! { $($hp)? $(:: $hs)* ! },
-        ),
-        (
-            quote! { #[$($ha:tt)*] $($hid:ident)? },
-            quote! { #[$($ha)*] $($hid)? },
-        ),
-    ];
-    let mut out = TokenStream::new();
-    for (hpat, key) in &heads {
-        let bang = quote! {
-            $($np)? $(:: $ns)* ! {
-                #opts_out
-                [ $($np)? $(:: $ns)* ! $($tail)* ]
-                #key => [ #meta ] { #payload }
-                $($r)*
-            }
-        };
-        let named = quote! {
-            #[$($na)*]
-            #[allow(dead_code, non_camel_case_types)]
-            enum $nid {
-                __AnnouncePayload = (stringify! {
-                    #opts_out
-                    [ #[$($na)*] $nid $(, $($tail)*)? ]
-                    #key => [ #meta ] { #payload }
-                    $($r)*
-                }, 0).1
-            }
-        };
-        let anon = quote! {
-            #[$($na)*]
-            #[allow(dead_code, non_camel_case_types)]
-            enum #fallback {
-                __AnnouncePayload = (stringify! {
-                    #opts_out
-                    [ #[$($na)*] #fallback $($tail)* ]
-                    #key => [ #meta ] { #payload }
-                    $($r)*
-                }, 0).1
-            }
-        };
+    let mut out = expr_error_arm(&TokenStream::new());
+    out.extend(shape_arms(
+        &prefix,
+        &|key| quote! { #key => [ #meta ] { #payload } },
+        fallback,
+    ));
+    if *needs_dollar {
         out.extend(quote! {
-            (#prefix #opts_pat [ #hpat , $($np:ident)? $(:: $ns:ident)* ! $($tail:tt)* ] $($r:tt)*) => { #bang };
-            (#prefix #opts_pat [ #hpat , #[$($na:tt)*] $nid:ident $(, $($tail:tt)*)? ] $($r:tt)*) => { #named };
-            (#prefix #opts_pat [ #hpat , #[$($na:tt)*] $($tail:tt)* ] $($r:tt)*) => { #anon };
+            // Re-invoke through the head path, adding a real `$`.
+            ($( ($($o:tt)*) )? [ $($hp:ident)? $(:: $hs:ident)* ! $($l:tt)* ] $($r:tt)*) => {
+                $($hp)? $(:: $hs)* ! { @__announce_dollar { $ } $( ($($o)*) )? [ $($hp)? $(:: $hs)* ! $($l)* ] $($r)* }
+            };
         });
     }
     out
 }
 
-/// The fixed arm set of DESIGN.md section 4.1, plus error arms.
-fn arms(self_name: &str, fallback: &Ident, plain: &Variant) -> TokenStream {
-    let mut out = TokenStream::new();
-    let any_prefix = quote! { $( @__announce_dollar { $__announce_ignored:tt } )? };
-    // The derive/attribute route emits an item (the dummy enum): an error in
-    // expression position (`(expr)`, section 4.6). Payload-free arms.
-    let derive_in_expr =
-        "announce: the derive/attribute route (`#[derive(..)]`/`#[attr]` in the list) \
-                          emits items and cannot be used in expression position (`(expr)`)";
+/// `Layout::Single`: the item is in one arm, and the routing and output arms
+/// carry none (DESIGN.md section 4.1).
+///
+/// 1. A call `($(opts)? [head! ..] REST)` has its head's path re-invoked with
+///    `@__announce_self { head path } @__announce_dollar { $ }` before it
+///    (the derive route's `redirect` writes the same prefix).
+/// 2. The only arm that holds the item binds that prefix and calls the
+///    trampoline again through the path it names, with
+///    `@__announce_emit [META] { ITEM }` in front of the rest. `$__dollar:tt`
+///    is a real `$`, so substituting it un-escapes the item.
+/// 3. The output arms match `[META]` and `{ ITEM }` as one `tt` each, so the
+///    item is not read again, and write the entry for every next shape.
+///
+/// Every call after the first starts with `@`, which routing arms cannot
+/// match: the three levels never loop. Anything else ends at the catch-all.
+fn single_arms(fallback: &Ident, v: &Variant) -> TokenStream {
+    let Variant {
+        meta,
+        payload,
+        needs_dollar,
+    } = v;
+    let dollar = if *needs_dollar {
+        quote! { $__dollar:tt }
+    } else {
+        quote! { $__announce_ignored:tt }
+    };
+    let mut out = quote! {
+        (@__announce_self { $($__announce_s:tt)* } @__announce_dollar { #dollar } $($__announce_a:tt)*) => {
+            $($__announce_s)* ! { @__announce_emit [ #meta ] { #payload } $($__announce_a)* }
+        };
+    };
+    let emit = quote! { @__announce_emit $__announce_m:tt $__announce_i:tt };
+    out.extend(expr_error_arm(&emit));
+    out.extend(shape_arms(
+        &emit,
+        &|key| quote! { #key => $__announce_m $__announce_i },
+        fallback,
+    ));
     out.extend(quote! {
-        (#any_prefix (expr $($__announce_eo:tt)*) [ $($hp:ident)? $(:: $hs:ident)* ! , #[$($na:tt)*] $($tail:tt)* ] $($r:tt)*) => { compile_error! { #derive_in_expr } };
-        (#any_prefix (expr $($__announce_eo:tt)*) [ #[$($ha:tt)*] $($hid:ident)? , #[$($na:tt)*] $($tail:tt)* ] $($r:tt)*) => { compile_error! { #derive_in_expr } };
+        ($( ($($o:tt)*) )? [ $($hp:ident)? $(:: $hs:ident)* ! $($l:tt)* ] $($r:tt)*) => {
+            $($hp)? $(:: $hs)* ! {
+                @__announce_self { $($hp)? $(:: $hs)* } @__announce_dollar { $ }
+                $( ($($o)*) )? [ $($hp)? $(:: $hs)* ! $($l)* ] $($r)*
+            }
+        };
     });
-    out.extend(variant_arms(fallback, plain));
-    let no_cont = format!(
-        "announce: `{0}!` was invoked with no continuation; expected `{0}! {{ [{0}!, next!, ..] .. }}`",
-        self_name
-    );
-    let malformed = format!(
-        "announce: malformed trampoline input to `{0}!`; expected `{0}! {{ [{0}!, next!, ..] .. }}` \
-         (optionally preceded by a global options group `(..)`), where each list element is \
-         `path::to::macro!` or `#[derive(path)]`/`#[attr]` optionally followed by a name",
-        self_name
-    );
+    out
+}
+
+/// The arms of DESIGN.md section 4.1, and the catch-all error arm.
+fn arms(fallback: &Ident, plain: &Variant, single: bool) -> TokenStream {
+    let mut out = if single {
+        single_arms(fallback, plain)
+    } else {
+        direct_arms(fallback, plain)
+    };
     out.extend(quote! {
-        (#any_prefix $( ($($o:tt)*) )? [ $($hp:ident)? $(:: $hs:ident)* ! $(,)? ] $($r:tt)*) => { compile_error! { #no_cont } };
-        (#any_prefix $( ($($o:tt)*) )? [ #[$($ha:tt)*] $($hid:ident)? $(,)? ] $($r:tt)*) => { compile_error! { #no_cont } };
-    });
-    if plain.needs_dollar {
-        let no_dollar = format!(
-            "announce: `{0}!` carries `$` tokens and was invoked through the derive/attribute route \
-             without the `@__announce_dollar {{ $ }}` prefix; route it with `announce_helper::redirect`",
-            self_name
-        );
-        out.extend(quote! {
-            // Re-invoke through the head path, adding a real `$` (see `variant_arms`).
-            ($( ($($o:tt)*) )? [ $($hp:ident)? $(:: $hs:ident)* ! $($l:tt)* ] $($r:tt)*) => {
-                $($hp)? $(:: $hs)* ! { @__announce_dollar { $ } $( ($($o)*) )? [ $($hp)? $(:: $hs)* ! $($l)* ] $($r)* }
-            };
-            ($( ($($o:tt)*) )? [ #[$($ha:tt)*] $($l:tt)* ] $($r:tt)*) => { compile_error! { #no_dollar } };
-        });
-    }
-    out.extend(quote! {
-        ($($t:tt)*) => { compile_error! { #malformed } };
+        ($($t:tt)*) => { compile_error! { #BAD_INPUT } };
     });
     out
 }
@@ -446,6 +552,7 @@ pub fn trampoline(
     let meta = crate_to_dollar_crate(quote! { #(#meta_items),* });
     let mut needs_dollar = false;
     let payload = crate_to_dollar_crate(escape_dollar(payload, &mut needs_dollar));
+    let single = is_single(opts.layout, token_count(&meta) + token_count(&payload));
     // Global options other than a leading `expr` are not interpreted by the
     // trampoline; they are forwarded unchanged (a namespace for helpers, e.g.
     // `gather`'s bookkeeping; AUDIT 3 #9).
@@ -454,7 +561,7 @@ pub fn trampoline(
         payload,
         needs_dollar,
     };
-    let arms = arms(&macro_name.to_string(), &fallback, &plain);
+    let arms = arms(&fallback, &plain, single);
     quote! {
         #[doc(hidden)]
         // The payload holds escaped `$crate` / `crate::` tokens (false
@@ -680,6 +787,170 @@ mod tests {
     fn crate_to_dollar_crate_is_not_applied_twice_to_the_same_path() {
         let once = crate_to_dollar_crate(quote! { crate::x });
         assert_eq!(squash(crate_to_dollar_crate(once)), "$crate::x");
+    }
+
+    #[test]
+    fn token_count_counts_leaves_and_both_delimiters() {
+        assert_eq!(token_count(&TokenStream::new()), 0);
+        assert_eq!(token_count(&quote! { a b c }), 3);
+        // `a`, `(`..`)`, `b`: 1 + 2 + 1 + 1 for the group's contents.
+        assert_eq!(token_count(&quote! { a (b) }), 4);
+        assert_eq!(
+            token_count(&quote! { f(a, [b], {}) }),
+            1 + 2 + 1 + 1 + (2 + 1) + 1 + 2
+        );
+        // Punctuation counts one token each.
+        assert_eq!(token_count(&quote! { a :: b }), 4);
+    }
+
+    #[test]
+    fn auto_layout_switches_above_the_threshold() {
+        assert!(!is_single(Layout::Auto, 0));
+        assert!(!is_single(Layout::Auto, SINGLE_COPY_THRESHOLD));
+        assert!(is_single(Layout::Auto, SINGLE_COPY_THRESHOLD + 1));
+        assert!(is_single(Layout::Auto, usize::MAX));
+        // The option wins over the size.
+        for size in [0, SINGLE_COPY_THRESHOLD, SINGLE_COPY_THRESHOLD + 1] {
+            assert!(is_single(Layout::Single, size));
+            assert!(!is_single(Layout::Direct, size));
+        }
+    }
+
+    /// The generated macro for `payload` (`pub struct S { .. }`), as a string.
+    fn emitted(layout: Layout, payload: TokenStream) -> String {
+        let opts = Options {
+            layout,
+            ..Options::default()
+        };
+        let ident = Ident::new("S", Span::call_site());
+        let vis: Visibility = syn::parse_quote!(pub);
+        squash(trampoline(
+            &ident,
+            &vis,
+            &opts,
+            1,
+            payload,
+            TokenStream::new(),
+        ))
+    }
+
+    /// `pub struct S { f0: u8, .. }` with `n` fields, the first named `marker_zzz`.
+    fn struct_of(n: usize) -> TokenStream {
+        let fields = (0..n).map(|i| {
+            let f = if i == 0 {
+                Ident::new("marker_zzz", Span::call_site())
+            } else {
+                Ident::new(&format!("f{}", i), Span::call_site())
+            };
+            quote! { pub #f: u8, }
+        });
+        quote! { pub struct S { #(#fields)* } }
+    }
+
+    #[test]
+    fn direct_layout_copies_the_item_into_three_arms() {
+        let out = emitted(Layout::Direct, struct_of(3));
+        assert_eq!(out.matches("marker_zzz").count(), 3, "{}", out);
+        assert!(!out.contains("__announce_emit"), "{}", out);
+        // The derive route's prefix is optional in each arm and ignored;
+        // without `$` in the item there is no re-invoking arm.
+        assert_eq!(out.matches("@__announce_self{").count(), 3, "{}", out);
+        assert!(!out.contains("__announce_dollar{$}"), "{}", out);
+    }
+
+    #[test]
+    fn single_layout_holds_the_item_once() {
+        let out = emitted(Layout::Single, struct_of(3));
+        assert_eq!(out.matches("marker_zzz").count(), 1, "{}", out);
+        // The item arm, the call it makes, and the output arms (three next
+        // shapes, and the `(expr)` error) matching the two groups as one `tt`
+        // each.
+        assert_eq!(out.matches("@__announce_emit[").count(), 1, "{}", out);
+        assert_eq!(
+            out.matches("@__announce_emit$__announce_m:tt$__announce_i:tt")
+                .count(),
+            4,
+            "{}",
+            out
+        );
+        // One routing arm, which adds the self path and a real `$`.
+        assert_eq!(
+            out.matches("@__announce_self{$($hp)?$(::$hs)*}@__announce_dollar{$}")
+                .count(),
+            1,
+            "{}",
+            out
+        );
+    }
+
+    #[test]
+    fn single_layout_unescapes_dollar_only_in_the_item_arm() {
+        let payload = quote! { pub mod m { macro_rules! k { ($($x:tt)*) => {}; } } };
+        let out = emitted(Layout::Single, payload.clone());
+        // The binder of the item arm, and the two `$` of the item.
+        assert_eq!(out.matches("$__dollar").count(), 1 + 2, "{}", out);
+        assert!(out.contains("@__announce_dollar{$__dollar:tt}"), "{}", out);
+        // The direct layout needs the prefix in each of its arms.
+        let out = emitted(Layout::Direct, payload);
+        assert_eq!(
+            out.matches("@__announce_dollar{$__dollar:tt}").count(),
+            3,
+            "{}",
+            out
+        );
+    }
+
+    #[test]
+    fn auto_layout_follows_the_size_of_the_item() {
+        let small = emitted(Layout::Auto, struct_of(10));
+        assert_eq!(small.matches("marker_zzz").count(), 3);
+        // 5 tokens per field: `pub` `name` `:` `u8` `,`.
+        let n = SINGLE_COPY_THRESHOLD / 5 + 10;
+        let large = emitted(Layout::Auto, struct_of(n));
+        assert_eq!(large.matches("marker_zzz").count(), 1);
+        // Just below the threshold the item is still copied.
+        let below = (SINGLE_COPY_THRESHOLD - 10) / 5;
+        assert!(token_count(&struct_of(below)) <= SINGLE_COPY_THRESHOLD);
+        let edge = emitted(Layout::Auto, struct_of(below));
+        assert_eq!(edge.matches("marker_zzz").count(), 3);
+    }
+
+    #[test]
+    fn meta_counts_towards_the_size() {
+        // A small item with a large META is single too: META is held once.
+        let opts = Options {
+            layout: Layout::Auto,
+            ..Options::default()
+        };
+        let ident = Ident::new("S", Span::call_site());
+        let vis: Visibility = syn::parse_quote!(pub);
+        let extra: TokenStream = std::iter::repeat(quote! { k(1, 2), })
+            .take(SINGLE_COPY_THRESHOLD / 5)
+            .flatten()
+            .collect();
+        let out = squash(trampoline(
+            &ident,
+            &vis,
+            &opts,
+            1,
+            quote! { pub struct S { pub marker_zzz: u8 } },
+            extra,
+        ));
+        assert_eq!(out.matches("marker_zzz").count(), 1, "{}", out);
+    }
+
+    #[test]
+    fn both_layouts_end_with_one_shared_catch_all() {
+        for layout in [Layout::Direct, Layout::Single] {
+            let out = emitted(layout, struct_of(2));
+            assert_eq!(
+                out.matches(squash(BAD_INPUT).as_str()).count(),
+                1,
+                "{}",
+                out
+            );
+            assert!(out.contains(squash(DERIVE_IN_EXPR).as_str()), "{}", out);
+        }
     }
 
     #[test]

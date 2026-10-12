@@ -31,6 +31,47 @@ pub fn parse_attr(_: TokenStream, input: TokenStream) -> TokenStream {
     }
 }
 
+/// Derive whose trampoline holds its item once (a large trait, `layout = single`
+/// route): redirects to `::announce_test_defs::large::BigParseAnnounce!`.
+#[proc_macro_derive(BigParse)]
+pub fn derive_big_parse(input: TokenStream) -> TokenStream {
+    let input: TokenStream2 = input.into();
+    match announce_helper::redirect(
+        input,
+        &syn::parse_quote!(::announce_test_defs::large::BigParseAnnounce),
+    ) {
+        Some(out) => out.into(),
+        None => TokenStream::new(),
+    }
+}
+
+/// The attribute form of [`derive_big_parse`]; consumes the dummy.
+#[proc_macro_attribute]
+pub fn big_parse_attr(_: TokenStream, input: TokenStream) -> TokenStream {
+    let input: TokenStream2 = input.into();
+    match announce_helper::redirect(
+        input.clone(),
+        &syn::parse_quote!(::announce_test_defs::large::BigParseAnnounce),
+    ) {
+        Some(out) => out.into(),
+        None => input.into(),
+    }
+}
+
+/// Derive that redirects to a small trampoline held once
+/// (`::announce_test_defs::large::SmallSingleParseAnnounce!`).
+#[proc_macro_derive(SmallSingleParse)]
+pub fn derive_small_single_parse(input: TokenStream) -> TokenStream {
+    let input: TokenStream2 = input.into();
+    match announce_helper::redirect(
+        input,
+        &syn::parse_quote!(::announce_test_defs::large::SmallSingleParseAnnounce),
+    ) {
+        Some(out) => out.into(),
+        None => TokenStream::new(),
+    }
+}
+
 /// Callback: `summary! { [summary!] ENTRY* NAME }` emits
 /// `pub const NAME: &[(&str, &str, &str)] = &[(key, meta, item-kind+ident), ..]`
 /// in visiting order, and forwards if more continuations remain.

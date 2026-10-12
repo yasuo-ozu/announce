@@ -3,6 +3,9 @@
 
 use announce::announce;
 
+pub mod large;
+pub mod large_leak;
+
 pub mod kinds {
     use super::announce;
 
@@ -137,6 +140,59 @@ pub mod vis {
     }
 }
 
+/// The same for trampolines that hold their item once: they call themselves
+/// through the path the caller wrote, which must resolve from the expansion too.
+#[allow(dead_code)]
+pub mod vis_single {
+    use super::announce;
+
+    #[announce(layout = single)]
+    pub(crate) struct CrateOnly;
+
+    #[announce(layout = single)]
+    struct Private;
+
+    pub mod inner {
+        use crate::announce;
+        #[announce(layout = single)]
+        pub(super) enum SuperOnly {
+            A,
+        }
+    }
+
+    macro_rules! count {
+        ([$($l:tt)*] $($t:tt)*) => {
+            pub const SAME_CRATE: &str = stringify!($($t)*);
+        };
+    }
+    macro_rules! count_bare {
+        ([$($l:tt)*] $($t:tt)*) => {
+            pub const BARE: &str = stringify!($($t)*);
+        };
+    }
+    pub mod a {
+        crate::vis_single::CrateOnly! { [crate::vis_single::CrateOnly!, count!] }
+    }
+    pub mod b {
+        super::Private! { [super::Private!, count!] }
+    }
+    pub mod c {
+        super::inner::SuperOnly! { [super::inner::SuperOnly!, count!] }
+    }
+    pub mod d {
+        crate::large::BigTrait! { [crate::large::BigTrait!, count!] }
+    }
+    pub mod e {
+        crate::large::big_mod! { [crate::large::big_mod!, count!] }
+    }
+    // By its bare name, in the module that defines it and through a `use`.
+    Private! { [Private!, count_bare!] }
+    pub mod f {
+        use super::Private;
+        Private! { [Private!, count!] }
+    }
+}
+
 pub mod conflict {
     use super::announce;
 
@@ -204,6 +260,21 @@ macro_rules! via_dollar_crate {
 macro_rules! dollar_crate_cb {
     ([$($l:tt)*] $($t:tt)*) => {
         pub const VIA_DOLLAR_CRATE: &str = stringify!($($t)*);
+    };
+}
+
+/// The same for a large item, which calls itself through the head path
+/// (`$crate::..` tokens must survive that).
+#[macro_export]
+macro_rules! via_dollar_crate_large {
+    () => {
+        $crate::large::BigTrait! { [$crate::large::BigTrait!, $crate::dollar_crate_cb!] }
+    };
+}
+#[macro_export]
+macro_rules! via_dollar_crate_large_mod {
+    () => {
+        $crate::large::big_mod! { [$crate::large::big_mod!, $crate::dollar_crate_cb!] }
     };
 }
 

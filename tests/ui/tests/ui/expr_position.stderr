@@ -1,4 +1,4 @@
-error: announce: the derive/attribute route (`#[derive(..)]`/`#[attr]` in the list) emits items and cannot be used in expression position (`(expr)`)
+error: announce: a derive/attribute continuation emits items, so it cannot be used with `(expr)`
  --> tests/ui/expr_position.rs:5:13
   |
 5 |       let _ = announce_test_defs::kinds::Greet! {

@@ -1,6 +1,6 @@
 // `with_macro` carries `$` tokens. Through the derive/attribute route the
 // trampoline needs the `@__announce_dollar { $ }` prefix that
-// `announce_helper::redirect` adds. Called by hand without it, it must say so.
+// `announce_helper::redirect` adds. Called by hand without it, it must point at it.
 macro_rules! cb { ($($t:tt)*) => {}; }
 
 announce_test_defs::kinds::with_macro! {

@@ -62,8 +62,17 @@ pub fn cargo_toml(name: &str, deps: &str, extra: &str) -> String {
     )
 }
 
+/// The attribute of an announced definition. `ANNOUNCE_BENCH_LAYOUT=single|direct|auto` adds
+/// `layout = ..` (DESIGN.md section 4.1); by default the attribute has no options.
+fn announce_attr() -> String {
+    match std::env::var("ANNOUNCE_BENCH_LAYOUT") {
+        Ok(l) if !l.is_empty() => format!("#[::announce::announce(layout = {l})]\n"),
+        _ => "#[::announce::announce]\n".to_string(),
+    }
+}
+
 fn definition(out: &mut String, kind: Kind, i: usize, s: usize, announced: bool) {
-    let attr = if announced { "#[::announce::announce]\n" } else { "" };
+    let attr = if announced { announce_attr() } else { String::new() };
     match kind {
         Kind::Struct => {
             write!(out, "{attr}pub struct D{i} {{\n").unwrap();
@@ -119,10 +128,11 @@ pub fn count(input: TokenStream) -> TokenStream {
 /// The user crate: one chain over all K definitions, or K separate calls.
 pub fn user(def_crate: &str, k: usize, separate: bool) -> String {
     let mut out = String::new();
-    if k > 100 {
-        // A chain over K definitions nests about K macro expansions (K = 120 builds, K = 128
-        // does not); rustc's default recursion limit is 128. Crates with K <= 100 set nothing.
-        out.push_str("#![recursion_limit = \"512\"]\n\n");
+    if k > 16 {
+        // A chain over K definitions nests about K macro expansions with the direct layout of a
+        // small item, and 2 to 3 per definition with the single-copy layout of a large one
+        // (DESIGN.md section 4.1); rustc's default recursion limit is 128.
+        out.push_str("#![recursion_limit = \"1024\"]\n\n");
     }
     if separate {
         for i in 0..k {

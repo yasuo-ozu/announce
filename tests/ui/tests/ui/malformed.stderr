@@ -1,4 +1,4 @@
-error: announce: malformed trampoline input to `Greet!`; expected `Greet! { [Greet!, next!, ..] .. }` (optionally preceded by a global options group `(..)`), where each list element is `path::to::macro!` or `#[derive(path)]`/`#[attr]` optionally followed by a name
+error: announce: invalid trampoline input; expected `Item! { [Item!, next!, ..] .. }` (a head and at least one continuation; a derive or attribute head goes through `announce_helper::redirect`)
  --> tests/ui/malformed.rs:1:1
   |
 1 | announce_test_defs::kinds::Greet! { not a list }

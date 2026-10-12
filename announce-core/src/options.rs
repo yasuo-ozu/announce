@@ -25,6 +25,26 @@ impl ToTokens for Check {
     }
 }
 
+/// How the generated trampoline holds the item (`layout = ..`, advanced).
+///
+/// The default, [`Layout::Auto`], is the right choice almost always; see
+/// DESIGN.md section 4.1.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Layout {
+    /// [`Layout::Direct`] for a small item, [`Layout::Single`] for a large one
+    /// (more than [`SINGLE_COPY_THRESHOLD`](crate::SINGLE_COPY_THRESHOLD)
+    /// tokens with its `META`).
+    Auto,
+    /// The item is held once, so the macro's metadata is about the size of one
+    /// item, and one call takes three expansions (two through the derive route)
+    /// instead of one.
+    Single,
+    /// One expansion per call; the item is copied into each of the macro's
+    /// three output arms.
+    Direct,
+}
+
 /// The parsed arguments of `#[announce(..)]` or of the `#[announce(..)]`
 /// helper attribute of `#[derive(Announce)]`.
 ///
@@ -58,6 +78,9 @@ pub struct Options {
     /// `emit_item = false`: do not re-emit the item (for derives, whose input
     /// already exists). Default `true`.
     pub emit_item: bool,
+    /// `layout = auto | single | direct`: how the trampoline holds the item.
+    /// Default `auto`: by the size of the item (advanced, DESIGN.md section 4.1).
+    pub layout: Layout,
     /// Set by `#[derive(Announce)]`: the item is emitted by the user and always
     /// gets the `Announce` impl. Not an option.
     pub(crate) derived: bool,
@@ -79,6 +102,7 @@ impl Default for Options {
             allow_std_prelude: false,
             krate: None,
             emit_item: true,
+            layout: Layout::Auto,
             derived: false,
             given: Vec::new(),
             checks: Vec::new(),
@@ -124,6 +148,11 @@ impl ToTokens for Options {
         }
         if !self.emit_item {
             parts.push(quote! { emit_item = false });
+        }
+        match self.layout {
+            Layout::Auto => {}
+            Layout::Single => parts.push(quote! { layout = single }),
+            Layout::Direct => parts.push(quote! { layout = direct }),
         }
         for m in &self.metas {
             parts.push(quote! { meta = #m });
@@ -179,6 +208,20 @@ impl Parse for Options {
                         ))
                     }
                     "emit_item" => opts.emit_item = input.parse::<LitBool>()?.value,
+                    "layout" => {
+                        let v: Ident = input.parse()?;
+                        opts.layout = match v.to_string().as_str() {
+                            "auto" => Layout::Auto,
+                            "single" => Layout::Single,
+                            "direct" => Layout::Direct,
+                            _ => {
+                                return Err(Error::new(
+                                    v.span(),
+                                    "`layout` is `auto`, `single` or `direct`",
+                                ))
+                            }
+                        };
+                    }
                     "allow_primitive" => opts.allow_primitive = input.parse::<LitBool>()?.value,
                     "allow_std_prelude" => opts.allow_std_prelude = input.parse::<LitBool>()?.value,
                     "meta" => {

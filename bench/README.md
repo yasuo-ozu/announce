@@ -32,6 +32,7 @@ the command line, so the grid is configured with environment variables:
 | `ANNOUNCE_BENCH_QUICK` | unset | `1`: default S = `1,10` and K = `1,4` (explicit variables still win) |
 | `ANNOUNCE_BENCH_SAMPLES` | `10` | criterion samples per benchmark (criterion's minimum is 10) |
 | `ANNOUNCE_BENCH_NO_TIMING` | unset | `1`: only build every crate once and report the sizes |
+| `ANNOUNCE_BENCH_LAYOUT` | unset | `single`, `direct` or `auto`: adds `layout = ..` to every `#[announce]` (the trampoline layout, DESIGN.md section 4.1). Unset: no option, so the layout follows the size of the item |
 | `ANNOUNCE_BENCH_KEEP` | unset | `1`: keep the generated crates and their build directory |
 | `ANNOUNCE_BENCH_REPO` | the parent of `bench/` | checkout of `announce`, `announce-helper` and the `Cargo.lock` to benchmark, e.g. a `git archive` of a commit |
 | `ANNOUNCE_BENCH_REV` | `git rev-parse` of the checkout | revision to print in the report, for a checkout without `.git` |
@@ -115,7 +116,7 @@ report says so.
 ## Caveats
 
 - Where things live. Item definitions and `macro_rules!` bodies are metadata,
-  so the six copies of each item inside the generated trampoline show up in the
+  so the copies of each item inside the generated trampoline show up in the
   definer's `.rmeta`. On the toolchain used (recent nightly cargo) rustc is run
   with `-C embed-metadata=no`, so the `.rlib` holds only compiled code, not
   metadata: it stays the size of an empty object for definitions without code,
@@ -135,10 +136,11 @@ report says so.
   warm-up and target times are set to their minimum (1 ms), so that criterion
   runs one warm-up rebuild and then exactly one rebuild per sample. This is
   expected.
-- A chain over K definitions nests about K macro expansions, and rustc's
-  default recursion limit is 128. The user crates set no limit for K <= 100
-  (K = 96 and 120 build without one); for K > 100 the generator adds
-  `#![recursion_limit = "512"]` (K = 128 fails without it).
+- A chain over K definitions nests the expansions of all its macros, and rustc's
+  default recursion limit is 128. A definition takes one expansion if it is
+  small and three above 300 tokens (DESIGN.md section 4.1), so for K > 16 the
+  generator adds `#![recursion_limit = "1024"]` to the chain crates (it has no
+  effect on build time). Until 2026-10-13 it added `"512"` for K > 100 only.
 - Definitions use only primitive field types (`u32`), so no `repeater` / type
   leak information is involved.
 - The generated workspace copies the repository's `Cargo.lock`, to use only

@@ -18,7 +18,8 @@ use proc_macro2::{Ident, Span, TokenStream};
 use std::sync::atomic::{AtomicU64, Ordering};
 use template_quote::quote;
 
-pub use options::{Check, Options};
+pub use generate::SINGLE_COPY_THRESHOLD;
+pub use options::{Check, Layout, Options};
 
 fn random_u64() -> u64 {
     use std::hash::{BuildHasher, Hasher};
@@ -268,7 +269,7 @@ mod tests {
     fn options_round_trip() {
         let src = "crate = ::l::announce, macro_name = N, mock = a::B, repeater = crate::R, \
                    allow_primitive = false, allow_std_prelude = true, emit_item = false, \
-                   meta = m::info(1, 2), meta = m::bare, c::check(x), c::bare";
+                   layout = single, meta = m::info(1, 2), meta = m::bare, c::check(x), c::bare";
         let opts: Options = syn::parse2(ts(src)).unwrap();
         let printed = opts.to_token_stream();
         let again: Options = syn::parse2(printed.clone()).unwrap();
@@ -276,8 +277,18 @@ mod tests {
         assert_eq!(
             norm(&printed),
             "crate=::l::announce,macro_name=N,mock=a::B,repeater=crate::R,\
-             allow_primitive=false,allow_std_prelude=true,emit_item=false,\
+             allow_primitive=false,allow_std_prelude=true,emit_item=false,layout=single,\
              meta=m::info(1,2),meta=m::bare,c::check(x),c::bare"
+        );
+        for (src, want) in [("layout = auto", ""), ("layout = direct", "layout=direct")] {
+            let o: Options = syn::parse2(ts(src)).unwrap();
+            assert_eq!(norm(&o.to_token_stream()), want);
+        }
+        let e = syn::parse2::<Options>(ts("layout = fast")).err().unwrap();
+        assert!(
+            e.to_string().contains("`auto`, `single` or `direct`"),
+            "{}",
+            e
         );
     }
 
@@ -382,6 +393,31 @@ mod tests {
         assert!(out.contains("::l::announce::Announce"), "{}", out);
         // The helper attribute is not part of the announced copy.
         assert!(!out.contains("#[announce"), "{}", out);
+    }
+
+    #[test]
+    fn layout_is_an_option_of_the_attribute_and_of_the_derive() {
+        let item = "pub struct S { pub a: u8 }";
+        let derive = |attr: &str| {
+            norm(&derive_announce(ts(&format!(
+                "#[announce({})] {}",
+                attr, item
+            ))))
+        };
+        assert!(!derive("").contains("__announce_emit"));
+        assert!(!derive("layout = direct").contains("__announce_emit"));
+        assert!(derive("layout = single").contains("__announce_emit"));
+        // The attribute hands the option to the capture derive.
+        let out = norm(&announce(ts("layout = single"), ts(item)));
+        assert!(out.contains("#[__announce("), "{}", out);
+        assert!(out.contains("layout=single"), "{}", out);
+        // From code.
+        let opts = Options {
+            layout: Layout::Single,
+            ..Options::default()
+        };
+        let out = derive_announce_with(opts, ts(item)).unwrap();
+        assert!(norm(&out).contains("__announce_emit"));
     }
 
     #[test]

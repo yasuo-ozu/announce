@@ -245,7 +245,7 @@ impl ContList {
         match list.0.first() {
             None => quote! { compile_error! { "announce: empty continuation list" } },
             Some(Cont::Attr { .. }) if in_expr => quote! {
-                compile_error! { "announce: the derive/attribute route emits items and cannot be used in expression position (`(expr)`)" }
+                compile_error! { "announce: a derive/attribute continuation emits items, so it cannot be used with `(expr)`" }
             },
             Some(Cont::Bang(p)) => quote! { #p ! { #opts #list #body } },
             Some(Cont::Attr { attr, name }) => quote! {
@@ -403,14 +403,18 @@ pub struct Input {
 
 impl Parse for Input {
     fn parse(input: ParseStream) -> Result<Self> {
-        // A `@__announce_dollar { $ }` prefix is meant for trampolines; skip
-        // it if a callback receives it.
-        if input.peek(Token![@]) {
+        // The `@__announce_self { path }` and `@__announce_dollar { $ }`
+        // prefixes are meant for trampolines; skip them if a callback
+        // receives them.
+        while input.peek(Token![@]) {
             let fork = input.fork();
             let _: Token![@] = fork.parse()?;
-            if matches!(fork.parse::<Ident>(), Ok(i) if i == "__announce_dollar") {
-                let _g: proc_macro2::Group = fork.parse()?;
-                syn::parse::discouraged::Speculative::advance_to(input, &fork);
+            match fork.parse::<Ident>() {
+                Ok(i) if i == "__announce_dollar" || i == "__announce_self" => {
+                    let _g: proc_macro2::Group = fork.parse()?;
+                    syn::parse::discouraged::Speculative::advance_to(input, &fork);
+                }
+                _ => break,
             }
         }
         let options = if input.peek(syn::token::Paren) {
@@ -708,10 +712,15 @@ pub fn payload(item: TokenStream) -> Option<TokenStream> {
 }
 
 /// For a derive or attribute whose name clashes with a trampoline: if `item` is
-/// a trampoline dummy, returns `target! { payload }`.
+/// a trampoline dummy, returns `target! { @__announce_self { target }
+/// @__announce_dollar { $ } payload }`.
 ///
 /// `target` is the absolute path of the `#[announce(macro_name = ..)]` macro.
-/// Pick a path that is valid at the user's site.
+/// Pick a path that is valid at the user's site. The two prefixes are for the
+/// trampoline (see DESIGN.md sections 4 and 4.1): it needs its own path to call
+/// itself again, when it holds a large item once, and a real `$` to
+/// un-escape an item that has `$` in it. `Input::parse` skips them if a
+/// callback receives them.
 ///
 /// ```ignore
 /// #[proc_macro_derive(Parse)]
@@ -726,10 +735,12 @@ pub fn redirect(item: TokenStream, target: &Path) -> Option<TokenStream> {
     let body = payload(item)?;
     // A trampoline whose payload contains `$` needs a real `$` from its
     // caller (`@__announce_dollar { $ }`, DESIGN.md section 4); the others
-    // ignore it. The derive route cannot re-invoke the trampoline itself, so
-    // the prefix is always added here.
+    // ignore it. A trampoline that holds its item once calls itself again
+    // and needs its own path (`@__announce_self { path }`, section 4.1); the
+    // others ignore that too. The derive route cannot re-invoke the
+    // trampoline itself, so both prefixes are always added here.
     let dollar = proc_macro2::Punct::new('$', proc_macro2::Spacing::Alone);
-    Some(quote! { #target ! { @__announce_dollar { #dollar } #body } })
+    Some(quote! { #target ! { @__announce_self { #target } @__announce_dollar { #dollar } #body } })
 }
 
 /// What a definition-side check receives: `(ARGS), ITEM`.
@@ -1361,6 +1372,29 @@ mod gap_tests {
     }
 
     #[test]
+    fn input_skips_the_self_and_dollar_prefixes() {
+        let dollar = mk_dollar();
+        let ts = template_quote::quote! {
+            @ __announce_self { ::a::F }
+            @ __announce_dollar { #dollar }
+            [cb!, n!] REST
+        };
+        let input: Input = syn::parse2(ts).unwrap();
+        assert!(input.options.is_none());
+        assert_eq!(s(&input.list), "[cb!,n!]");
+        assert_eq!(s(&input.rest), "REST");
+        // Either one alone, and the self prefix before the options group.
+        let ts = template_quote::quote! { @ __announce_self { F } (o) [cb!] };
+        let input: Input = syn::parse2(ts).unwrap();
+        assert!(input.has_option("o"));
+        assert_eq!(input.list.0.len(), 1);
+        // The prefixes are dropped on `forward`.
+        let ts = template_quote::quote! { @ __announce_self { F } [cb!, n!] };
+        let out = s(syn::parse2::<Input>(ts).unwrap().forward().unwrap());
+        assert!(!out.contains("__announce_self"), "{}", out);
+    }
+
+    #[test]
     fn input_rejects_other_prefixes() {
         assert!(syn::parse2::<Input>(template_quote::quote! { @ other { x } [cb!] }).is_err());
         assert!(syn::parse2::<Input>(template_quote::quote! { @ [cb!] }).is_err());
@@ -1390,8 +1424,7 @@ mod gap_tests {
         let opts = template_quote::quote!(expr);
         let out = s(list.invoke_with_options(Some(&opts), template_quote::quote!(body)));
         assert!(out.starts_with("compile_error!{"), "{}", out);
-        assert!(out.contains("cannotbeusedinexpressionposition"), "{}", out);
-        assert!(out.contains("(`(expr)`)"), "{}", out);
+        assert!(out.contains("cannotbeusedwith`(expr)`"), "{}", out);
         assert!(!out.contains("__AnnouncePayload"), "{}", out);
         // The same with `expr` leading other options. (Only a *leading* `expr` is
         // the position option for the generated trampolines; this helper looks
@@ -1399,7 +1432,7 @@ mod gap_tests {
         // here, so no test pins how a later `expr` is read.)
         let opts = template_quote::quote!(expr, type_leak);
         let out = s(list.invoke_with_options(Some(&opts), TokenStream::new()));
-        assert!(out.contains("expressionposition"), "{}", out);
+        assert!(out.contains("cannotbeusedwith`(expr)`"), "{}", out);
     }
 
     #[test]
@@ -1484,7 +1517,9 @@ mod gap_tests {
         let out = redirect(dummy.clone(), &syn::parse_quote!(::x::Y)).unwrap();
         let out_s = s(&out);
         assert!(
-            out_s.starts_with("::x::Y!{@__announce_dollar{$}[#[derive(p::D)]__AnnounceT_"),
+            out_s.starts_with(
+                "::x::Y!{@__announce_self{::x::Y}@__announce_dollar{$}[#[derive(p::D)]__AnnounceT_"
+            ),
             "{}",
             out_s
         );

@@ -76,5 +76,5 @@
 //! with another span. The API uses the types of `proc-macro2` 1 and `syn` 2.
 pub use announce_core::{
     announce, define_repeater, derive_announce, derive_announce_with, try_announce,
-    try_define_repeater, try_derive_announce, Check, Options,
+    try_define_repeater, try_derive_announce, Check, Layout, Options, SINGLE_COPY_THRESHOLD,
 };

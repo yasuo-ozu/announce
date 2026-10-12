@@ -81,6 +81,12 @@ wrap a `REST` that starts like one. A list element is `path!`,
 `#[derive(path)] Name` or `#[attr] Name`. A leading `(..)` group of global
 options is forwarded unchanged by every hop.
 
+A chain nests the expansions of all its macros, and rustc stops at a
+`recursion_limit` of 128 by default. A small definition takes one expansion, one
+with `$` two, and one of more than 300 tokens (see Performance) three, so a
+chain holds up to 127 small or 42 large definitions. For a longer one, set
+`#![recursion_limit = "256"]` (or more) in the calling crate.
+
 ## Features
 
 - Works in any position: item, statement, expression, type, pattern, also for
@@ -137,12 +143,13 @@ All options are listed in the
 ## Performance
 
 Measured with the criterion benchmark in `bench/` (run `cargo bench --offline`
-inside `bench/`; the full table is `bench/RESULTS.md`), on traits, with rustc
-1.101 nightly on x86_64 and cargo's dev profile. S is the number of methods per
-trait, K the number of definitions passed to one callback, which only consumes
-its input. Sizes are of the `.rmeta` files cargo writes: item definitions and
-`macro_rules!` bodies live in the metadata. Build times are the median rebuild
-of that crate alone (10 samples, on a shared machine, so rough).
+inside `bench/`; the full tables, with the numbers from before the single-copy
+layout for comparison, are in `bench/RESULTS.md`), on traits, with rustc 1.101
+nightly on x86_64 and cargo's dev profile. S is the number of methods per trait,
+K the number of definitions passed to one callback, which only consumes its
+input. Sizes are of the `.rmeta` files cargo writes: item definitions and
+`macro_rules!` bodies live in the metadata. Build times are the median rebuild of
+that crate alone (10 samples, on a shared machine, so rough).
 
 Lines: color = S (darker is larger), solid = announced or one chain, dashed =
 plain or K separate calls. Both axes are logarithmic. Made with
@@ -153,23 +160,33 @@ plain or K separate calls. Both axes are logarithmic. Made with
 
 | S | K | definer, plain | definer, announced | calling crate, one chain | calling crate, K calls | definer build, plain / announced | calling crate build, one chain |
 |---:|---:|---:|---:|---:|---:|---:|---:|
-| 1 | 1 | 2.5 KiB | 13.3 KiB | 3.2 KiB | 3.2 KiB | 53 / 91 ms | 84 ms |
-| 10 | 16 | 42 KiB | 303 KiB | 4.5 KiB | 10.2 KiB | 86 / 135 ms | 74 ms |
-| 200 | 16 | 865 KiB | 3,081 KiB | 4.6 KiB | 10.2 KiB | 148 / 1,045 ms | 207 ms |
-| 200 | 96 | 5,562 KiB | 19,045 KiB | 12.0 KiB | 47.6 KiB | 816 / 3,940 ms | 405 ms |
+| 1 | 1 | 2.5 KiB | 10.0 KiB | 4.0 KiB | 4.0 KiB | 97 / 99 ms | 99 ms |
+| 10 | 16 | 42 KiB | 194 KiB | 5.3 KiB | 10.9 KiB | 95 / 155 ms | 117 ms |
+| 200 | 16 | 865 KiB | 1,357 KiB | 6.9 KiB | 12.6 KiB | 159 / 475 ms | 143 ms |
+| 200 | 96 | 5,562 KiB | 8,629 KiB | 22.7 KiB | 58.9 KiB | 429 / 2,365 ms | 462 ms |
 
 - The definer's `.rlib` is 2.4 KiB with or without `#[announce]`, because
-  definitions contain no code. The trampoline is metadata: about 11 KiB per
-  definition plus about 4 times the metadata of the item itself.
-- A calling crate's `.rlib` stays 2.4 KiB. Its `.rmeta` does not depend on S and
-  grows by about 0.1 KiB per definition in one chain and about 0.5 KiB per
-  separate call.
-- An executable that uses both crates is as large as an empty program (4,495
-  KiB in the dev profile, 332 KiB stripped) at every point measured: the
-  trampolines do not reach it.
-- Rebuilding the announced definer costs tens of milliseconds more than the
-  plain one for small definitions and several times as much at S = 200, K = 96;
-  the calling crate stays within a few hundred milliseconds there.
+  definitions contain no code. The trampoline is metadata: about 6 KiB per
+  definition (11 KiB before), plus its copies of the item, three of them (six
+  before). An item of more than 300 tokens (about 21 trait methods) is held once
+  in its macro: 7 KiB plus one copy. At S = 200 the definer's metadata is 2.3
+  times the plain crate's with three copies (3.4 times before) and 1.6 times
+  with one, so S = 200, K = 96 is 8,629 KiB, not 19,046 KiB.
+- The price is expansions: one call of such a trampoline nests three macro
+  expansions instead of one (see "Calling a trampoline" for the chain length).
+  A calling crate's `.rlib` stays 2.4 KiB. Its `.rmeta` does not depend on S and
+  grows by about 0.1 KiB per definition in one chain (0.2 for a large one) and
+  about 0.5 KiB per separate call (0.6).
+- An executable that uses both crates has the same size at every point
+  measured (8,658 KiB in the dev profile, 356 KiB stripped; an empty program
+  is 4,495 and 331 KiB): the trampolines do not reach it.
+- The announced definer rebuilds in about the same time as before (5 % less at
+  S = 200): its time is the expansion of `#[announce]`, mostly the proc macro that
+  reads the item, not the size of the macro it writes. It costs tens of
+  milliseconds more than the plain one for small definitions and about five times
+  as much at S = 200, K = 96. A chain over 96 large definitions rebuilds 17 %
+  slower in the calling crate and 96 separate calls 40 % faster (interleaved
+  runs, `bench/RESULTS.md`).
 
 ## Related crates
 

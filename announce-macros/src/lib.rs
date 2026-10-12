@@ -61,6 +61,8 @@ use proc_macro::TokenStream;
 ///   `Option<T>`, `Clone`, ...) need no repeater. Default: `false`.
 /// - `emit_item = bool`: with `false`, only the macro is emitted, not the item.
 ///   Default: `true`.
+/// - `layout = auto | single | direct` (advanced): how the macro holds the item.
+///   See [Size and recursion](#size-and-recursion). Default: `auto`.
 ///
 /// ```ignore
 /// #[announce(macro_name = ParseAnnounce, meta = my_lib::info(version = 1))]
@@ -70,6 +72,26 @@ use proc_macro::TokenStream;
 /// #[announce(my_lib::no_tuple(named))]
 /// pub struct S { pub a: u8 }
 /// ```
+///
+/// # Size and recursion
+///
+/// The item and its `META` live in the `macro_rules!` body, so they are part of
+/// the defining crate's metadata, once for every copy the macro makes. A macro
+/// copies a small item into each of its three arms and expands once per call
+/// (`layout = direct`). An item of more than 300 tokens with its `META`
+/// (`announce::machinery::SINGLE_COPY_THRESHOLD`; about 21 trait methods) is held
+/// once, which takes the metadata of the macro down to a third of that
+/// (`layout = single`). The wire format that callbacks see is the same.
+///
+/// The price of the single copy is expansions: a call takes three nested
+/// macro expansions, two through the derive and attribute route, instead of
+/// one. Rustc's `recursion_limit` (128 by default) counts nested expansions,
+/// and a chain nests all of its macros. A chain fits the default limit with up
+/// to 127 small definitions, 63 small ones that contain `$`, or 42 large ones;
+/// a longer chain needs `#![recursion_limit = "256"]` (or more) in the crate
+/// that makes the call. `layout = direct` keeps a large item at one expansion,
+/// at the cost of its metadata; `layout = single` does the opposite for a small
+/// one. Most definers need neither.
 ///
 /// # Type context
 ///
