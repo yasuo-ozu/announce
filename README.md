@@ -108,7 +108,6 @@ pub mod MyTrait { pub trait MyTrait: Base { fn f(&self) -> Local; } }
 
 All options are listed in the
 [`#[announce]` docs](https://docs.rs/announce/latest/announce/attr.announce.html).
-MSRV: Rust 1.71.
 
 ## Performance
 
@@ -130,8 +129,6 @@ counts are of the expanded crate; times are rebuilds of that crate alone.
 - The calling crate stays near its baseline until the definitions reach about
   100,000 tokens.
 
-Full results: `bench/RESULTS.md` in the repository.
-
 ## Related crates
 
 - **[macro_magic](https://crates.io/crates/macro_magic)** has the same core idea:
@@ -142,7 +139,3 @@ Full results: `bench/RESULTS.md` in the repository.
 - **[reify_types](https://crates.io/crates/reify_types)** makes a definition
   available when compiled code *runs*, not during macro expansion. announce
   delivers it at *compile time*.
-
-More, in the [repository](https://github.com/yasuo-ozu/ozu): `DESIGN.md` (design),
-`measurement/` (ports of four crates), `bench/` (token and compile-time benchmark,
-see `bench/README.md`).
