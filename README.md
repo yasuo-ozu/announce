@@ -1,4 +1,4 @@
-# announce crate [![Latest Version]][crates.io] [![Documentation]][docs.rs] [![GitHub Actions]][actions]
+# announce crate [![Latest Version]][crates.io] [![Documentation]][docs.rs] [![GitHub Actions]][actions] [![MSRV]][msrv]
 
 [Latest Version]: https://img.shields.io/crates/v/announce.svg
 [crates.io]: https://crates.io/crates/announce
@@ -6,6 +6,8 @@
 [docs.rs]: https://docs.rs/announce/latest/announce/
 [GitHub Actions]: https://github.com/yasuo-ozu/announce/actions/workflows/rust.yml/badge.svg
 [actions]: https://github.com/yasuo-ozu/announce/actions/workflows/rust.yml
+[MSRV]: https://img.shields.io/badge/MSRV-1.57-blue.svg
+[msrv]: https://github.com/yasuo-ozu/announce/blob/main/Cargo.toml
 
 <p align="center"><img src="https://raw.githubusercontent.com/yasuo-ozu/announce/main/logo.png" alt="announce" width="200"></p>
 
