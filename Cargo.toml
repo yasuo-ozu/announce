@@ -11,7 +11,7 @@ readme = "README.md"
 build = "build.rs"
 # This package is the root of the repository: publish only the crate itself,
 # not the other workspace members, tests/, bench/, measurement/, tools/ or the logo.
-include = ["src/**/*", "build.rs", "README.md", "Cargo.toml"]
+include = ["src/**/*", "build.rs", "README.md", "LICENSE", "Cargo.toml"]
 
 [dependencies]
 announce-macros = { path = "announce-macros", version = "0.1.0" }
