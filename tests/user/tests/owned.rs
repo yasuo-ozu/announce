@@ -313,6 +313,55 @@ fn an_item_in_a_function_body_goes_through_the_query() {
     assert!(out.contains("#[my_lib(a)]#[other(b)]pubx:u8"), "{}", out);
 }
 
+mod heads {
+    use super::{d, owned_report};
+    d::Heads! { [d::Heads!, owned_report!] ALL }
+}
+
+#[test]
+fn every_check_sees_itself_as_the_head_of_the_list() {
+    // `Heads` compiles only if each of its four checks found its own path at the head
+    // of the query's list (`head_probe!` twice, `crate::head_check!` by its pattern),
+    // and forwarded the list headed by the next one. Each check added its names.
+    let _ = d::Heads { a: 1, b: 2, c: 3 };
+    assert_eq!(heads::ALL, ["probed,head_seen,rules|3|0"]);
+}
+
+#[test]
+fn macro_rules_checks_skip_their_head_in_every_path_form() {
+    // Absolute paths in the head position and in the next position, `macro_rules!`
+    // checks next to each other and before a proc-macro check, then `finish!`.
+    #[announce::announce(
+        ::announce_test_defs::plain_rules_check,
+        ::announce_test_defs::rules_check,
+        ::announce_test_derive::head_probe,
+        announce_test_defs::rules_check
+    )]
+    pub struct Abs {
+        #[rules(a)]
+        pub a: u8,
+        #[probed]
+        pub b: u8,
+    }
+    macro_rules! here {
+        ([$($l:tt)*] $($t:tt)*) => {
+            const HERE: &str = stringify!($($t)*);
+        };
+    }
+    Abs! { [Abs!, here!] }
+    let abs = Abs { a: 1, b: 2 };
+    assert_eq!((abs.a, abs.b), (1, 2));
+    let out = norm(HERE);
+    assert!(out.contains("attrs(rules,probed)"), "{}", out);
+    assert!(
+        out.contains("#[rules(a)]puba:u8,#[probed]pubb:u8"),
+        "{}",
+        out
+    );
+    // META lists the checks as they were written.
+    assert!(out.contains("::announce_test_defs::plain_rules_check,::announce_test_defs::rules_check,::announce_test_derive::head_probe,announce_test_defs::rules_check"), "{}", out);
+}
+
 mod dollar_rules {
     use super::{d, owned_report};
     d::with_dollar_rules! { [d::with_dollar_rules!, owned_report!] ALL }

@@ -93,13 +93,14 @@ Minimum Rust version: 1.57.
 ## Performance
 
 Measured with the criterion benchmark in `bench/` (run `cargo bench --offline`
-inside `bench/`; the full tables, with the numbers from before the single-copy
-layout for comparison, are in `bench/RESULTS.md`), on traits, with rustc 1.101
-nightly on x86_64 and cargo's dev profile. S is the number of methods per trait,
-K the number of definitions passed to one callback, which only consumes its
-input. Sizes are of the `.rmeta` files cargo writes: item definitions and
-`macro_rules!` bodies live in the metadata. Build times are the median rebuild of
-that crate alone (10 samples, on a shared machine, so rough).
+inside `bench/`; the full tables and the before and after of each change are in
+`bench/RESULTS.md`), on traits, with rustc 1.101 nightly on x86_64 and cargo's
+dev profile. S is the number of methods per trait, K the number of definitions
+passed to one callback, which only consumes its input. Sizes are of the `.rmeta`
+files cargo writes: item definitions and `macro_rules!` bodies live in the
+metadata. The charts show the median rebuild of that crate alone (the smaller
+of two runs of 10 samples, on a shared machine, so rough); the table has
+interleaved paired runs, which are steadier.
 
 Lines: color = S (darker is larger), solid = announced or one chain, dashed =
 plain or K separate calls. Both axes are logarithmic. Made with
@@ -110,10 +111,10 @@ plain or K separate calls. Both axes are logarithmic. Made with
 
 | S | K | definer, plain | definer, announced | calling crate, one chain | calling crate, K calls | definer build, plain / announced | calling crate build, one chain |
 |---:|---:|---:|---:|---:|---:|---:|---:|
-| 1 | 1 | 2.5 KiB | 10.0 KiB | 4.0 KiB | 4.0 KiB | 97 / 99 ms | 99 ms |
-| 10 | 16 | 42 KiB | 194 KiB | 5.3 KiB | 10.9 KiB | 95 / 155 ms | 117 ms |
-| 200 | 16 | 865 KiB | 1,357 KiB | 6.9 KiB | 12.6 KiB | 159 / 475 ms | 143 ms |
-| 200 | 96 | 5,562 KiB | 8,629 KiB | 22.7 KiB | 58.9 KiB | 429 / 2,365 ms | 462 ms |
+| 1 | 1 | 2.6 KiB | 10.1 KiB | 4.1 KiB | 4.1 KiB | 72 / 78 ms | 81 ms |
+| 10 | 16 | 42 KiB | 194 KiB | 5.4 KiB | 11.0 KiB | 69 / 92 ms | 76 ms |
+| 200 | 16 | 865 KiB | 1,357 KiB | 7.0 KiB | 12.7 KiB | 114 / 233 ms | 103 ms |
+| 200 | 96 | 5,562 KiB | 8,629 KiB | 22.8 KiB | 59.1 KiB | 427 / 1,117 ms | 453 ms |
 
 - The definer's `.rlib` is 2.4 KiB with or without `#[announce]`, because
   definitions contain no code. The trampoline is metadata: about 6 KiB per
@@ -134,13 +135,18 @@ plain or K separate calls. Both axes are logarithmic. Made with
 - An executable that uses both crates has the same size at every point
   measured (8,658 KiB in the dev profile, 356 KiB stripped; an empty program
   is 4,495 and 331 KiB): the trampolines do not reach it.
-- The announced definer rebuilds in about the same time as before (5 % less at
-  S = 200): its time is the expansion of `#[announce]`, mostly the proc macro that
-  reads the item, not the size of the macro it writes. It costs tens of
-  milliseconds more than the plain one for small definitions and about five times
-  as much at S = 200, K = 96. A chain over 96 large definitions rebuilds 17 %
-  slower in the calling crate and 96 separate calls 40 % faster (interleaved
-  runs, `bench/RESULTS.md`).
+- The time of the announced definer is mostly the proc macros, which read each
+  item once (3 ms for a trait of 200 methods in the dev profile, 5 ms with the
+  rest); before, S = 200, K = 96 took 2,415 ms. It costs a few milliseconds more
+  than the plain crate for small definitions, and 2.6 times as much at
+  S = 200, K = 96. The calling crate is as before: a chain over 96 large
+  definitions rebuilds 17 % slower than before the single-copy layout, and 96
+  separate calls 40 % faster (`bench/RESULTS.md`). Adding
+  `[profile.dev.build-override] opt-level = 3` to the workspace `Cargo.toml`
+  builds the proc macros (`announce`, `syn`, ...) with optimizations: S = 200,
+  K = 96 then rebuilds in 763 ms instead of 1,117 ms (the plain crate takes
+  427 ms), S = 10, K = 96 in 140 instead of 172 ms. `ANNOUNCE_TIMING=1` prints
+  the time of each step of the macros (`DESIGN.md`, section 4.9).
 
 ## Related crates
 

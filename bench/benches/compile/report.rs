@@ -259,9 +259,18 @@ pub fn write(h: &Harness) {
     let (br, bm) = lib(base);
     let (be, bes) = exe(base);
     let mut head = format!(
-        "Date {}; {}; {}, nproc={}; announce at {}; dev profile; sizes in KiB (1024 bytes), one measurement per crate.\n\
+        "Date {}; {}; {}, nproc={}; announce at {}; dev profile{}; sizes in KiB (1024 bytes), one measurement per crate.\n\
          Empty crate: rlib {br} KiB, rmeta {bm} KiB, trivial executable {be} KiB (stripped {bes} KiB).\n",
-        m.date, m.rustc, m.machine, m.nproc, m.revision
+        m.date,
+        m.rustc,
+        m.machine,
+        m.nproc,
+        m.revision,
+        if m.opt_build {
+            " with [profile.dev.build-override] opt-level = 3"
+        } else {
+            ""
+        }
     );
     let bad = h.nondeterministic.lock().unwrap();
     let verified = h.verified.lock().unwrap().len();

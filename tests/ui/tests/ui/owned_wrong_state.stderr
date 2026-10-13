@@ -1,10 +1,10 @@
 error: announce: the state of the attribute query was changed by a check. A check must forward `{ STATE }` unchanged and may only append `attrs(name, ..)`; see the `announce_helper::attrs` docs
-  --> tests/ui/owned_wrong_state.rs:5:81
+  --> tests/ui/owned_wrong_state.rs:5:104
    |
  3 | / macro_rules! bad_state {
- 4 | |     (@__announce_attrs [ $($np:ident)? $(:: $ns:ident)* ! $(, $($rest:tt)*)? ] { $($state:tt)* }) => {
- 5 | |         $($np)? $(:: $ns)* ! { @__announce_attrs [ $($($rest)*)? ] { $($state)* oops(my_lib) } }
-   | |                                                                                 ^^^^
+ 4 | |     (@__announce_attrs [ $($hp:ident)? $(:: $hs:ident)* ! , $($np:ident)? $(:: $ns:ident)* ! $(, $($rest:tt)*)? ] { $($state:tt)* ...
+ 5 | |         $($np)? $(:: $ns)* ! { @__announce_attrs [ $($np)? $(:: $ns)* ! $(, $($rest)*)? ] { $($state)* oops(my_lib) } }
+   | |                                                                                                        ^^^^
  6 | |     };
  7 | |     (($($args:tt)*), $($item:tt)*) => {};
  8 | | }
@@ -13,7 +13,7 @@ error: announce: the state of the attribute query was changed by a check. A chec
 10 |   #[announce::announce(bad_state)]
    |   -------------------------------- in this attribute macro expansion
 
-error: announce: the attribute query has no macro to call next: a check before this one did not forward the rest of its list (`finish!` ends it)
+error: announce: the list of the attribute query is empty or does not start with a macro: it must start with the macro that is called (this check) and end with `finish!`. A check before this one did not forward its list (without its own first element)
   --> tests/ui/owned_wrong_state.rs:19:11
    |
 19 |         $($np)? $(:: $ns)* ! { @__announce_attrs [] { $($state)* } }
@@ -23,3 +23,36 @@ error: announce: the attribute query has no macro to call next: a check before t
    | ----------------------------------------------------------------- in this attribute macro expansion
    |
    = note: this error originates in the macro `announce_test_derive::no_tuple` which comes from the expansion of the attribute macro `announce::announce` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: announce: the attribute query reached `finish!` with an empty list; the list starts with the macro that is called, so a check must forward its list without its own first element, and keep the rest (`[ finish! ]` at the end)
+  --> tests/ui/owned_wrong_state.rs:19:19
+   |
+19 |         $($np)? $(:: $ns)* ! { @__announce_attrs [] { $($state)* } }
+   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+30 | #[announce::announce(drops_list)]
+   | --------------------------------- in this attribute macro expansion
+   |
+   = note: this error originates in the macro `::announce::__private::finish` which comes from the expansion of the attribute macro `announce::announce` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: announce: the attribute query reached `finish!` with elements left in its list (it must be exactly `[ finish! ]`); a check must forward the list it received without its own first element
+  --> tests/ui/owned_wrong_state.rs:40:19
+   |
+40 |         $($np)? $(:: $ns)* ! { @__announce_attrs [ $($hp)? $(:: $hs)* ! , $($np)? $(:: $ns)* ! $(, $($rest)*)? ] { $($state)* } }
+   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+45 | #[announce::announce(keeps_head)]
+   | --------------------------------- in this attribute macro expansion
+   |
+   = note: this error originates in the macro `::announce::__private::finish` which comes from the expansion of the attribute macro `announce::announce` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: head_probe: the list does not start with `head_probe!`: [keeps_head! , announce_test_derive :: head_probe! , :: announce :: __private :: finish!]
+  --> tests/ui/owned_wrong_state.rs:40:11
+   |
+40 |         $($np)? $(:: $ns)* ! { @__announce_attrs [ $($hp)? $(:: $hs)* ! , $($np)? $(:: $ns)* ! $(, $($rest)*)? ] { $($state)* } }
+   |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+51 | #[announce::announce(keeps_head, announce_test_derive::head_probe)]
+   | ------------------------------------------------------------------- in this attribute macro expansion
+   |
+   = note: this error originates in the macro `announce_test_derive::head_probe` which comes from the expansion of the attribute macro `announce::announce` (in Nightly builds, run with -Z macro-backtrace for more info)

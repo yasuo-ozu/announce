@@ -7,6 +7,7 @@ pub mod docs;
 pub mod large;
 pub mod large_leak;
 pub mod owned;
+pub mod wire;
 
 pub mod kinds {
     use super::announce;

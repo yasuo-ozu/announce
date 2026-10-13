@@ -7,12 +7,12 @@ error: announce: `doc` cannot be an owned attribute name: it is an attribute tha
   = note: this error originates in the macro `announce_test_derive::doc_owner` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 error: announce: `cfg` cannot be an owned attribute name: it is an attribute that rustc or a standard tool uses
-  --> tests/ui/owned_reserved.rs:11:87
+  --> tests/ui/owned_reserved.rs:11:110
    |
  9 | / macro_rules! cfg_owner {
-10 | |     (@__announce_attrs [ $($np:ident)? $(:: $ns:ident)* ! $(, $($rest:tt)*)? ] { $($state:tt)* }) => {
-11 | |         $($np)? $(:: $ns)* ! { @__announce_attrs [ $($($rest)*)? ] { $($state)* attrs(cfg) } }
-   | |                                                                                       ^^^
+10 | |     (@__announce_attrs [ $($hp:ident)? $(:: $hs:ident)* ! , $($np:ident)? $(:: $ns:ident)* ! $(, $($rest:tt)*)? ] { $($state:tt)* ...
+11 | |         $($np)? $(:: $ns)* ! { @__announce_attrs [ $($np)? $(:: $ns)* ! $(, $($rest)*)? ] { $($state)* attrs(cfg) } }
+   | |                                                                                                              ^^^
 12 | |     };
 13 | |     (($($args:tt)*), $($item:tt)*) => {};
 14 | | }
@@ -22,12 +22,12 @@ error: announce: `cfg` cannot be an owned attribute name: it is an attribute tha
    |   -------------------------------- in this attribute macro expansion
 
 error: announce: `rustc_thing` cannot be an owned attribute name: it is a name reserved for rustc (`rustc_*`)
-  --> tests/ui/owned_reserved.rs:23:87
+  --> tests/ui/owned_reserved.rs:23:110
    |
 21 | / macro_rules! announce_owner {
-22 | |     (@__announce_attrs [ $($np:ident)? $(:: $ns:ident)* ! $(, $($rest:tt)*)? ] { $($state:tt)* }) => {
-23 | |         $($np)? $(:: $ns)* ! { @__announce_attrs [ $($($rest)*)? ] { $($state)* attrs(rustc_thing) } }
-   | |                                                                                       ^^^^^^^^^^^
+22 | |     (@__announce_attrs [ $($hp:ident)? $(:: $hs:ident)* ! , $($np:ident)? $(:: $ns:ident)* ! $(, $($rest:tt)*)? ] { $($state:tt)* ...
+23 | |         $($np)? $(:: $ns)* ! { @__announce_attrs [ $($np)? $(:: $ns)* ! $(, $($rest)*)? ] { $($state)* attrs(rustc_thing) } }
+   | |                                                                                                              ^^^^^^^^^^^
 24 | |     };
 25 | |     (($($args:tt)*), $($item:tt)*) => {};
 26 | | }

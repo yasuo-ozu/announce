@@ -326,13 +326,56 @@ pub fn dependency_name(manifest_dir: &FsPath) -> Option<String> {
 /// `::announce` (also when the caller *is* the announce package, i.e. its own
 /// tests and doctests, which reach it as `::announce`).
 pub fn default_crate_path() -> syn::Path {
-    let name = std::env::var("CARGO_MANIFEST_DIR")
-        .ok()
-        .filter(|_| std::env::var("CARGO_PKG_NAME").ok().as_deref() != Some(PACKAGE))
-        .and_then(|dir| dependency_name(FsPath::new(&dir)))
-        .unwrap_or_else(|| PACKAGE.to_string());
+    let name = default_crate_name();
     let ident = proc_macro2::Ident::new(&name, proc_macro2::Span::call_site());
     syn::parse_quote!(::#ident)
+}
+
+/// How long [`default_crate_name`] trusts what it read from the manifest. The
+/// compiler expands every `#[announce]` of a crate in one process, and each
+/// expansion asks (twice: the attribute and the `Capture` derive), so reading
+/// and scanning `Cargo.toml` every time was a fixed cost of each definition. A
+/// long-lived process (an IDE's macro server) sees an edit of the manifest after
+/// this long.
+const MANIFEST_TTL: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// The name of the `announce` dependency of the crate being compiled; see
+/// [`dependency_name`]. The answer is kept for [`MANIFEST_TTL`], per manifest
+/// directory and package name.
+fn default_crate_name() -> String {
+    let dir = std::env::var("CARGO_MANIFEST_DIR").ok();
+    let pkg = std::env::var("CARGO_PKG_NAME").ok();
+    cached((dir.clone(), pkg.clone()), MANIFEST_TTL, || {
+        dir.filter(|_| pkg.as_deref() != Some(PACKAGE))
+            .and_then(|dir| dependency_name(FsPath::new(&dir)))
+            .unwrap_or_else(|| PACKAGE.to_string())
+    })
+}
+
+/// The last answer of `lookup` for `key`, if it is not older than `ttl`; else
+/// the answer of `lookup`, which is kept. (One entry per thread: a compiler
+/// process asks for the same crate again and again.)
+fn cached(
+    key: (Option<String>, Option<String>),
+    ttl: std::time::Duration,
+    lookup: impl FnOnce() -> String,
+) -> String {
+    use std::cell::RefCell;
+    use std::time::Instant;
+    type Entry = ((Option<String>, Option<String>), Instant, String);
+    thread_local! {
+        static CACHE: RefCell<Option<Entry>> = RefCell::new(None);
+    }
+    let hit = CACHE.with(|c| match &*c.borrow() {
+        Some((k, at, name)) if *k == key && at.elapsed() < ttl => Some(name.clone()),
+        _ => None,
+    });
+    if let Some(name) = hit {
+        return name;
+    }
+    let name = lookup();
+    CACHE.with(|c| *c.borrow_mut() = Some((key, Instant::now(), name.clone())));
+    name
 }
 
 #[cfg(test)]
@@ -619,6 +662,24 @@ mod manifest_tests {
             "[package]\nname = \"p\"\n[workspace.dependencies]\nann = { package = \"announce\" }\n",
         );
         assert_eq!(dependency_name(&m), None);
+    }
+
+    #[test]
+    fn the_manifest_answer_is_kept_for_a_while_per_key() {
+        use std::time::Duration;
+        let key = |d: &str| (Some(d.to_string()), Some("p".to_string()));
+        let long = Duration::from_secs(3600);
+        assert_eq!(cached(key("a"), long, || "one".into()), "one");
+        // Within the time the lookup does not run again.
+        assert_eq!(cached(key("a"), long, || panic!("looked up again")), "one");
+        // Another manifest, or package, is another question.
+        assert_eq!(cached(key("b"), long, || "two".into()), "two");
+        assert_eq!(cached(key("a"), long, || "three".into()), "three");
+        let other_package = (Some("a".to_string()), None);
+        assert_eq!(cached(other_package, long, || "four".into()), "four");
+        // After the time it runs again.
+        assert_eq!(cached(key("a"), Duration::ZERO, || "five".into()), "five");
+        assert_eq!(cached(key("a"), Duration::ZERO, || "six".into()), "six");
     }
 
     #[test]

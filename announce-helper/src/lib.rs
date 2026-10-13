@@ -1,26 +1,26 @@
 //! Helpers for proc-macro crates that use [`announce`](https://docs.rs/announce)
 //! trampolines.
 //!
-//! - Receive: [`callback!`] defines a callback that parses its [`Input`].
-//!   [`Input::forward`] continues the chain. [`Input::gather`] asks for more
-//!   definitions first.
-//! - Start: [`ContList::invoke`] calls a trampoline from a proc macro.
+//! - Receive definitions: [`callback!`] defines a callback that parses its [`Input`].
+//!   [`Input::gather`] asks for more definitions. [`Input::forward`] continues the
+//!   chain.
+//! - Start a chain: [`ContList::invoke`] calls a trampoline from a proc macro.
 //! - Redirect: [`redirect`] forwards a derive or attribute to a renamed trampoline.
-//! - Transform: [`transformer!`] defines a list element that rewrites the newest entry.
-//! - Check: [`check!`] defines a definition-side check (a `#[proc_macro]` that
-//!   answers `#[announce]`'s attribute query, see [`OwnedAttrs`], and parses
-//!   [`CheckInput`]). [`check_type`] and [`check_trait`] test for
-//!   `announce::Announce`.
-//! - Attributes of your own inside an announced item: a check owns their names
-//!   ([`OwnedAttrs`]); [`Entry::owned_attrs`] and
-//!   [`Entry::item_without_owned_attrs`] read them in a callback.
+//! - Transform: [`transformer!`] defines a list element that rewrites the newest
+//!   entry.
+//! - Check a definition: [`check`] runs a check: it answers the query and parses its
+//!   [`CheckInput`].
+//!   [`attrs`] has the attributes that a check can own. [`check_type`] and
+//!   [`check_trait`] test for `announce::Announce`.
 //! - Read META: [`Entry::find_meta`] and [`KvArgs`] parse `key = value` lists.
+//!   [`Entry::owned_attrs`] and [`Entry::item_without_owned_attrs`] read owned
+//!   attributes.
 //! - Resolve relative types (feature `type-leak`, on by default):
-//!   [`Entry::type_leak`] reads the [`TypeLeak`] table of a
-//!   definition announced with `repeater = ..`, and [`TypeLeak::apply`] rewrites
-//!   an item so that its types resolve in any crate. The table holds a
-//!   `type_leak::Referrer` (re-exported as [`type_leak`]), so the arguments of the
-//!   rewritten types are the ones type-leak gives for the use site ([`TypeLeak::entry_args`]).
+//!   [`Entry::type_leak`] reads the [`TypeLeak`] table of a definition announced with
+//!   `repeater = ..`. [`TypeLeak::apply`] rewrites an item so that its types resolve
+//!   in any crate.
+//!
+//! The shape of the tokens that a callback receives is described at [`Input`].
 
 pub mod attrs;
 mod kv;
@@ -33,7 +33,7 @@ mod typeleak;
 pub use attrs::{remove_attributes, CheckCall, OwnedAttrs, Query};
 pub use kv::KvArgs;
 pub use transformer::signature_only;
-/// The version of `type-leak` that [`TypeLeak`] uses: name it through this crate
+/// The version of `type-leak` that [`TypeLeak`] uses. Name it through this crate,
 /// so there is never a second, incompatible copy. (Feature `type-leak`.)
 #[cfg(feature = "type-leak")]
 pub use type_leak;
@@ -218,11 +218,11 @@ impl FromIterator<Cont> for ContList {
 }
 
 /// Whether a global options group (the tokens inside `( .. )` before the
-/// continuation list) puts the chain in expression position: its **first**
-/// token is the identifier `expr`, as in `(expr)` or `(expr, other)`. That is
-/// the rule of the generated trampolines (the `(expr $($rest:tt)*)` pattern of
-/// their error arm), so `(other, expr)` does not select it in either. Every
-/// other option is a namespace for helpers, forwarded unchanged.
+/// continuation list) puts the chain in expression position. It does when its
+/// **first** token is the identifier `expr`, as in `(expr)` or `(expr, other)`.
+/// The generated trampolines use the same rule, so `(other, expr)` does not select
+/// it in either. Every other option is a namespace for helpers, forwarded
+/// unchanged.
 pub fn is_expression_position(options: &TokenStream) -> bool {
     matches!(
         options.clone().into_iter().next(),
@@ -345,7 +345,8 @@ impl Entry {
         syn::parse2(self.item.clone())
     }
 
-    /// The `mock(path)` META, if the item is a copy of a std trait.
+    /// The path of the `mock(path)` META element, if there is one: the item stands
+    /// in for the item at that path.
     pub fn mock(&self) -> Option<Path> {
         self.meta
             .iter()
@@ -380,21 +381,21 @@ impl Entry {
             .any(|m| m.path.segments.last().map_or(false, |s| s.ident == name))
     }
 
-    /// The attribute names that the definition's checks own: the `attrs(..)`
-    /// META element (empty without one). The definer removed these attributes
-    /// from the item it emitted, but they are still in [`item`](Self::item), where
-    /// the callback can read them ([`OwnedAttrs::find`]).
+    /// The attribute names that the definition's checks own: the `attrs(..)` META
+    /// element (empty without one). The definer removed these attributes from the
+    /// item it emitted, but they are still in [`item`](Self::item), where a
+    /// callback can read them ([`OwnedAttrs::find`]).
     ///
-    /// A callback that emits the item itself (rather than reading it) must remove
-    /// them first: rustc rejects an attribute that no macro declares. Use
+    /// A callback that emits the item itself must remove them first, because rustc
+    /// rejects an attribute that no macro declares. Use
     /// [`item_without_owned_attrs`](Self::item_without_owned_attrs).
     pub fn owned_attrs(&self) -> OwnedAttrs {
         attrs::owned_from_metas(&self.meta)
     }
 
-    /// The payload parsed as an item, without the owned attributes: the item as
-    /// the definer emitted it. The same as [`item`](Self::item) when the
-    /// definition has no owned attributes.
+    /// The payload parsed as an item, without the owned attributes: the item as the
+    /// definer emitted it. The same as [`item`](Self::item) when the definition has
+    /// no owned attributes.
     pub fn item_without_owned_attrs(&self) -> Result<syn::Item> {
         let mut item = self.item()?;
         self.owned_attrs().strip(&mut item)?;
@@ -426,13 +427,158 @@ impl ToTokens for Entry {
     }
 }
 
-/// What a callback receives: `(OPTIONS)? [list] ENTRY* REST`.
+/// What a callback receives: `(OPTIONS)? [LIST] ENTRY* REST`.
+///
+/// # The wire format
+///
+/// A callback receives these tokens:
+///
+/// ```text
+/// (OPTIONS)? [LIST] ENTRY* REST
+/// ```
+///
+/// - `OPTIONS`: global options, forwarded unchanged by every hop. Only a leading
+///   `expr` has a meaning: it puts the chain in expression position, where derive
+///   and attribute elements are refused ([`is_expression_position`]). The rest is
+///   free for helpers ([`Input::has_option`]).
+/// - `LIST`: the *continuation list*, the calls still to make, head first. The head
+///   is the macro that is called. An element ([`Cont`]) is `path!`,
+///   `#[derive(path)] Name` or `#[attr] Name`. The last two are the derive and
+///   attribute route: `Name` is a dummy enum that carries the tokens, and a derive or
+///   attribute macro hands them on with [`redirect`].
+/// - `ENTRY`: `KEY => [META] { ITEM }`, one per definition ([`Entry`]). `KEY` is the
+///   list element that produced the entry, as written.
+/// - `REST`: tokens that the protocol never touches. A parser reads entries greedily,
+///   so wrap a `REST` that starts like an entry.
+///
+/// How a chain runs:
+///
+/// - Each macro drops its own element (the head) from the list, adds an entry, and
+///   calls the next element with the rest of the list. The last element is the
+///   callback: it runs once, with one entry per trampoline.
+/// - New entries go in front, so they are newest first.
+///   [`Input::entries_in_order`] gives oldest first.
+/// - `[META]` is always written, even when empty (`[]`).
+/// - A trampoline can get the prefixes `@__announce_self { PATH }` and
+///   `@__announce_dollar { $ }` before this input. Only trampolines and [`redirect`]
+///   use them. Parsing an [`Input`] skips them.
+///
+/// `META` holds these elements, as the definer wrote them:
+///
+/// - `path` or `path(args)`: a check (`#[announce(path(args))]`);
+/// - `path(args)`: a `meta = path(args)` entry, never called ([`Entry::find_meta`]);
+/// - `mock(path)`: the item stands in for the item at `path` ([`Entry::mock`]);
+/// - `attrs(a, b)`: the attribute names that checks own ([`Entry::owned_attrs`]);
+/// - `type_leak(..)`: the type table of a `repeater` ([`Entry::type_leak`]).
+///
+/// Ignore elements you do not know.
+///
+/// ```
+/// use announce_helper::Input;
+///
+/// let input: Input = syn::parse_quote! {
+///     [cb!]
+///     a::F! => [my_lib::check, mock(::core::iter::Iterator)] { pub trait F {} }
+///     REST tokens
+/// };
+/// let entry = &input.entries[0];
+/// assert!(entry.has_check("check"));
+/// assert!(entry.mock().is_some());
+/// assert_eq!(input.rest.to_string(), "REST tokens");
+/// ```
+///
+/// # A real example
+///
+/// This is what a callback gets from a real chain, captured by the test
+/// `tests/user/tests/wire.rs`. The definitions, in `tests/defs/src/wire.rs`
+/// (`Meters` is private to the defining crate, so `Length` has a `repeater`):
+///
+/// ```ignore
+/// ::announce::define_repeater!(pub Repeater);
+///
+/// /// A point.
+/// #[announce(announce_test_derive::lib_check, meta = crate::info(1))]
+/// pub struct Point {
+///     /// The x coordinate.
+///     #[my_lib(skip)]
+///     pub x: u8,
+///     pub y: u8,
+/// }
+///
+/// #[announce(repeater = crate::wire::Repeater)]
+/// pub struct Length(pub Meters);
+/// ```
+///
+/// The chain, in another crate. `show!` is the callback; it prints its whole input:
+///
+/// ```ignore
+/// use announce_test_defs::wire as defs;
+///
+/// macro_rules! show {
+///     ($($t:tt)*) => { stringify!($($t)*) };
+/// }
+///
+/// let wire: &str = defs::Point! { (expr) [defs::Point!, defs::Length!, show!] some rest };
+/// ```
+///
+/// `wire` is this text. The tokens are the ones received, in order. Only the
+/// layout is added by hand, and the random number of `id` (a different one for each
+/// build) is replaced by `ID`. The test compares this block with what the chain
+/// gives, so it cannot drift:
+///
+/// <!-- wire-example -->
+/// ```text
+/// (expr)
+/// [show!]
+/// defs::Length! => [
+///     type_leak(repeater = $crate::wire::Repeater, id = ID,
+///               context = 0, referrer = ["type-leak-format-13" (Meters)])
+/// ] {
+///     pub struct Length(pub Meters);
+/// }
+/// defs::Point! => [
+///     announce_test_derive::lib_check,
+///     $crate::info(1),
+///     attrs(my_lib)
+/// ] {
+///     pub struct Point {
+///         #[my_lib(skip)]
+///         pub x: u8,
+///         pub y: u8,
+///     }
+/// }
+/// some rest
+/// ```
+///
+/// How the parts map to the fields of `Input`:
+///
+/// | Tokens | Field | Notes |
+/// |---|---|---|
+/// | `(expr)` | [`options`](Input::options) | From the call, forwarded by both hops. |
+/// | `[show!]` | [`list`](Input::list) | Only the callback is left: `Point!` and `Length!` each dropped themselves. |
+/// | `defs::Length! => [..] { .. }` | `entries[0]` | The newest entry, the last hop. Its `key` is as written in the call. |
+/// | `defs::Point! => [..] { .. }` | `entries[1]` | The oldest entry. |
+/// | `some rest` | [`rest`](Input::rest) | The caller's tokens, untouched. |
+///
+/// What is in the entries:
+///
+/// - `Length`: `type_leak(..)` is the table of the `repeater` ([`Entry::type_leak`]).
+///   The item still says `Meters`, which only the defining crate can resolve;
+///   the table is what a callback uses to write the type from anywhere
+///   ([`TypeLeak::apply`]).
+/// - `Point`: `announce_test_derive::lib_check` is the check, `$crate::info(1)` is
+///   `meta = crate::info(1)` (`crate` became `$crate`, so that the path resolves where
+///   the callback runs), and `attrs(my_lib)` lists the attribute names that the
+///   check owns.
+/// - The doc comments of `Point` are gone from the item, because the payload has
+///   no docs unless `docs = true`. `#[my_lib(skip)]` is still there: the definer
+///   removed it from the item it emitted, but the callback can read it.
 #[derive(Clone, Debug)]
 pub struct Input {
     /// The global options group `(..)`. [`forward`](Self::forward) passes it on
-    /// unchanged; [`fetch`](Self::fetch) and [`gather`](Self::gather) add
-    /// `__announce_fetched(..)` to it (what they fetched, to detect a
-    /// continuation that is not a trampoline) and pass the rest on.
+    /// unchanged. [`fetch`](Self::fetch) and [`gather`](Self::gather) add
+    /// `__announce_fetched(..)` to it, which records what they fetched (to detect
+    /// a continuation that is not a trampoline).
     pub options: Option<TokenStream>,
     /// The continuation list; its head is the callback itself.
     pub list: ContList,
@@ -511,16 +657,15 @@ impl Input {
     }
 
     /// Fetches more definitions, then calls this callback again. It invokes
-    /// `new[0]` with the list `[new.., <this list>]`; the new entries arrive in
+    /// `new[0]` with the list `[new.., <this list>]`, so the new entries arrive in
     /// front of the old ones.
     ///
-    /// The paths are recorded in the options group (`__announce_fetched(..)`),
-    /// as [`gather`](Self::gather) does. If this callback is called again with a
-    /// path in that record but no entry for it, the path is not an `#[announce]`
-    /// trampoline (it returned nothing it was asked for), and `fetch` emits a
-    /// `compile_error!` saying so instead of fetching until the recursion limit.
-    /// A callback that fetches conditionally (only what is still missing, as
-    /// `gather` does) never meets that error for a trampoline.
+    /// The paths are recorded in the options group as `__announce_fetched(..)`. If
+    /// this callback is called again with a recorded path but no entry for it, that
+    /// path is not an `#[announce]` trampoline. Then `fetch` emits a
+    /// `compile_error!` instead of fetching until the recursion limit. A callback
+    /// that fetches only what is still missing (as [`gather`](Self::gather) does)
+    /// never meets that error for a trampoline.
     pub fn fetch(&self, new: impl IntoIterator<Item = Cont>) -> TokenStream {
         self.fetch_conts(new.into_iter().collect())
     }
@@ -616,11 +761,11 @@ impl Input {
             .find(|e| path_key(&e.key.path()) == want)
     }
 
-    /// "Give me these definitions, then call me again."
+    /// Asks for definitions: "give me these, then call me again".
     ///
     /// Returns [`Gather::Ready`] with one entry per requested continuation, in
-    /// order, when all are present. Otherwise it returns [`Gather::Fetch`]:
-    /// tokens that fetch the missing ones and call this callback again.
+    /// order, when all are present. Otherwise it returns [`Gather::Fetch`]: tokens
+    /// that fetch the missing ones and call this callback again.
     ///
     /// ```ignore
     /// let entries = match input.gather(needed) {
@@ -666,8 +811,8 @@ impl Input {
         Gather::Fetch(self.fetch_conts(missing))
     }
 
-    /// Continues the chain: drops the head and invokes the next element. `None`
-    /// if the head was the last element.
+    /// Continues the chain: drops the head and invokes the next element. Returns
+    /// `None` if the head was the last element.
     pub fn forward(&self) -> Option<TokenStream> {
         if self.list.0.len() < 2 {
             return None;
@@ -738,62 +883,106 @@ macro_rules! callback {
     };
 }
 
-/// Defines a definition-side check: a `#[proc_macro]` that runs at the place where
-/// an item is announced, and answers `#[announce]`'s attribute query.
+/// Runs a check: the body of a `#[proc_macro]` that runs where an item is announced,
+/// and that answers `#[announce]`'s attribute query.
+///
+/// - `input` is the input of the proc macro: either the attribute query
+///   `@__announce_attrs [..] { .. }` or the check's own input, `(ARGS), ITEM`
+///   ([`CheckCall`]).
+/// - `attributes` lists the attribute names that the check owns:
+///   `#[announce(my_lib::my_check)]` then lets the item carry `#[my_lib]`,
+///   `#[my_lib(..)]` and `#[my_lib::..]` attributes. It may be empty, for a check that
+///   owns none: the check still answers the query. See [`attrs`] for the query and
+///   for what a name matches.
+/// - `f` is the check itself. It gets the parsed [`CheckInput`] (`args`, `item` with
+///   the owned attributes, and `owned`, which is `attributes`) and returns the tokens
+///   to emit, or a `syn::Error`. A check usually returns nothing, or an `Err`.
+///
+/// The query is answered with `attributes` ([`Query::answer`]) and `f` is not called.
+/// For the check's own input, the result is what `f` returns. A `syn::Error` (the
+/// input does not parse, a name in `attributes` is not an identifier or is reserved
+/// ([`OwnedAttrs::check_names`]), or `f` fails) becomes a `compile_error!`, like in
+/// [`callback!`]. So the result can be returned from the proc macro as it is.
 ///
 /// ```ignore
-/// announce_helper::check! {
-///     /// Rejects `#[my_lib(bad)]` and tuple structs.
-///     pub fn my_check(input) attributes(my_lib, other) {
-///         // `input` is an `announce_helper::CheckInput`: `args`, `item` (with the
-///         // owned attributes) and `owned`.
-///         for attr in input.owned_attributes() {
+/// /// Rejects `#[my_lib(bad)]` and tuple structs.
+/// #[proc_macro]
+/// pub fn my_check(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+///     announce_helper::check(input.into(), &["my_lib", "other"], |c| {
+///         // `c` is an `announce_helper::CheckInput`.
+///         for attr in c.owned_attributes() {
 ///             if attr.path().is_ident("my_lib") && attr.parse_args::<syn::Ident>().map_or(false, |i| i == "bad") {
-///                 return Err(syn::Error::new_spanned(attr, "`bad` is not allowed"));
+///                 return Err(syn::Error::new_spanned(&attr, "`bad` is not allowed"));
 ///             }
 ///         }
 ///         Ok(proc_macro2::TokenStream::new())
-///     }
+///     })
+///     .into()
 /// }
 /// ```
 ///
-/// `attributes(..)` is optional. It lists the attribute names the check owns:
-/// `#[announce(my_lib::my_check)]` lets the item carry `#[my_lib]`,
-/// `#[my_lib(..)]`, `#[my_lib::..]` attributes, which `#[announce]` removes from
-/// the item it emits. Leave it out for a check that owns none; the check still
-/// answers the query. The body returns `syn::Result<proc_macro2::TokenStream>`,
-/// like [`callback!`]; a check usually returns nothing, or a `compile_error!` as
-/// an `Err`. A name that rustc or a standard tool uses (`doc`, `cfg`, ..) is an
-/// error where `#[announce]` is used. See [`OwnedAttrs`] for what a name matches.
-#[macro_export]
-macro_rules! check {
-    (
-        $(#[$m:meta])* $vis:vis fn $name:ident ($input:ident)
-        $(attributes($($attr:ident),* $(,)?))?
-        $body:block
-    ) => {
-        $(#[$m])*
-        #[proc_macro]
-        $vis fn $name(__announce_ts: ::proc_macro::TokenStream) -> ::proc_macro::TokenStream {
-            let __announce_owned = $crate::OwnedAttrs::from_strs(&[$($(::core::stringify!($attr)),*)?]);
-            let __announce_run = |__announce_ts: ::proc_macro::TokenStream|
-             -> $crate::__private::syn::Result<$crate::__private::proc_macro2::TokenStream> {
-                match $crate::__private::syn::parse::<$crate::CheckCall>(__announce_ts)? {
-                    $crate::CheckCall::Query(__announce_q) => {
-                        ::core::result::Result::Ok(__announce_q.answer(&__announce_owned))
-                    }
-                    $crate::CheckCall::Run(__announce_i) => {
-                        let $input = __announce_i.with_owned(__announce_owned.clone());
-                        $body
-                    }
-                }
-            };
-            match __announce_run(__announce_ts) {
-                ::core::result::Result::Ok(ts) => ts.into(),
-                ::core::result::Result::Err(e) => e.to_compile_error().into(),
+/// The function can be tested with `proc_macro2` streams, because it does not use the
+/// `proc_macro` crate:
+///
+/// ```
+/// use announce_helper::check;
+/// use proc_macro2::TokenStream;
+///
+/// let run = |input: TokenStream| {
+///     check(input, &["my_lib"], |c| {
+///         match &c.item {
+///             syn::Item::Struct(s) if matches!(s.fields, syn::Fields::Unnamed(_)) => {
+///                 Err(syn::Error::new_spanned(&s.fields, "tuple structs are not supported"))
+///             }
+///             _ => Ok(TokenStream::new()),
+///         }
+///     })
+///     .to_string()
+/// };
+/// // The check itself.
+/// assert_eq!(run(syn::parse_quote! { (), struct S { a: u8 } }), "");
+/// assert!(run(syn::parse_quote! { (), struct S(u8); }).contains("compile_error"));
+/// // The query is answered with the names, and the check is not run.
+/// let out = run(syn::parse_quote! { @__announce_attrs [ me!, next! ] { st } });
+/// assert!(out.contains("next !") && out.contains("attrs (my_lib)"), "{}", out);
+/// ```
+pub fn check(
+    input: TokenStream,
+    attributes: &[&str],
+    f: impl FnOnce(&mut CheckInput) -> Result<TokenStream>,
+) -> TokenStream {
+    let run = || -> Result<TokenStream> {
+        for name in attributes {
+            if !is_attribute_name(name) {
+                return Err(syn::Error::new(
+                    Span::call_site(),
+                    format!(
+                        "announce: `{}` is not an identifier: it cannot be an owned attribute name",
+                        name
+                    ),
+                ));
+            }
+        }
+        let owned = OwnedAttrs::from_strs(attributes);
+        match syn::parse2::<CheckCall>(input)? {
+            // `answer` reports a reserved name where the check answers.
+            CheckCall::Query(q) => Ok(q.answer(&owned)),
+            CheckCall::Run(c) => {
+                owned.check_names()?;
+                f(&mut c.with_owned(owned))
             }
         }
     };
+    run().unwrap_or_else(|e| e.to_compile_error())
+}
+
+/// Whether `name` (or `r#name`) can be turned into an `Ident` without a panic.
+fn is_attribute_name(name: &str) -> bool {
+    let name = name.strip_prefix("r#").unwrap_or(name);
+    let mut chars = name.chars();
+    matches!(chars.next(), Some(c) if c == '_' || c.is_alphabetic())
+        && chars.all(|c| c == '_' || c.is_alphanumeric())
+        && name != "_"
 }
 
 /// Extracts the trampoline payload from the dummy enum that a derive or
@@ -826,16 +1015,15 @@ pub fn payload(item: TokenStream) -> Option<TokenStream> {
     Some(m.mac.tokens.clone())
 }
 
-/// For a derive or attribute whose name clashes with a trampoline: if `item` is
-/// a trampoline dummy, returns `target! { @__announce_self { target }
-/// @__announce_dollar { $ } payload }`.
+/// For a derive or attribute whose name clashes with a trampoline: if `item` is a
+/// trampoline dummy, returns `target! { @__announce_self { target }
+/// @__announce_dollar { $ } payload }`. Otherwise returns `None`.
 ///
-/// `target` is the absolute path of the `#[announce(macro_name = ..)]` macro.
-/// Pick a path that is valid at the user's site. The two prefixes are for the
-/// trampoline (see DESIGN.md sections 4 and 4.1): it needs its own path to call
-/// itself again, when it holds a large item once, and a real `$` to
-/// un-escape an item that has `$` in it. `Input::parse` skips them if a
-/// callback receives them.
+/// `target` is the absolute path of the `#[announce(macro_name = ..)]` macro. Pick
+/// a path that is valid at the user's site. The two prefixes are for the
+/// trampoline (see [the wire format](Input#the-wire-format)): it needs its own path
+/// to call itself again, when it holds a large item once, and a real `$` to
+/// un-escape an item that has `$` in it.
 ///
 /// ```ignore
 /// #[proc_macro_derive(Parse)]
@@ -858,20 +1046,19 @@ pub fn redirect(item: TokenStream, target: &Path) -> Option<TokenStream> {
     Some(quote! { #target ! { @__announce_self { #target } @__announce_dollar { #dollar } #body } })
 }
 
-/// What a definition-side check receives: `(ARGS), ITEM`.
+/// What a check receives: `(ARGS), ITEM`.
 ///
 /// The item has its `#[cfg]` evaluated, and it still has the attributes that the
-/// checks own (see [`OwnedAttrs`]): the check is where they are validated.
-/// [`check!`] defines a check that can use this, and it also answers the
-/// attribute query; parsing a `CheckInput` by hand fails with an error that says
-/// so when `#[announce]` sends the query.
+/// checks own (see [`OwnedAttrs`]), so the check can validate them. [`check`] parses
+/// this and also answers the attribute query. Parsing a `CheckInput` by hand fails
+/// with an error that says so when `#[announce]` sends the query.
 pub struct CheckInput {
     /// The check's arguments, `(ARGS)`.
     pub args: TokenStream,
     /// The cfg-evaluated item, with the owned attributes.
     pub item: syn::Item,
-    /// The attribute names the check declared with `attributes(..)` in
-    /// [`check!`]; empty when the input was parsed by hand.
+    /// The attribute names that the check declared with `attributes` in
+    /// [`check`]. Empty when the input was parsed by hand.
     pub owned: OwnedAttrs,
 }
 
@@ -894,8 +1081,8 @@ impl Parse for CheckInput {
         if input.peek(Token![@]) {
             return Err(input.error(
                 "announce: this check received the attribute query `@__announce_attrs` that \
-                 `#[announce]` sends first, and does not answer it. Define the check with \
-                 `announce_helper::check!`, or parse `announce_helper::CheckCall` and answer \
+                 `#[announce]` sends first, and does not answer it. Run the check with \
+                 `announce_helper::check`, or parse `announce_helper::CheckCall` and answer \
                  `Query` (a `macro_rules!` check needs one more arm); every check must \
                  answer. See the `announce_helper::attrs` docs",
             ));
@@ -1003,13 +1190,13 @@ mod tests {
     #[test]
     fn check_input_reports_the_query_it_does_not_answer() {
         let e = syn::parse2::<CheckInput>(template_quote::quote! {
-            @__announce_attrs [ f! ] { st }
+            @__announce_attrs [ c!, f! ] { st }
         })
         .err()
         .unwrap()
         .to_string();
         assert!(
-            e.contains("does not answer it") && e.contains("announce_helper::check!"),
+            e.contains("does not answer it") && e.contains("announce_helper::check`"),
             "{}",
             e
         );
@@ -1017,6 +1204,129 @@ mod tests {
         assert!(ok.owned.is_empty() && ok.owned_attributes().is_empty());
         let ok = ok.with_owned(OwnedAttrs::from_strs(&["a"]));
         assert!(ok.owned.contains("a"));
+    }
+
+    #[test]
+    fn check_answers_the_query_without_running_the_closure() {
+        let q = || -> TokenStream {
+            syn::parse_quote! { @__announce_attrs [ a::check!, b::check!, f::finish! ] { st } }
+        };
+        let mut ran = false;
+        let out = check(q(), &["my_lib", "other"], |_| {
+            ran = true;
+            Ok(TokenStream::new())
+        });
+        assert!(!ran);
+        assert_eq!(
+            s(out),
+            "b::check!{@__announce_attrs[b::check!,f::finish!]{stattrs(my_lib,other)}}"
+        );
+        // No names: the state is passed on as it is, and the closure is not run.
+        let out = check(q(), &[], |_| panic!("the query is not a call"));
+        assert_eq!(
+            s(out),
+            "b::check!{@__announce_attrs[b::check!,f::finish!]{st}}"
+        );
+        // Names are written as text: a raw identifier is its plain name.
+        let out = check(q(), &["r#type", "type"], |_| unreachable!());
+        assert_eq!(
+            s(out),
+            "b::check!{@__announce_attrs[b::check!,f::finish!]{stattrs(type)}}"
+        );
+        // The answer of `Query` is kept as is: a list that does not fit is a compile error.
+        let out = s(check(
+            syn::parse_quote! { @__announce_attrs [ a::check! ] { st } },
+            &[],
+            |_| unreachable!(),
+        ));
+        assert!(out.contains("compile_error") && out.contains("nomacrotocallafterthischeck"));
+    }
+
+    #[test]
+    fn check_runs_the_closure_with_the_owned_names() {
+        let mut seen = None;
+        let out = check(
+            syn::parse_quote! { (x, y), #[my_lib(a)] struct S { #[other] a: u8, #[kept] b: u8 } },
+            &["my_lib", "other"],
+            |c| {
+                seen = Some((
+                    s(&c.args),
+                    s(&c.item),
+                    c.owned
+                        .names()
+                        .iter()
+                        .map(|n| n.to_string())
+                        .collect::<Vec<_>>(),
+                    c.owned_attributes().len(),
+                ));
+                Ok(quote! { pub const SEEN: u8 = 1; })
+            },
+        );
+        // Whatever the closure returns is the result.
+        assert_eq!(s(out), "pubconstSEEN:u8=1;");
+        let (args, item, owned, found) = seen.unwrap();
+        assert_eq!(args, "x,y");
+        assert!(
+            item.starts_with("#[my_lib(a)]structS{#[other]a:u8"),
+            "{}",
+            item
+        );
+        assert_eq!(owned, ["my_lib", "other"]);
+        assert_eq!(found, 2);
+        // The closure can change the input (`&mut`) and has no names to own.
+        let out = check(syn::parse_quote! { (), struct S; }, &[], |c| {
+            assert!(c.owned.is_empty());
+            c.args = quote! { changed };
+            Ok(c.args.clone())
+        });
+        assert_eq!(s(out), "changed");
+    }
+
+    #[test]
+    fn check_turns_errors_into_compile_errors() {
+        // An error of the closure.
+        let out = s(check(
+            syn::parse_quote! { (), struct S(u8); },
+            &[],
+            |c| match &c.item {
+                syn::Item::Struct(it) => Err(syn::Error::new_spanned(&it.fields, "no tuples")),
+                _ => Ok(TokenStream::new()),
+            },
+        ));
+        assert_eq!(out, "::core::compile_error!{\"notuples\"}");
+        // An input that is neither the query nor `(ARGS), ITEM`.
+        let mut ran = false;
+        let out = s(check(syn::parse_quote! { not a check call }, &[], |_| {
+            ran = true;
+            Ok(TokenStream::new())
+        }));
+        assert!(!ran && out.contains("compile_error"), "{}", out);
+        // A reserved name, on the query and on the call.
+        for input in [
+            syn::parse_quote! { @__announce_attrs [ a!, f::finish! ] { st } },
+            syn::parse_quote! { (), struct S; },
+        ] {
+            let out = s(check(input, &["my_lib", "doc"], |_| unreachable!()));
+            assert!(
+                out.contains("compile_error") && out.contains("`doc`cannotbeanownedattributename"),
+                "{}",
+                out
+            );
+        }
+        // A name that is not an identifier is an error, not a panic.
+        for bad in ["", "my-lib", "1st", "_", "a b", "r#"] {
+            let out = s(check(
+                syn::parse_quote! { (), struct S; },
+                &[bad],
+                |_| unreachable!(),
+            ));
+            assert!(
+                out.contains("compile_error") && out.contains("isnotanidentifier"),
+                "{:?}: {}",
+                bad,
+                out
+            );
+        }
     }
 
     #[test]

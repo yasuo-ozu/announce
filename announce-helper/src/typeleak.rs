@@ -2,16 +2,16 @@
 //! `type_leak(..)` META and the rewriting of a payload with it.
 //!
 //! The definer analyses the item with [`type_leak`] and sends the resulting
-//! [`Referrer`] to the consumer inside the META, as type-leak intends: the
-//! `Referrer` knows the context (the generics, the bounds) of every leaked type.
-//! The consumer parses it back, and rewrites the payload with
-//! [`Referrer::visitor`], so a type is replaced by the entry of the scope where it
-//! is written, never by the entry of a same-named type of another scope.
+//! [`Referrer`] to the consumer inside META. The `Referrer` knows the context (the
+//! generics and bounds) of every leaked type. The consumer parses it back and
+//! rewrites the payload with [`Referrer::visitor`]. So a type is replaced by the
+//! entry of the scope where it is written, never by the entry of a same-named type
+//! of another scope.
 //!
-//! The arguments of a replacement are exactly the ones that
-//! [`Referrer::entry_args_with`] gives for a [`UseSite`]; the definer's impls come
-//! from [`Referrer::repeater_impl_with`], which encodes the same generics, so the
-//! two sides cannot disagree.
+//! The arguments of a replacement are the ones that [`Referrer::entry_args_with`]
+//! gives for a [`UseSite`]. The definer's impls come from
+//! [`Referrer::repeater_impl_with`], which encodes the same generics, so the two
+//! sides cannot disagree.
 
 use crate::KvArgs;
 use proc_macro2::TokenStream;
@@ -22,10 +22,21 @@ use type_leak::{ContextId, Referrer, RepeaterSlots, UseSite};
 /// Type table of an entry announced with `#[announce(repeater = ..)]`, from
 /// [`Entry::type_leak`](crate::Entry::type_leak).
 ///
-/// The payload is the original item. A relative type of the item, the `ix`-th
-/// entry of [`referrer`](Self::referrer), resolves from any crate as
-/// `<() as REPEATER<ARGS, ID, ix>>::Type`, where `ARGS` encodes the generics that
-/// the type uses (see [`entry_args`](Self::entry_args)). [`apply`](Self::apply)
+/// The payload is the original item. The definer numbered its relative types: the
+/// *entries* `0, 1, ..` of [`referrer`](Self::referrer). An entry is a type in the
+/// *context* where it is written (the item, a method, a generic associated type),
+/// with that context's generics. So the same text in two methods with different
+/// generics is two entries, and a lifetime that a `for<'b>` of the item binds
+/// belongs to the context of its type. `&Local`, also with an elided lifetime, is
+/// the entry `Local`.
+///
+/// The `ix`-th entry resolves from any crate as `<() as REPEATER<ARGS, ID, ix>>::Type`.
+/// `ARGS` encodes the generics that the type uses (see
+/// [`entry_args`](Self::entry_args)): a type parameter as itself, a lifetime as
+/// `&'a ()`, a `usize` const as `[(); N]`, and a const of another primitive type
+/// (`bool`, `char`, `u8` .. `u128`, `i8` .. `i128`, `isize`) through the const
+/// parameter that the repeater has for that type. A lifetime bound (`T: 'a`) is
+/// encoded too (`&'a T`), and the impl does not declare it. [`apply`](Self::apply)
 /// rewrites an item that way.
 ///
 /// The META element is
@@ -34,9 +45,11 @@ use type_leak::{ContextId, Referrer, RepeaterSlots, UseSite};
 /// type_leak(repeater = $crate::Repeater, id = 42u64, context = 0, referrer = [ .. ])
 /// ```
 ///
-/// `referrer` is the `type_leak::Referrer` of the item as type-leak writes it
-/// (a format-tagged token stream, opaque to announce), `context` the top-level
-/// `ContextId` of the item in it. Other keys are ignored when reading.
+/// `referrer` is the `type_leak::Referrer` of the item in type-leak's own token
+/// format. It is opaque to announce: do not parse it yourself. Its first token is a
+/// format tag, and a version of type-leak that does not match is an error.
+/// `context` is the top-level `ContextId` of the item in it, where a callback
+/// rewrites the item. Other keys are ignored when reading.
 #[derive(Clone, Debug)]
 pub struct TypeLeak {
     /// The repeater trait, e.g. `$crate::Repeater`.
@@ -46,7 +59,7 @@ pub struct TypeLeak {
     /// The top-level context of the item in [`referrer`](Self::referrer).
     pub context: ContextId,
     /// The analysis of the item at the definition. Entry `ix` is the `NTH`
-    /// argument of the repeater. Only the required entries have an impl; this
+    /// argument of the repeater. Only the required entries have an impl. This
     /// `Referrer` is not strict, so the optional ones (absolute paths of other
     /// crates) are left as written.
     pub referrer: Referrer,
@@ -63,9 +76,8 @@ impl TypeLeak {
         }
     }
 
-    /// The encoder of const generics for this repeater. The repeater is the
-    /// trait that `announce::define_repeater!` (`type_leak::repeater_definition`)
-    /// defines.
+    /// The encoder of const generics for this repeater, the trait that
+    /// `announce::define_repeater!` (`type_leak::repeater_definition`) defines.
     pub fn slots(&self) -> RepeaterSlots {
         RepeaterSlots::new(self.repeater.clone())
     }
@@ -79,7 +91,7 @@ impl TypeLeak {
     /// The index of the first entry that is `ty`, if it was interned.
     ///
     /// The same type can be an entry in several contexts (a method generic named
-    /// like a generic of the trait): then use [`apply`](Self::apply), which tells
+    /// like a generic of the trait). Then use [`apply`](Self::apply), which tells
     /// them apart by the scope.
     pub fn lookup(&self, ty: &Type) -> Option<usize> {
         self.types().find(|(_, t)| *t == ty).map(|(ix, _)| ix)
@@ -88,10 +100,10 @@ impl TypeLeak {
     /// The first argument of the repeater for entry `ix`, as written at `site`.
     ///
     /// It is `Referrer::entry_args_with` with the const slots of the repeater.
-    /// [`UseSite::identity()`] is the scope of the item itself (every generic
-    /// by its own name): the arguments of the impl the definer wrote.
-    /// [`UseSite::substituting`] gives the generics arguments, as in `impl
-    /// Tr<u8> for ..`.
+    /// [`UseSite::identity()`] is the scope of the item itself (every generic by its
+    /// own name): the arguments of the impl the definer wrote.
+    /// [`UseSite::substituting`] gives the generics arguments, as in `impl Tr<u8>
+    /// for ..`.
     pub fn entry_args(&self, ix: usize, site: &UseSite) -> Result<Type> {
         let slots = self.slots();
         self.referrer
@@ -130,8 +142,9 @@ impl TypeLeak {
         self.try_apply_at(item, &UseSite::identity())
     }
 
-    /// Like [`try_apply`](Self::try_apply), for a copy at another use site. The
-    /// arguments in the replacements are `self.entry_args(ix, site)`.
+    /// Like [`try_apply`](Self::try_apply), for a copy at another use site, such as
+    /// the `impl Tr<u8> for X` of a trait. The arguments in the replacements are
+    /// `self.entry_args(ix, site)`.
     ///
     /// The scope of the copy must be the item's: pass the whole item (not a type
     /// cut out of it), with the generics it declares as the definer wrote them

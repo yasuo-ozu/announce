@@ -41,9 +41,9 @@ impl Input {
     }
 }
 
-/// Defines a transformer: a `#[proc_macro]` that gets the newest entry as
-/// `announce_helper::Entry`, returns the rewritten `syn::Result<Entry>`, and
-/// forwards it to the next list element.
+/// Defines a transformer: a `#[proc_macro]` that gets the newest entry as an
+/// [`Entry`], rewrites it (the body returns `syn::Result<Entry>`), and forwards it
+/// to the next list element.
 ///
 /// ```ignore
 /// announce_helper::transformer! {
@@ -85,19 +85,13 @@ macro_rules! transformer {
     };
 }
 
-/// Strips an item down to its signatures. The `signature_only!` transformer
-/// uses it; custom transformers can too.
+/// Strips an item down to its signatures. This is what the
+/// [`signature_only!`] transformer does, and custom transformers can use it too.
+/// That macro lists the rules: function bodies are replaced with
+/// `{ ::core::unimplemented!() }`, except in a `const fn` and in a fn that returns
+/// `impl Trait`.
 ///
-/// - Provided trait methods, fns in modules and methods in impl blocks get the
-///   body `{ ::core::unimplemented!() }`. Required trait methods are unchanged.
-/// - Bodies of `const fn`s and of fns returning `impl Trait` are kept, because
-///   a placeholder would not compile there.
-/// - Structs, enums, unions and type aliases are unchanged.
-///
-/// It recurses into nested modules; a module's traits, impls and fns are
-/// handled as above.
-///
-/// [`signature_only`]: https://docs.rs/announce/latest/announce/macro.signature_only.html
+/// [`signature_only!`]: https://docs.rs/announce/latest/announce/macro.signature_only.html
 pub fn signature_only(item: &mut Item) {
     fn returns_impl(sig: &syn::Signature) -> bool {
         fn has_impl(ts: TokenStream) -> bool {

@@ -103,8 +103,8 @@ pub struct DerivedKept {
 #[macro_export]
 #[doc(hidden)]
 macro_rules! record_item {
-    (@__announce_attrs [ $($np:ident)? $(:: $ns:ident)* ! $(, $($rest:tt)*)? ] { $($state:tt)* }) => {
-        $($np)? $(:: $ns)* ! { @__announce_attrs [ $($($rest)*)? ] { $($state)* } }
+    (@__announce_attrs [ $($hp:ident)? $(:: $hs:ident)* ! , $($np:ident)? $(:: $ns:ident)* ! $(, $($rest:tt)*)? ] { $($state:tt)* }) => {
+        $($np)? $(:: $ns)* ! { @__announce_attrs [ $($np)? $(:: $ns)* ! $(, $($rest)*)? ] { $($state)* } }
     };
     (($($args:tt)*), $($item:tt)*) => {
         /// What the check received.

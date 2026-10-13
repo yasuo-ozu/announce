@@ -2,16 +2,16 @@
 //!
 //! `type_leak::Referrer` numbers its entries by context (in order of first
 //! appearance) and then by token text. [`StableReferrer`] numbers the required
-//! entries by token text alone, so a definer and a consumer get the same
-//! indices even when their analyses give the contexts other ids.
+//! entries by token text alone. A definer and a consumer then get the same indices
+//! even when their analyses give the contexts other ids.
 //!
 //! Both sides must see the same tokens. A definer sees the item before `#[cfg]`
-//! evaluation and before `crate::` becomes `$crate::`. Run both sides on the
+//! evaluation and before `crate::` becomes `$crate::`. So run both sides on the
 //! entry payload, and call [`normalize_crate`] on it first.
 //!
-//! With `#[announce(repeater = ..)]` none of this is needed: the definer builds
-//! the table, the `type_leak(..)` META carries its `Referrer` with the definer's
-//! indices, and the callback applies it with `TypeLeak::apply`.
+//! With `#[announce(repeater = ..)]` none of this is needed. The definer builds the
+//! table, the `type_leak(..)` META carries it, and the callback applies it with
+//! [`TypeLeak::apply`](crate::TypeLeak::apply).
 
 use proc_macro2::TokenStream;
 use syn::Type;

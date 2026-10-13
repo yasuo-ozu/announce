@@ -8,8 +8,8 @@ use announce::announce;
 /// `rules` (the one arm every check needs), and does nothing else.
 #[macro_export]
 macro_rules! rules_check {
-    (@__announce_attrs [ $($np:ident)? $(:: $ns:ident)* ! $(, $($rest:tt)*)? ] { $($state:tt)* }) => {
-        $($np)? $(:: $ns)* ! { @__announce_attrs [ $($($rest)*)? ] { $($state)* attrs(rules) } }
+    (@__announce_attrs [ $($hp:ident)? $(:: $hs:ident)* ! , $($np:ident)? $(:: $ns:ident)* ! $(, $($rest:tt)*)? ] { $($state:tt)* }) => {
+        $($np)? $(:: $ns)* ! { @__announce_attrs [ $($np)? $(:: $ns)* ! $(, $($rest)*)? ] { $($state)* attrs(rules) } }
     };
     (($($args:tt)*), $($item:tt)*) => {};
 }
@@ -17,8 +17,21 @@ macro_rules! rules_check {
 /// A `macro_rules!` check that owns nothing: it forwards the state unchanged.
 #[macro_export]
 macro_rules! plain_rules_check {
-    (@__announce_attrs [ $($np:ident)? $(:: $ns:ident)* ! $(, $($rest:tt)*)? ] { $($state:tt)* }) => {
-        $($np)? $(:: $ns)* ! { @__announce_attrs [ $($($rest)*)? ] { $($state)* } }
+    (@__announce_attrs [ $($hp:ident)? $(:: $hs:ident)* ! , $($np:ident)? $(:: $ns:ident)* ! $(, $($rest:tt)*)? ] { $($state:tt)* }) => {
+        $($np)? $(:: $ns)* ! { @__announce_attrs [ $($np)? $(:: $ns)* ! $(, $($rest)*)? ] { $($state)* } }
+    };
+    (($($args:tt)*), $($item:tt)*) => {};
+}
+
+/// A `macro_rules!` check that asserts, with its pattern, that the list of the
+/// attribute query is headed by the check itself: `crate::head_check!`, as written
+/// in `#[announce(..)]`. A list that starts with anything else matches no arm.
+#[macro_export]
+// `crate::head_check` in the pattern is the path the item below writes, on purpose.
+#[allow(clippy::crate_in_macro_def)]
+macro_rules! head_check {
+    (@__announce_attrs [ crate::head_check ! , $($np:ident)? $(:: $ns:ident)* ! $(, $($rest:tt)*)? ] { $($state:tt)* }) => {
+        $($np)? $(:: $ns)* ! { @__announce_attrs [ $($np)? $(:: $ns)* ! $(, $($rest)*)? ] { $($state)* attrs(head_seen) } }
     };
     (($($args:tt)*), $($item:tt)*) => {};
 }
@@ -123,6 +136,24 @@ pub struct Mixed {
 pub struct Twice {
     #[my_lib(t)]
     pub t: u8,
+}
+
+/// Every check finds itself at the head of the list: a proc-macro check that reads
+/// the query by hand (twice, once with an absolute path), a `macro_rules!` check
+/// that matches its own path in the pattern, and one that skips its head.
+#[announce(
+    announce_test_derive::head_probe,
+    crate::head_check,
+    ::announce_test_derive::head_probe,
+    crate::rules_check
+)]
+pub struct Heads {
+    #[probed(a)]
+    pub a: u8,
+    #[head_seen(b)]
+    pub b: u8,
+    #[rules(c)]
+    pub c: u8,
 }
 
 /// Checks that own nothing at all.
@@ -244,7 +275,7 @@ pub use announce as __announce;
 #[macro_export]
 macro_rules! make_owned {
     ($name:ident) => {
-        #[$crate::owned::__announce::announce(crate = $crate::owned::__announce, $crate::rules_check, announce_test_derive::no_tuple)]
+        #[$crate::owned::__announce::announce(crate = $crate::owned::__announce, $crate::plain_rules_check, $crate::rules_check, announce_test_derive::no_tuple)]
         pub struct $name {
             #[rules(made)]
             pub x: u8,

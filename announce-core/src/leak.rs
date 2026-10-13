@@ -96,7 +96,7 @@ pub fn check_repeater(repeater: &Path) -> Result<()> {
 
 /// Std prelude names (types and traits) accepted bare with
 /// `allow_std_prelude = true`.
-const PRELUDE: &[&str] = &[
+pub(crate) const PRELUDE: &[&str] = &[
     "Box",
     "String",
     "Vec",
@@ -454,7 +454,17 @@ fn const_param_names(item: &Item) -> Vec<String> {
 
 /// Analyses `item` with type-leak. `None` for items that are not analysed
 /// (inline modules: the documented wrapper pattern).
+///
+/// In a test build every answer is checked against the fast path
+/// ([`crate::fastpath`]), which must never accept more than this does.
 pub fn analyze(item: &Item, opts: &crate::options::Options) -> Result<Option<Analysis>> {
+    let result = analyze_full(item, opts);
+    #[cfg(test)]
+    crate::fastpath::check_analysis(item, opts, &result);
+    result
+}
+
+fn analyze_full(item: &Item, opts: &crate::options::Options) -> Result<Option<Analysis>> {
     if !matches!(
         item,
         Item::Struct(_) | Item::Enum(_) | Item::Union(_) | Item::Trait(_) | Item::Type(_)

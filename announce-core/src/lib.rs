@@ -10,10 +10,13 @@
 //! docs, and `announce::machinery` for how a library uses them.
 
 mod cratepath;
+mod fastpath;
 mod finish;
 mod generate;
 mod leak;
 mod options;
+mod scan;
+mod timing;
 
 use announce_helper::OwnedAttrs;
 use proc_macro2::{Ident, Span, TokenStream};
@@ -61,27 +64,25 @@ pub fn announce(attr: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 /// [`announce()`] with the error returned as a [`syn::Error`].
+///
+/// The item is not parsed here: only its kind and name are read (`scan`), to
+/// refuse what is not supported at once. Its syntax is validated by the parse of
+/// the `Capture` derive that the result contains (DESIGN.md section 4.2).
 pub fn try_announce(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> {
+    let mut t = timing::Timer::new("attribute");
     let opts: Options = syn::parse2(attr.clone())?;
-    let parsed: syn::Item = syn::parse2(item.clone())?;
-    generate::ident_vis(&parsed)?;
+    t.step("options");
+    let head = scan::head(&item)?;
+    t.subject(|| format!("{:?} {}", head.kind, head.ident));
+    t.step("scan");
     let random = random_u64();
-    if opts.checks.is_empty() {
-        return Ok(capture_output(
-            &opts,
-            &attr,
-            item,
-            random,
-            &OwnedAttrs::new(),
-        ));
-    }
-    Ok(finish::query(
-        &opts,
-        finish::Mode::Attribute,
-        &attr,
-        &item,
-        random,
-    ))
+    let out = if opts.checks.is_empty() {
+        capture_output(&opts, &attr, item, random, &OwnedAttrs::new())
+    } else {
+        finish::query(&opts, finish::Mode::Attribute, &attr, &item, random)
+    };
+    t.step("emit");
+    Ok(out)
 }
 
 /// What `#[announce]` expands to once the attribute names that its checks own
@@ -181,7 +182,9 @@ pub fn derive_announce(input: TokenStream) -> TokenStream {
 
 /// [`derive_announce()`] with the error returned as a [`syn::Error`].
 pub fn try_derive_announce(input: TokenStream) -> syn::Result<TokenStream> {
+    let mut t = timing::Timer::new("derive");
     let mut item: syn::Item = syn::parse2(input)?;
+    t.step("parse");
     let attrs = derive_attrs(&mut item)?;
     let mut opts = Options::default();
     let mut seen = false;
@@ -202,7 +205,8 @@ pub fn try_derive_announce(input: TokenStream) -> syn::Result<TokenStream> {
             return Err(derive_option_error(key));
         }
     }
-    finish_derive(item, opts)
+    t.step("options");
+    finish_derive(item, opts, t)
 }
 
 /// Like [`derive_announce()`], with the options given in code instead of a
@@ -219,7 +223,7 @@ pub fn derive_announce_with(opts: Options, input: TokenStream) -> syn::Result<To
     if opts.mock.is_some() {
         return Err(derive_option_error("mock"));
     }
-    finish_derive(item, opts)
+    finish_derive(item, opts, timing::Timer::new("derive"))
 }
 
 /// The attributes of a struct, enum or union; error for any other item.
@@ -245,13 +249,20 @@ fn derive_option_error(key: &str) -> syn::Error {
     )
 }
 
-fn finish_derive(mut item: syn::Item, mut opts: Options) -> syn::Result<TokenStream> {
+fn finish_derive(
+    mut item: syn::Item,
+    mut opts: Options,
+    mut t: timing::Timer,
+) -> syn::Result<TokenStream> {
     derive_attrs(&mut item)?.retain(|a| !a.path().is_ident("announce"));
     // The derive input is already cfg-evaluated by rustc.
     opts.emit_item = false;
     opts.derived = true;
     if opts.checks.is_empty() {
-        return generate::generate(item, &opts, random_u64(), &OwnedAttrs::new());
+        t.subject(|| {
+            generate::ident_vis(&item).map_or_else(|_| String::new(), |(i, _)| i.to_string())
+        });
+        return generate::generate_timed(item, &opts, random_u64(), &OwnedAttrs::new(), &mut t);
     }
     // The same query as `#[announce]` sends. A derive cannot remove the
     // attributes from its input, so a library that owns attributes declares them
@@ -273,16 +284,87 @@ pub(crate) fn finish_derive_now(
     mut opts: Options,
     random: u64,
     owned: &OwnedAttrs,
+    t: &mut timing::Timer,
 ) -> syn::Result<TokenStream> {
     opts.emit_item = false;
     opts.derived = true;
-    generate::generate(item, &opts, random, owned)
+    generate::generate_timed(item, &opts, random, owned, t)
 }
 
-/// The body of the hidden `Capture` derive that `#[announce]` expands to.
-/// Not part of the API.
-#[doc(hidden)]
-pub fn capture(input: TokenStream) -> syn::Result<TokenStream> {
+/// What the `Capture` derive reads from its input, the capture dummy:
+/// the arguments of `#[__announce(..)]` and the tokens of the item, if it is
+/// still there (it is gone when it was `#[cfg]`'d out).
+struct Dummy {
+    args: options::CaptureArgs,
+    item: Option<TokenStream>,
+}
+
+/// Reads the dummy `#[__announce(ARGS)] .. enum Cap { V = { ITEM 0 } }` from its
+/// top-level tokens, without parsing it. `None` if it has another shape.
+fn scan_dummy(input: TokenStream) -> Option<(TokenStream, Option<TokenStream>)> {
+    use proc_macro2::{Delimiter, TokenTree};
+    let mut it = input.into_iter().peekable();
+    let mut args = None;
+    while matches!(it.peek(), Some(TokenTree::Punct(p)) if p.as_char() == '#') {
+        it.next();
+        let group = match it.next()? {
+            TokenTree::Group(g) if g.delimiter() == Delimiter::Bracket => g,
+            _ => return None,
+        };
+        let mut inner = group.stream().into_iter();
+        if matches!(inner.next(), Some(TokenTree::Ident(i)) if i == "__announce") {
+            match inner.next() {
+                Some(TokenTree::Group(a))
+                    if a.delimiter() == Delimiter::Parenthesis && inner.next().is_none() =>
+                {
+                    args = Some(a.stream())
+                }
+                _ => return None,
+            }
+        }
+    }
+    if !matches!(it.next()?, TokenTree::Ident(i) if i == "enum") {
+        return None;
+    }
+    if !matches!(it.next()?, TokenTree::Ident(_)) {
+        return None;
+    }
+    let body = match it.next()? {
+        TokenTree::Group(g) if g.delimiter() == Delimiter::Brace => g,
+        _ => return None,
+    };
+    if it.next().is_some() {
+        return None;
+    }
+    let mut variant = body.stream().into_iter();
+    if !matches!(variant.next()?, TokenTree::Ident(_)) {
+        return None;
+    }
+    if !matches!(variant.next()?, TokenTree::Punct(p) if p.as_char() == '=') {
+        return None;
+    }
+    let block = match variant.next()? {
+        TokenTree::Group(g) if g.delimiter() == Delimiter::Brace => g,
+        _ => return None,
+    };
+    if variant.next().is_some() {
+        return None;
+    }
+    let mut tts: Vec<TokenTree> = block.stream().into_iter().collect();
+    match tts.pop()? {
+        TokenTree::Literal(l) if l.to_string() == "0" => {}
+        _ => return None,
+    }
+    let item = if tts.is_empty() {
+        None
+    } else {
+        Some(tts.into_iter().collect())
+    };
+    Some((args?, item))
+}
+
+/// The same with `syn`, for a dummy of another shape than [`scan_dummy`] knows.
+fn read_dummy_with_syn(input: TokenStream) -> syn::Result<Dummy> {
     let di: syn::DeriveInput = syn::parse2(input)?;
     let attr = di
         .attrs
@@ -314,20 +396,52 @@ pub fn capture(input: TokenStream) -> syn::Result<TokenStream> {
     };
     // The copy is gone when the item itself was `#[cfg]`'d out.
     let item = stmts.iter().find_map(|s| match s {
-        syn::Stmt::Item(i) => Some(i.clone()),
+        syn::Stmt::Item(i) => Some(i.to_token_stream()),
         _ => None,
     });
-    match item {
-        Some(item) => {
-            let generated = generate::generate(item.clone(), &args.opts, args.random, &args.owned);
-            generated.or_else(|e| {
-                let mut out = e.to_compile_error();
-                out.extend(generate::real_item_on_error(item, &args.opts, &args.owned));
-                Ok(out)
-            })
-        }
-        None => Ok(TokenStream::new()),
+    Ok(Dummy { args, item })
+}
+
+fn read_dummy(input: TokenStream) -> syn::Result<Dummy> {
+    match scan_dummy(input.clone()) {
+        Some((args, item)) => Ok(Dummy {
+            args: syn::parse2(args)?,
+            item,
+        }),
+        None => read_dummy_with_syn(input),
     }
+}
+
+/// The body of the hidden `Capture` derive that `#[announce]` expands to.
+/// Not part of the API.
+///
+/// The item is parsed here, once (DESIGN.md section 4.2): everything else is done
+/// on that tree and on the tokens it prints.
+#[doc(hidden)]
+pub fn capture(input: TokenStream) -> syn::Result<TokenStream> {
+    let mut t = timing::Timer::new("capture");
+    let dummy = read_dummy(input)?;
+    t.step("read");
+    let tokens = match dummy.item {
+        Some(tokens) => tokens,
+        None => return Ok(TokenStream::new()),
+    };
+    let args = dummy.args;
+    let item: syn::Item = syn::parse2(tokens.clone())?;
+    t.subject(|| generate::ident_vis(&item).map_or_else(|_| String::new(), |(i, _)| i.to_string()));
+    t.step("parse");
+    let prep = generate::prepare(item, Some(tokens), &args.opts, &args.owned);
+    t.step("strip");
+    Ok(
+        match generate::emit(&prep, &args.opts, args.random, &args.owned, &mut t) {
+            Ok(generated) => generated,
+            Err(e) => {
+                let mut out = e.to_compile_error();
+                out.extend(generate::real_item(&prep, &args.opts, &args.owned));
+                out
+            }
+        },
+    )
 }
 
 #[cfg(test)]
@@ -503,7 +617,7 @@ mod tests {
     /// The state group of a query for `S`, as `query` writes it, to feed `finish`.
     fn finish_input(mode: &str, attr: &str, item: &str, answers: &str) -> TokenStream {
         ts(&format!(
-            "@__announce_attrs [] {{ [7u64; {} ({}) {{ {} }}] {} }}",
+            "@__announce_attrs [ ::l::announce::__private::finish! ] {{ [7u64; {} ({}) {{ {} }}] {} }}",
             mode, attr, item, answers
         ))
     }
@@ -514,10 +628,11 @@ mod tests {
             ts("crate = ::l::announce, a::check, b::check(x), meta = m::info"),
             ts("pub struct S { pub a: u8 }"),
         ));
-        // The first check is called; the others and `finish!` follow.
+        // The first check is called, and heads the list: all the checks and
+        // `finish!` follow, like a continuation list.
         assert!(
             out.starts_with(
-                "a::check!{@__announce_attrs[b::check!,::l::announce::__private::finish!]{[",
+                "a::check!{@__announce_attrs[a::check!,b::check!,::l::announce::__private::finish!]{[",
             ),
             "{}",
             out
@@ -611,11 +726,25 @@ mod tests {
         assert!(e.contains("was changed by a check"), "{}", e);
         let e = err(finish_input("weird", attr, item, ""));
         assert!(e.contains("was changed by a check"), "{}", e);
-        // A list that was not forwarded to the end.
+        // A list that was not forwarded to the end: a check kept its own head ...
         let e = err(ts(
-            "@__announce_attrs [ x! ] { [7u64; attr (a) { struct S; }] }",
+            "@__announce_attrs [ x!, f::finish! ] { [7u64; attr (a) { struct S; }] }",
         ));
         assert!(e.contains("elements left in its list"), "{}", e);
+        // ... or dropped more than that.
+        let e = err(ts(
+            "@__announce_attrs [] { [7u64; attr (a) { struct S; }] }",
+        ));
+        assert!(e.contains("with an empty list"), "{}", e);
+        let e = err(ts(
+            "@__announce_attrs [ #[derive(A)] ] { [7u64; attr (a) { struct S; }] }",
+        ));
+        assert!(e.contains("elements left in its list"), "{}", e);
+        // The list `[ finish! ]`, whatever the path of the macro, is the end.
+        try_finish(ts(
+            "@__announce_attrs [ x::y! ] { [7u64; attr () { struct S; }] }",
+        ))
+        .unwrap();
         // Called by hand.
         let e = err(ts("struct S;"));
         assert!(e.contains("cannot be called by hand"), "{}", e);
@@ -651,9 +780,9 @@ mod tests {
             "#[announce(crate = ::l::announce, macro_name = N, a::check)] pub struct S(#[my_lib] pub u8);",
         )));
         assert!(
-            out.starts_with("a::check!{@__announce_attrs[::l::announce::__private::finish!]{[")
-                && out
-                    .contains(";derive(crate=::l::announce,macro_name=N,emit_item=false,a::check)"),
+            out.starts_with(
+                "a::check!{@__announce_attrs[a::check!,::l::announce::__private::finish!]{["
+            ) && out.contains(";derive(crate=::l::announce,macro_name=N,emit_item=false,a::check)"),
             "{}",
             out
         );
@@ -720,5 +849,128 @@ mod tests {
         let out = norm(&out);
         assert!(out.contains("::l::announce::Announce"), "{}", out);
         assert!(!out.contains("Other"), "{}", out);
+    }
+
+    // ---- the capture dummy, read without a parse ----------------------------
+
+    const DUMMY_ARGS: &str = "7u64; crate = ::l::announce";
+
+    fn dummy(args: &str, body: &str) -> TokenStream {
+        ts(&format!(
+            "#[derive(::l::announce::__private::Capture)] #[__announce({})] \
+             #[::l::announce::__private::remove] #[allow(dead_code, non_camel_case_types)] \
+             enum __AnnounceCap_0 {{ V = {{ {} 0 }} }}",
+            args, body
+        ))
+    }
+
+    /// `#[derive(..)]` is not part of what a derive macro receives.
+    fn derive_input(args: &str, body: &str) -> TokenStream {
+        let mut it = dummy(args, body).into_iter();
+        it.next();
+        it.next();
+        it.collect()
+    }
+
+    #[test]
+    fn the_dummy_is_read_from_its_top_level_tokens() {
+        let (args, item) =
+            scan_dummy(derive_input(DUMMY_ARGS, "pub struct S { pub a: u8 }")).unwrap();
+        assert_eq!(norm(&args), "7u64;crate=::l::announce");
+        assert_eq!(norm(&item.unwrap()), "pubstructS{puba:u8}");
+        // An item that was `#[cfg]`'d out leaves the block with the `0` only.
+        let (_, item) = scan_dummy(derive_input(DUMMY_ARGS, "")).unwrap();
+        assert!(item.is_none());
+        // Other shapes are not read (the code then parses the dummy).
+        for bad in [
+            "struct S;",
+            "enum E { V = 1 }",
+            "enum E { V = { 1 } }",
+            "enum E { V = { S } }",
+            "#[__announce] enum E { V = { 0 } }",
+            "#[__announce(1u64;)] enum E { V = { S 1 } }",
+        ] {
+            assert!(scan_dummy(ts(bad)).is_none(), "{}", bad);
+        }
+    }
+
+    #[test]
+    fn a_dummy_of_another_shape_is_read_with_syn() {
+        // `pub`: the scan does not know it, `syn::DeriveInput` does.
+        let input = ts(
+            "#[__announce(7u64; crate = ::l::announce)] pub enum Cap { V = { pub struct S; 0 } }",
+        );
+        assert!(scan_dummy(input.clone()).is_none());
+        let d = read_dummy(input).unwrap();
+        assert_eq!(d.args.random, 7);
+        assert_eq!(norm(&d.item.unwrap()), "pubstructS;");
+        let e = read_dummy(ts("pub enum Cap { V = { 0 } }")).err().unwrap();
+        assert!(e.to_string().contains("missing #[__announce]"), "{}", e);
+    }
+
+    #[test]
+    fn capture_emits_what_the_derive_emits() {
+        let out = norm(&capture(derive_input(DUMMY_ARGS, "pub struct S { pub a: u8 }")).unwrap());
+        assert!(out.contains("macro_rules!__announce_S_"), "{}", out);
+        assert!(out.contains("::l::announce::AnnounceforS{}"), "{}", out);
+        // The item itself is not part of it: `#[announce]` emitted it.
+        assert!(!out.starts_with("pubstruct"), "{}", out);
+        // Gone with its `#[cfg]`.
+        assert!(capture(derive_input(DUMMY_ARGS, "")).unwrap().is_empty());
+        // Not a valid item: the error of the parse.
+        assert!(capture(derive_input(DUMMY_ARGS, "pub struct S { pub a: }")).is_err());
+    }
+
+    #[test]
+    fn capture_keeps_the_real_item_next_to_its_error() {
+        // With owned attributes the derive emits the item, so an error in the type
+        // context is followed by the item (without the owned attributes and the cfgs).
+        let args = "7u64; [my_lib]; crate = ::l::announce";
+        let out = norm(
+            &capture(derive_input(
+                args,
+                "pub struct S { #[my_lib] #[cfg(a)] pub a: Local, pub b: u8 }",
+            ))
+            .unwrap(),
+        );
+        assert!(out.starts_with("::core::compile_error!"), "{}", out);
+        assert!(out.ends_with("pubstructS{puba:Local,pubb:u8}"), "{}", out);
+        // Without owned names `#[announce]` emitted it: the error only.
+        let out =
+            norm(&capture(derive_input(DUMMY_ARGS, "pub struct S { pub a: Local }")).unwrap());
+        assert!(out.starts_with("::core::compile_error!"), "{}", out);
+        assert!(!out.contains("pubstructS"), "{}", out);
+    }
+
+    #[test]
+    fn the_attribute_reads_no_more_than_the_head_of_the_item() {
+        // The syntax of the rest is the business of the derive: an item with an
+        // error in it is passed on, to be refused there.
+        let out = norm(&announce(TokenStream::new(), ts("pub struct S { pub a: }")));
+        assert!(
+            out.contains("Capture") && !out.contains("compile_error"),
+            "{}",
+            out
+        );
+        // But what is not a supported item is refused at once, with the same errors.
+        for (src, msg) in [
+            ("pub fn f() {}", "supports struct, enum"),
+            ("mod m;", "only inline modules"),
+            ("impl S {}", "supports struct, enum"),
+        ] {
+            let e = try_announce(TokenStream::new(), ts(src)).err().unwrap();
+            assert!(e.to_string().contains(msg), "{}: {}", src, e);
+        }
+        // The kinds, with all their qualifiers.
+        for src in [
+            "struct S;",
+            "pub(crate) enum E {}",
+            "union U { a: u8 }",
+            "pub unsafe trait T {}",
+            "type A = u8;",
+            "mod m { }",
+        ] {
+            assert!(try_announce(TokenStream::new(), ts(src)).is_ok(), "{}", src);
+        }
     }
 }

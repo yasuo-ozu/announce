@@ -6,6 +6,15 @@
 //! This is the part around it: the state that travels in `{ STATE }` and what
 //! `finish` does with it.
 //!
+//! The list in the query is headed by the macro that is called, so `finish!`
+//! always receives `[ finish! ]`:
+//!
+//! ```text
+//! a::check! { @__announce_attrs [ a::check!, b::check!, KRATE::__private::finish! ] { STATE } }
+//! b::check! { @__announce_attrs [ b::check!, KRATE::__private::finish! ] { STATE attrs(..) } }
+//! KRATE::__private::finish! { @__announce_attrs [ KRATE::__private::finish! ] { STATE attrs(..) } }
+//! ```
+//!
 //! ```text
 //! STATE := '[' RANDOM 'u64' ';' MODE '(' OPTIONS ')' '{' ITEM '}' ']'  ('attrs' '(' IDENT,* ')')*
 //! MODE  := 'attr' | 'derive'
@@ -46,6 +55,9 @@ const STATE_ERROR: &str = "announce: the state of the attribute query was change
 
 /// The call of the first check, with the query: the expansion of
 /// `#[announce(a, b, ..)]` when there are checks. `opts.checks` is not empty.
+///
+/// The list is headed by the macro that is called, like a continuation list:
+/// `a! { @__announce_attrs [ a!, b!, KRATE::__private::finish! ] { STATE } }`.
 pub(crate) fn query(
     opts: &Options,
     mode: Mode,
@@ -56,13 +68,12 @@ pub(crate) fn query(
     let krate = opts.krate();
     let lit = syn::LitInt::new(&format!("{}u64", random), Span::call_site());
     let mode = Ident::new(mode.word(), Span::call_site());
-    let mut paths = opts.checks.iter().map(|c| &c.path);
-    let first = paths.next().expect("a query needs a check");
-    let rest = paths.map(|p| quote! { #p ! , }).collect::<Vec<_>>();
+    let paths: Vec<&syn::Path> = opts.checks.iter().map(|c| &c.path).collect();
+    let first = paths.first().expect("a query needs a check");
     quote! {
         #first ! {
             @__announce_attrs
-            [ #(#rest)* #krate::__private::finish! ]
+            [ #(#paths ! ,)* #krate::__private::finish! ]
             { [ #lit ; #mode ( #attr ) { #item } ] }
         }
     }
@@ -124,12 +135,13 @@ impl Parse for State {
 /// attribute query that `#[announce(check, ..)]` and the derives send through
 /// their checks (see `announce_helper::attrs` for the protocol).
 ///
-/// `input` is the call's input, `@__announce_attrs [] { STATE }`, where `STATE`
-/// is what `#[announce]` wrote and the checks added their `attrs(..)` to. The
-/// result is what `#[announce]` expands to without checks: the item and the
-/// capture dummy, or, for a derive, the trampoline and the other generated items.
-/// The item the compiler sees has no attribute that a check owns; the payload and
-/// the checks do.
+/// `input` is the call's input, `@__announce_attrs [ finish! ] { STATE }` (the
+/// list is headed by the macro that is called, `finish!` itself, and has nothing
+/// else), where `STATE` is what `#[announce]` wrote and the checks added their
+/// `attrs(..)` to. The result is what `#[announce]` expands to without checks: the
+/// item and the capture dummy, or, for a derive, the trampoline and the other
+/// generated items. The item the compiler sees has no attribute that a check owns;
+/// the payload and the checks do.
 ///
 /// A library does not call this: its query ends at the macro of the `announce`
 /// crate (`<crate path>::__private::finish!`, reached through the `crate = ..`
@@ -152,30 +164,52 @@ pub fn try_finish(input: TokenStream) -> Result<TokenStream> {
             ),
         )
     })?;
-    if !query.list.0.is_empty() {
-        return Err(syn::Error::new(
-            Span::call_site(),
-            "announce: the attribute query reached `finish!` with elements left in its list; \
-             a check must forward the list it received without its first element",
-        ));
+    // The list is headed by the macro that is called, and `finish!` is the last
+    // element: exactly `[ finish! ]`.
+    match query.list.0.as_slice() {
+        [announce_helper::Cont::Bang(_)] => {}
+        [] => {
+            return Err(syn::Error::new(
+                Span::call_site(),
+                "announce: the attribute query reached `finish!` with an empty list; the list \
+                 starts with the macro that is called, so a check must forward its list \
+                 without its own first element, and keep the rest (`[ finish! ]` at the end)",
+            ))
+        }
+        _ => {
+            return Err(syn::Error::new(
+                Span::call_site(),
+                "announce: the attribute query reached `finish!` with elements left in its list \
+                 (it must be exactly `[ finish! ]`); a check must forward the list it received \
+                 without its own first element",
+            ))
+        }
     }
+    let mut t = crate::timing::Timer::new("finish");
     let state: State = syn::parse2(query.state)?;
     state.owned.check_names()?;
     let opts: Options = syn::parse2(state.attr.clone())?;
-    // `#[announce]` checked the item before it started the query; a check could
-    // have damaged it since.
-    crate::generate::ident_vis(&syn::parse2(state.item.clone())?)?;
+    t.step("state");
     match state.mode {
-        Mode::Attribute => Ok(capture_output(
-            &opts,
-            &state.attr,
-            state.item,
-            state.random,
-            &state.owned,
-        )),
+        Mode::Attribute => {
+            // `#[announce]` checked the kind of the item before it started the
+            // query; a check could have damaged it since. Its syntax is checked
+            // by the capture derive.
+            crate::scan::head(&state.item)?;
+            t.step("scan");
+            Ok(capture_output(
+                &opts,
+                &state.attr,
+                state.item,
+                state.random,
+                &state.owned,
+            ))
+        }
         Mode::Derive => {
             let item: syn::Item = syn::parse2(state.item)?;
-            crate::finish_derive_now(item, opts, state.random, &state.owned)
+            crate::generate::ident_vis(&item)?;
+            t.step("parse");
+            crate::finish_derive_now(item, opts, state.random, &state.owned, &mut t)
         }
     }
 }

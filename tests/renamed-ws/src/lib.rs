@@ -22,8 +22,8 @@ const _: fn() = _assert_marker::<ViaWorkspace>;
 const _: fn() = _assert_marker::<dyn MarkedWs>;
 
 macro_rules! ws_check {
-    (@__announce_attrs [ $($np:ident)? $(:: $ns:ident)* ! $(, $($rest:tt)*)? ] { $($state:tt)* }) => {
-        $($np)? $(:: $ns)* ! { @__announce_attrs [ $($($rest)*)? ] { $($state)* attrs(ws_attr) } }
+    (@__announce_attrs [ $($hp:ident)? $(:: $hs:ident)* ! , $($np:ident)? $(:: $ns:ident)* ! $(, $($rest:tt)*)? ] { $($state:tt)* }) => {
+        $($np)? $(:: $ns)* ! { @__announce_attrs [ $($np)? $(:: $ns)* ! $(, $($rest)*)? ] { $($state)* attrs(ws_attr) } }
     };
     (($($args:tt)*), $($item:tt)*) => {};
 }

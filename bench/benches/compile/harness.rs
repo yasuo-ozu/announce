@@ -103,6 +103,9 @@ pub struct Sizes {
 }
 
 pub struct Meta {
+    /// `ANNOUNCE_BENCH_OPT_BUILD=1`: the generated workspace builds proc macros and
+    /// build scripts (and what they use) with `opt-level = 3`.
+    pub opt_build: bool,
     pub revision: String,
     pub date: String,
     pub rustc: String,
@@ -216,6 +219,7 @@ impl Harness {
             grid: grid(),
             criterion_dir: target.join("criterion"),
             meta: Meta {
+                opt_build: env_flag("ANNOUNCE_BENCH_OPT_BUILD"),
                 revision: revision(&repo),
                 date: output_of(Command::new("date").arg("+%F")).unwrap_or_default(),
                 rustc: rustc_v
@@ -311,9 +315,15 @@ impl Harness {
             }
         }
         let list: String = members.iter().map(|m| format!("  \"{m}\",\n")).collect();
+        // `ANNOUNCE_BENCH_OPT_BUILD=1`: the README's advice for the user of a proc macro.
+        let profile = if self.meta.opt_build {
+            "\n[profile.dev.build-override]\nopt-level = 3\n"
+        } else {
+            ""
+        };
         write_if_changed(
             &ws.join("Cargo.toml"),
-            &format!("[workspace]\nresolver = \"2\"\nmembers = [\n{list}]\n"),
+            &format!("[workspace]\nresolver = \"2\"\nmembers = [\n{list}]\n{profile}"),
         );
         let lock = ws.join("Cargo.lock");
         if !lock.exists() && repo.join("Cargo.lock").exists() {

@@ -97,16 +97,21 @@ pub fn derive_plain(input: TokenStream) -> TokenStream {
     machinery::derive_announce(input.into()).into()
 }
 
-announce_helper::check! {
-    /// A check of the library that owns the attribute `field_attr` and rejects
-    /// `#[field_attr(bad)]`. It is used by `#[tracked(..)]`, `#[derive(Tracked)]`
-    /// and `#[derive(Plain)]`: the machinery sends the same query as `#[announce]`.
-    pub fn owner(ci) attributes(field_attr) {
+/// A check of the library that owns the attribute `field_attr` and rejects
+/// `#[field_attr(bad)]`. It is used by `#[tracked(..)]`, `#[derive(Tracked)]`
+/// and `#[derive(Plain)]`: the machinery sends the same query as `#[announce]`.
+#[proc_macro]
+pub fn owner(input: TokenStream) -> TokenStream {
+    announce_helper::check(input.into(), &["field_attr"], |ci| {
         for attr in ci.owned_attributes() {
             if matches!(attr.parse_args::<syn::Ident>(), Ok(i) if i == "bad") {
-                return Err(syn::Error::new_spanned(&attr, "`#[field_attr(bad)]` is not allowed"));
+                return Err(syn::Error::new_spanned(
+                    &attr,
+                    "`#[field_attr(bad)]` is not allowed",
+                ));
             }
         }
         Ok(TokenStream2::new())
-    }
+    })
+    .into()
 }

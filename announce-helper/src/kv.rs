@@ -6,14 +6,14 @@ use syn::parse::{Parse, ParseStream, Parser};
 use syn::punctuated::Punctuated;
 use syn::{Error, Result, Token};
 
-/// A parsed `key = value, flag, key = [a, b], ..` list whose values are kept
-/// as tokens and parsed on demand into any [`syn::parse::Parse`] type (types,
-/// paths, literals, tuples, bracketed lists, ..).
+/// A parsed `key = value, flag, key = [a, b], ..` list. Values are kept as tokens
+/// and parsed on demand into any [`syn::parse::Parse`] type (types, paths,
+/// literals, tuples, bracketed lists, ..).
 ///
-/// Values run to the next top-level `,`; commas inside `<..>` (generic
-/// arguments) and inside groups do not end a value. A value with an unclosed
-/// `<` (e.g. the comparison `x < y`) is an error: parenthesise such
-/// expressions. A key without `=` is a flag.
+/// A value runs to the next top-level `,`. Commas inside `<..>` (generic
+/// arguments) and inside groups do not end a value. A value with an unclosed `<`
+/// (like the comparison `x < y`) is an error: put such expressions in parentheses.
+/// A key without `=` is a flag.
 ///
 /// ```
 /// use announce_helper::KvArgs;
@@ -122,9 +122,9 @@ impl KvArgs {
             .ok_or_else(|| Error::new(span, format!("missing `{}`", key)))
     }
 
-    /// Takes `key = [a, b, ..]` and parses each element as `T`. (It returns a
-    /// `Vec`; to get a `Punctuated`, write the element type out, e.g.
-    /// `kv.list::<syn::Path>("k")?` then `.into_iter().collect::<Punctuated<_, Token![,]>>()`.)
+    /// Takes `key = [a, b, ..]` and parses each element as `T`. It returns a `Vec`.
+    /// For a `Punctuated`, write the element type out and collect, e.g.
+    /// `kv.list::<syn::Path>("k")?` then `.into_iter().collect::<Punctuated<_, Token![,]>>()`.
     pub fn list<T: Parse>(&mut self, key: &str) -> Result<Option<Vec<T>>> {
         match self.remove(key) {
             None => Ok(None),

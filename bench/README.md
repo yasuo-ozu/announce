@@ -33,6 +33,7 @@ the command line, so the grid is configured with environment variables:
 | `ANNOUNCE_BENCH_SAMPLES` | `10` | criterion samples per benchmark (criterion's minimum is 10) |
 | `ANNOUNCE_BENCH_NO_TIMING` | unset | `1`: only build every crate once and report the sizes |
 | `ANNOUNCE_BENCH_LAYOUT` | unset | `single`, `direct` or `auto`: adds `layout = ..` to every `#[announce]` (the trampoline layout, DESIGN.md section 4.1). Unset: no option, so the layout follows the size of the item |
+| `ANNOUNCE_BENCH_OPT_BUILD` | unset | `1`: the generated workspace gets `[profile.dev.build-override] opt-level = 3`, so the proc macros (`announce-macros` and what it uses: `syn`, type-leak, ..) are built with optimizations; the build time of the defining crate is what the user of `announce` gets from that profile setting (DESIGN.md section 4.9) |
 | `ANNOUNCE_BENCH_KEEP` | unset | `1`: keep the generated crates and their build directory |
 | `ANNOUNCE_BENCH_REPO` | the parent of `bench/` | checkout of `announce` (the repository root; or `announce/`, in a checkout from before it moved there), `announce-helper` and the `Cargo.lock` to benchmark, e.g. a `git archive` of a commit |
 | `ANNOUNCE_BENCH_REV` | `git rev-parse` of the checkout | revision to print in the report, for a checkout without `.git` |

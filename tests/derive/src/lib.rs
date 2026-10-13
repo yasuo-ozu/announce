@@ -129,69 +129,131 @@ pub fn start(input: TokenStream) -> TokenStream {
     }
 }
 
-announce_helper::check! {
-    /// Definition-side check: rejects tuple structs. `no_tuple! { (ARGS), ITEM }`.
-    /// It owns no attributes, and answers the attribute query all the same.
-    pub fn no_tuple(ci) {
-        match &ci.item {
-            syn::Item::Struct(s) if matches!(s.fields, syn::Fields::Unnamed(_)) => {
-                let msg = format!("this macro does not support tuple structs ({})", ci.args);
-                Err(syn::Error::new_spanned(&s.fields, msg))
-            }
-            _ => Ok(TokenStream2::new()),
+/// Definition-side check: rejects tuple structs. `no_tuple! { (ARGS), ITEM }`.
+/// It owns no attributes, and answers the attribute query all the same.
+#[proc_macro]
+pub fn no_tuple(input: TokenStream) -> TokenStream {
+    announce_helper::check(input.into(), &[], |ci| match &ci.item {
+        syn::Item::Struct(s) if matches!(s.fields, syn::Fields::Unnamed(_)) => {
+            let msg = format!("this macro does not support tuple structs ({})", ci.args);
+            Err(syn::Error::new_spanned(&s.fields, msg))
         }
-    }
+        _ => Ok(TokenStream2::new()),
+    })
+    .into()
 }
 
-announce_helper::check! {
-    /// Owns the attribute `my_lib`, and rejects `#[my_lib(bad)]` anywhere in the item.
-    pub fn lib_check(ci) attributes(my_lib) {
+/// Owns the attribute `my_lib`, and rejects `#[my_lib(bad)]` anywhere in the item.
+#[proc_macro]
+pub fn lib_check(input: TokenStream) -> TokenStream {
+    announce_helper::check(input.into(), &["my_lib"], |ci| {
         for attr in ci.owned_attributes() {
             if matches!(attr.parse_args::<syn::Ident>(), Ok(i) if i == "bad") {
-                return Err(syn::Error::new_spanned(&attr, "`#[my_lib(bad)]` is not allowed"));
+                return Err(syn::Error::new_spanned(
+                    &attr,
+                    "`#[my_lib(bad)]` is not allowed",
+                ));
             }
         }
         Ok(TokenStream2::new())
-    }
+    })
+    .into()
 }
 
-announce_helper::check! {
-    /// Owns the attributes `other` and `tag`, and rejects `#[other(forbidden)]`.
-    pub fn other_check(ci) attributes(other, tag) {
+/// Owns the attributes `other` and `tag`, and rejects `#[other(forbidden)]`.
+#[proc_macro]
+pub fn other_check(input: TokenStream) -> TokenStream {
+    announce_helper::check(input.into(), &["other", "tag"], |ci| {
         for attr in ci.owned_attributes() {
-            if attr.path().is_ident("other") && attr.parse_args::<syn::Ident>().map_or(false, |i| i == "forbidden") {
-                return Err(syn::Error::new_spanned(&attr, "`#[other(forbidden)]` is not allowed"));
+            if attr.path().is_ident("other")
+                && attr
+                    .parse_args::<syn::Ident>()
+                    .map_or(false, |i| i == "forbidden")
+            {
+                return Err(syn::Error::new_spanned(
+                    &attr,
+                    "`#[other(forbidden)]` is not allowed",
+                ));
             }
         }
         Ok(TokenStream2::new())
-    }
+    })
+    .into()
 }
 
-announce_helper::check! {
-    /// Owns `my_lib` and records what it saw: `pub const SEEN_<ITEM>: &[&str]`, one
-    /// string for each owned attribute (without spaces), in source order.
-    pub fn record_attrs(ci) attributes(my_lib) {
+/// Owns `my_lib` and records what it saw: `pub const SEEN_<ITEM>: &[&str]`, one
+/// string for each owned attribute (without spaces), in source order.
+#[proc_macro]
+pub fn record_attrs(input: TokenStream) -> TokenStream {
+    announce_helper::check(input.into(), &["my_lib"], |ci| {
         let name = match &ci.item {
             syn::Item::Struct(s) => s.ident.to_string(),
             syn::Item::Enum(s) => s.ident.to_string(),
             syn::Item::Trait(s) => s.ident.to_string(),
             syn::Item::Mod(s) => s.ident.to_string(),
-            other => return Err(syn::Error::new_spanned(other, "record_attrs: unsupported item")),
+            other => {
+                return Err(syn::Error::new_spanned(
+                    other,
+                    "record_attrs: unsupported item",
+                ))
+            }
         };
         let seen: Vec<String> = ci
             .owned_attributes()
             .iter()
-            .map(|a| template_quote::ToTokens::to_token_stream(&a.meta).to_string().split_whitespace().collect())
+            .map(|a| {
+                template_quote::ToTokens::to_token_stream(&a.meta)
+                    .to_string()
+                    .split_whitespace()
+                    .collect()
+            })
             .collect();
-        let id = syn::Ident::new(&format!("SEEN_{}", name.to_uppercase()), proc_macro2::Span::call_site());
+        let id = syn::Ident::new(
+            &format!("SEEN_{}", name.to_uppercase()),
+            proc_macro2::Span::call_site(),
+        );
         Ok(quote! { pub const #id: &[&str] = &[ #(#seen),* ]; })
-    }
+    })
+    .into()
 }
 
-announce_helper::check! {
-    /// Owns an attribute that rustc uses: always an error where it is used.
-    pub fn doc_owner(_ci) attributes(doc) {
-        Ok(TokenStream2::new())
+/// Owns an attribute that rustc uses: always an error where it is used.
+#[proc_macro]
+pub fn doc_owner(input: TokenStream) -> TokenStream {
+    announce_helper::check(input.into(), &["doc"], |_| Ok(TokenStream2::new())).into()
+}
+
+/// A check that reads the attribute query by hand and asserts that the list is
+/// headed by this very macro (`head_probe!`, whatever path it is written with):
+/// the head of the list is the macro being called. It owns `probed`, and answers
+/// with `Query::answer`, which drops the head and calls the next element.
+#[proc_macro]
+pub fn head_probe(input: TokenStream) -> TokenStream {
+    use announce_helper::{CheckCall, Cont, OwnedAttrs};
+    match syn::parse::<CheckCall>(input) {
+        Ok(CheckCall::Query(q)) => {
+            let is_me = matches!(
+                q.list.0.first(),
+                Some(Cont::Bang(p)) if p.segments.last().map_or(false, |s| s.ident == "head_probe")
+            );
+            if !is_me {
+                let list = template_quote::ToTokens::to_token_stream(&q.list)
+                    .to_string()
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                let msg = format!(
+                    "head_probe: the list does not start with `head_probe!`: {}",
+                    list
+                );
+                return syn::Error::new(proc_macro2::Span::call_site(), msg)
+                    .to_compile_error()
+                    .into();
+            }
+            q.answer(&OwnedAttrs::from_strs(&["probed"])).into()
+        }
+        Ok(CheckCall::Run(_)) => TokenStream::new(),
+        Err(e) => e.to_compile_error().into(),
     }
 }
 

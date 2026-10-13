@@ -1,106 +1,110 @@
 //! Attributes that a check owns, and the query that collects them.
 //!
-//! A library can put its own attributes inside an announced item:
-//!
-//! ```text
-//! #[announce(my_lib::check)]
-//! pub struct S { #[my_lib(skip)] pub a: u8, pub b: u8 }
-//! ```
-//!
-//! Rustc rejects `#[my_lib(skip)]` ("cannot find attribute"), because no derive
-//! declares it. So `#[announce]` asks every check which attribute names it owns
-//! (the *query*, below), removes the owned attributes from the item it emits, and
-//! keeps them in the recorded payload. The check, which runs at the definition,
-//! and the callbacks, which run at the call sites, see the attributes.
+//! A check can own attribute names. An announced item may then carry attributes with
+//! these names (`#[my_lib(skip)]`). `#[announce]` removes them from the item it
+//! emits, so rustc never sees them, and keeps them in the payload that callbacks
+//! receive. What the definer writes and gets is described in
+//! [`#[announce]`][announce-checks]. This page has the protocol between `#[announce]`
+//! and the checks, called the *query*, and the types that find and remove owned
+//! attributes.
 //!
 //! # The query
 //!
-//! `#[announce(a::check, b::check)]` does not emit the item at once. It emits
-//! a call to the first check that carries the rest of the work:
+//! `#[announce(a::check, b::check)]` does not emit the item at once. It calls the
+//! first check with a list of the calls to make. The list is headed by the macro
+//! being called, like the continuation lists of trampolines. It holds the checks in
+//! the order written, and ends with a hidden macro of `announce`, `finish!`:
 //!
 //! ```text
-//! a::check! { @__announce_attrs [ b::check!, ::announce::__private::finish! ] { STATE } }
+//! a::check! { @__announce_attrs [ a::check!, b::check!, ::announce::__private::finish! ] { STATE } }
 //! ```
 //!
-//! `STATE` is opaque to the checks. Each check *answers* by calling the first
-//! element of the list with the rest of the list, and `STATE` followed by one
-//! `attrs(name, ..)` group when it owns attribute names (or unchanged when it
-//! owns none):
+//! `STATE` is opaque to the checks. A check *answers* by dropping its own element
+//! (the head) and calling the next element with the rest of the list, which is now
+//! headed by the macro that is called. `STATE` is unchanged, followed by one
+//! `attrs(name, ..)` group if the check owns names:
 //!
 //! ```text
-//! b::check! { @__announce_attrs [ ::announce::__private::finish! ] { STATE attrs(my_lib) } }
+//! b::check! { @__announce_attrs [ b::check!, ::announce::__private::finish! ] { STATE attrs(my_lib) } }
+//! ::announce::__private::finish! { @__announce_attrs [ ::announce::__private::finish! ] { STATE attrs(my_lib) } }
 //! ```
 //!
-//! The last element is a hidden macro of `announce`, `finish!`. It reads the names,
-//! rejects a name that rustc or a standard tool uses (`cfg`, `doc`, `derive`,
-//! `allow`, `rustfmt`, `rustc_*`, ..), and expands to what `#[announce]` expands to
-//! without checks, except that the item it emits has no attribute of the owned
-//! names. The `META` of the item's trampoline lists the names in one element,
-//! `attrs(my_lib, other)` ([`Entry::owned_attrs`](crate::Entry::owned_attrs)).
+//! `finish!` reads the names, rejects a reserved one ([`OwnedAttrs::check_names`]),
+//! and expands to what `#[announce]` expands to without checks, except that the item
+//! it emits has no attribute of the owned names. The `META` of the trampoline lists
+//! the names in one element, `attrs(my_lib, other)`
+//! ([`Entry::owned_attrs`](crate::Entry::owned_attrs)).
 //!
-//! A check that does not answer stops the chain: the item is not emitted, and
-//! rustc reports the call of that check (a `macro_rules!` check says "no rules
-//! expected the token `@`", a proc-macro check that parses [`CheckInput`](crate::CheckInput)
-//! by hand says that it did not answer). **Every check must answer**, also one
-//! that owns no attributes. This is a breaking change for checks written before.
+//! **Every check must answer**, also one that owns no attributes. A check that does
+//! not answer stops the chain: the item is not emitted, and rustc reports the call of
+//! that check. A `macro_rules!` check says "no rules expected the token `@`". A
+//! proc-macro check that parses [`CheckInput`](crate::CheckInput) by hand says that
+//! it did not answer.
 //!
-//! * A proc-macro check uses [`check!`](crate::check) (or [`CheckCall`] and
-//!   [`Query::answer`] by hand):
+//! A list that does not fit is an error where it is noticed:
+//!
+//! * a check answers a list that is empty, or has nothing after its head (an earlier
+//!   check forwarded too little; `finish!` must end the list);
+//! * `finish!` receives anything but `[ finish! ]`: an empty list, or "elements left
+//!   in its list" (a check forwarded its head or more);
+//! * a check forwards its list without dropping its head, so it calls itself again
+//!   without end: rustc stops it at the recursion limit.
+//!
+//! Listing a check twice, `#[announce(a::check, a::check)]`, is not an error: the
+//! list is `[a!, a!, finish!]`.
+//!
+//! # Writing a check
+//!
+//! A proc-macro check calls [`check`](crate::check) with its input. The function
+//! answers the query with the names the check owns. It parses the check's own input,
+//! `(ARGS), ITEM` ([`CheckInput`](crate::CheckInput)), and runs a closure on it.
+//! (By hand, parse a [`CheckCall`] and answer its [`Query`] with [`Query::answer`].)
 //!
 //! ```ignore
-//! announce_helper::check! {
-//!     pub fn my_check(input) attributes(my_lib, other) {
-//!         for attr in input.owned_attributes() { /* validate */ }
+//! #[proc_macro]
+//! pub fn my_check(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+//!     announce_helper::check(input.into(), &["my_lib", "other"], |c| {
+//!         for attr in c.owned_attributes() { /* validate */ }
 //!         Ok(proc_macro2::TokenStream::new())
-//!     }
+//!     })
+//!     .into()
 //! }
 //! ```
 //!
-//! * A `macro_rules!` check has one more arm, which forwards `STATE` and adds the
-//!   names (leave out `attrs(..)` when the check owns none). The path of the next
-//!   element is matched as in the arms of a trampoline, so `crate::`, `$crate::`
-//!   and `::a::b` work:
+//! A `macro_rules!` check has one more arm. It skips its own head, forwards `STATE`
+//! and adds the names (leave out `attrs(..)` when the check owns none). The paths of
+//! the head and of the next element are matched as in the arms of a trampoline, so
+//! `crate::`, `$crate::` and `::a::b` work in both:
 //!
 //! ```text
 //! macro_rules! my_check {
-//!     (@__announce_attrs [ $($np:ident)? $(:: $ns:ident)* ! $(, $($rest:tt)*)? ] { $($state:tt)* }) => {
-//!         $($np)? $(:: $ns)* ! { @__announce_attrs [ $($($rest)*)? ] { $($state)* attrs(my_lib, other) } }
+//!     (@__announce_attrs [ $($hp:ident)? $(:: $hs:ident)* ! , $($np:ident)? $(:: $ns:ident)* ! $(, $($rest:tt)*)? ] { $($state:tt)* }) => {
+//!         $($np)? $(:: $ns)* ! { @__announce_attrs [ $($np)? $(:: $ns)* ! $(, $($rest)*)? ] { $($state)* attrs(my_lib, other) } }
 //!     };
 //!     (($($args:tt)*), $($item:tt)*) => { /* the check itself */ };
 //! }
 //! ```
 //!
-//! # What the check, `#[announce]` and the callbacks do
+//! The arm matches the head only to skip it (`$hp` and `$hs` are not used). A check
+//! that wants to see its own path in the head can write that path in the pattern
+//! instead (`[ crate::my_check ! , ..`).
 //!
-//! * The check is called again, as before, as `my_check! { (ARGS), ITEM }`, and
-//!   `ITEM` has the owned attributes (`#[cfg]` and `#[cfg_attr]` evaluated). It
-//!   validates them and returns a `compile_error!` at the offending attribute.
-//! * `#[announce]` removes the owned attributes from the item it emits, after the
-//!   item's cfgs are evaluated, so an owned attribute inside `#[cfg_attr(..)]`
-//!   works. Put `#[announce]` above the item's own owned attributes: rustc
-//!   resolves attributes from the top.
-//! * The trampoline's payload keeps the attributes. A callback reads them from
-//!   [`Entry::item`](crate::Entry::item) ([`OwnedAttrs::find`]). A callback that
-//!   emits the item itself, in another crate, must remove them first, since no
-//!   macro declares them there either:
-//!   [`Entry::item_without_owned_attrs`](crate::Entry::item_without_owned_attrs).
-//! * `#[derive(Announce)]` cannot remove attributes from its input: a library
-//!   declares its attributes with its own derive (`attributes(my_lib)`). The derive
-//!   sends the same query, so every check answers in the same way, and the callbacks
-//!   see `attrs(..)`, but nothing is removed.
+//! The check itself runs as `my_check! { (ARGS), ITEM }`. `ITEM` has the owned
+//! attributes, with `#[cfg]` and `#[cfg_attr]` evaluated. The check validates them
+//! and returns a `compile_error!` at the offending attribute.
 //!
 //! # What is matched
 //!
 //! An owned name `my_lib` matches an attribute `#[my_lib]`, `#[my_lib(..)]`,
 //! `#[my_lib = ..]` and `#[my_lib::..]` (the first segment of its path, with no
-//! leading `::`: `#[::my_lib::x]` names a crate and is rustc's business). Both
-//! outer (`#[..]`) and inner (`#![..]`) attributes are matched, wherever syn
-//! parses attributes in the item: on the item, its fields, variants, generic
-//! parameters, trait and impl items, the function parameters and statements of
-//! the bodies, and on everything inside an inline `mod`. Attributes inside macro
-//! invocations and `macro_rules!` bodies are token trees, which are not looked
-//! at. An owned name must not be read by another macro on the item (a derive's
-//! helper attribute would be removed before the derive runs).
+//! leading `::`: `#[::my_lib::x]` names a crate and is rustc's business). Both outer
+//! (`#[..]`) and inner (`#![..]`) attributes match, wherever syn parses attributes in
+//! the item: on the item, its fields, variants, generic parameters, trait and impl
+//! items, the function parameters and statements of the bodies, and on everything
+//! inside an inline `mod`. Attributes inside macro invocations and `macro_rules!`
+//! bodies are token trees, which are not looked at.
+//!
+//! [announce-checks]: https://docs.rs/announce/latest/announce/attr.announce.html#checks-and-attributes-of-your-own
 
 use crate::{Cont, ContList};
 use proc_macro2::{Ident, Span, TokenStream};
@@ -120,8 +124,8 @@ pub(crate) const QUERY_TAG: &str = "__announce_attrs";
 pub(crate) const META_NAME: &str = "attrs";
 
 /// Attribute names that rustc, a standard tool or announce itself uses. An owned
-/// name must not be one of them: the item would lose an attribute that rustc
-/// needs. Names that start with `rustc_` or `__announce` are reserved as well.
+/// name must not be one of them, because the item would lose an attribute that
+/// rustc needs. Names that start with `rustc_` or `__announce` are reserved too.
 const RESERVED: &[&str] = &[
     // Conditional compilation, macros and tests.
     "cfg",
@@ -248,10 +252,10 @@ fn reserved(name: &str) -> Option<&'static str> {
 
 /// A set of attribute names that a check owns: `my_lib`, `other`.
 ///
-/// It is what a check answers to the query ([`Query::answer`]), what META lists as
-/// `attrs(..)` ([`Entry::owned_attrs`](crate::Entry::owned_attrs)), and what finds
-/// ([`find`](Self::find)) and removes ([`strip`](Self::strip)) the attributes
-/// in an item. See the [module](self) docs for what a name matches.
+/// A check answers the query with it ([`Query::answer`]), META lists it as
+/// `attrs(..)` ([`Entry::owned_attrs`](crate::Entry::owned_attrs)), and it finds
+/// ([`find`](Self::find)) and removes ([`strip`](Self::strip)) the attributes in
+/// an item. The [module docs](self#what-is-matched) say what a name matches.
 ///
 /// ```
 /// use announce_helper::OwnedAttrs;
@@ -340,7 +344,7 @@ impl OwnedAttrs {
     }
 
     /// The owned attributes of `item`, in source order, wherever syn parses them
-    /// (see the [module](self) docs).
+    /// (see [what is matched](self#what-is-matched)).
     pub fn find(&self, item: &Item) -> Vec<Attribute> {
         struct V<'a>(&'a OwnedAttrs, Vec<Attribute>);
         impl<'a, 'ast> Visit<'ast> for V<'a> {
@@ -403,13 +407,12 @@ impl ToTokens for OwnedAttrs {
 /// The path that stands in for an attribute about to be removed.
 const MARK: &str = "__announce_removed_attribute";
 
-/// Removes every attribute of `item` for which `remove` returns true, at any
-/// depth that syn parses (not inside macro invocations). Returns whether any
-/// was removed.
+/// Removes every attribute of `item` for which `remove` returns true, at any depth
+/// that syn parses (not inside macro invocations). Returns whether any was removed.
 ///
-/// `syn`'s `VisitMut` can change an attribute but not take it out of its list
-/// (the hook for that is recent), so a removed attribute is renamed to a mark,
-/// the marks are dropped from the printed tokens, and the item is parsed again.
+/// `syn`'s `VisitMut` cannot take an attribute out of its list. So this renames
+/// each removed attribute to a mark, drops the marks from the printed tokens, and
+/// parses the item again.
 ///
 /// ```
 /// let mut item: syn::Item = syn::parse_quote! { #[a] struct S { #[b] x: u8 } };
@@ -481,13 +484,14 @@ fn drop_marked_attributes(ts: TokenStream) -> TokenStream {
     out.into_iter().collect()
 }
 
-/// The query a check receives: `@__announce_attrs [ NEXT!, .. ] { STATE }`.
+/// The query a check receives: `@__announce_attrs [ THIS!, NEXT!, .. ] { STATE }`.
 ///
-/// Answer it with [`answer`](Self::answer); see the [module](self) docs for the
-/// protocol. [`check!`](crate::check) does this for a proc-macro check.
+/// Answer it with [`answer`](Self::answer). The [module docs](self#the-query) have
+/// the protocol. [`check`](crate::check) does this for a proc-macro check.
 #[derive(Clone, Debug)]
 pub struct Query {
-    /// The elements still to be called, in order; the last one is `finish!`.
+    /// The macro being called (the head, the check itself), then the elements still
+    /// to be called, in order. The last one is `finish!`.
     pub list: ContList,
     /// The state that travels along. Opaque: pass it on unchanged.
     pub state: TokenStream,
@@ -519,20 +523,29 @@ impl Parse for Query {
 }
 
 impl Query {
-    /// The call that answers the query for a check owning `owned`: the next
-    /// element of the list, with the rest of the list and the state plus
-    /// `attrs(..)` (the state unchanged if `owned` is empty). A name that
-    /// collides with a reserved attribute is a `compile_error!`.
+    /// The call that answers the query for a check that owns `owned`. It calls the
+    /// element after the head, with the list from there on and the state plus
+    /// `attrs(..)` (the state unchanged if `owned` is empty). A reserved name gives
+    /// a `compile_error!`, and so does a list that is empty or has no element after
+    /// its head.
     pub fn answer(&self, owned: &OwnedAttrs) -> TokenStream {
         if let Err(e) = owned.check_names() {
             return e.to_compile_error();
         }
         let mut it = self.list.0.iter();
-        let next = match it.next() {
+        match it.next() {
+            Some(Cont::Bang(_)) => {}
+            _ => {
+                return quote! {
+                    ::core::compile_error! { "announce: the list of the attribute query is empty or does not start with a macro: it must start with the macro that is called (this check) and end with `finish!`. A check before this one did not forward its list (without its own first element)" }
+                }
+            }
+        }
+        let next = match it.clone().next() {
             Some(c @ Cont::Bang(_)) => c,
             _ => {
                 return quote! {
-                    ::core::compile_error! { "announce: the attribute query has no macro to call next: a check before this one did not forward the rest of its list (`finish!` ends it)" }
+                    ::core::compile_error! { "announce: the attribute query has no macro to call after this check: the list ends with this check, and `finish!` must end it. A check before this one forwarded too little of its list" }
                 }
             }
         };
@@ -542,10 +555,10 @@ impl Query {
     }
 }
 
-/// What a proc-macro check receives: the attribute [`Query`], or its
-/// own input (`(ARGS), ITEM`).
+/// What a proc-macro check receives: the attribute [`Query`], or its own input
+/// (`(ARGS), ITEM`).
 ///
-/// [`check!`](crate::check) parses this and answers the query for you.
+/// [`check`](crate::check) parses this and answers the query for you.
 #[allow(clippy::large_enum_variant)]
 pub enum CheckCall {
     /// The query of `#[announce]`: answer it with [`Query::answer`].
@@ -745,30 +758,77 @@ mod tests {
 
     #[test]
     fn the_query_is_answered_by_calling_the_next_element() {
+        // The head is the check that is called; the answer drops it and calls the
+        // next element with the list from there.
         let q: Query = syn::parse_quote! {
-            @__announce_attrs [ b::check!, ::announce::__private::finish! ] { [1u64; attr (x) { struct S; }] }
+            @__announce_attrs [ a::check!, b::check!, ::announce::__private::finish! ] { [1u64; attr (x) { struct S; }] }
         };
-        assert_eq!(q.list.0.len(), 2);
+        assert_eq!(q.list.0.len(), 3);
+        let answered = q.answer(&OwnedAttrs::from_strs(&["a", "c"]));
         assert_eq!(
-            s(q.answer(&OwnedAttrs::from_strs(&["a", "c"]))),
-            "b::check!{@__announce_attrs[::announce::__private::finish!]{[1u64;attr(x){structS;}]attrs(a,c)}}"
+            s(&answered),
+            "b::check!{@__announce_attrs[b::check!,::announce::__private::finish!]{[1u64;attr(x){structS;}]attrs(a,c)}}"
         );
         // Owning nothing: the state is passed on as it is.
         assert_eq!(
             s(q.answer(&OwnedAttrs::new())),
-            "b::check!{@__announce_attrs[::announce::__private::finish!]{[1u64;attr(x){structS;}]}}"
+            "b::check!{@__announce_attrs[b::check!,::announce::__private::finish!]{[1u64;attr(x){structS;}]}}"
         );
-        // The last element gets an empty list.
-        let q: Query = syn::parse_quote! { @__announce_attrs [ f::finish! ] { st } };
+        // The answer is a query again, headed by the macro it calls: the next check
+        // answers it in the same way, and the last call is `finish!` with `[finish!]`.
+        let q2: Query = syn::parse2(syn::parse2::<syn::Macro>(answered).unwrap().tokens).unwrap();
+        assert_eq!(s(&q2.list), "[b::check!,::announce::__private::finish!]");
+        assert_eq!(
+            s(q2.answer(&OwnedAttrs::from_strs(&["b"]))),
+            "::announce::__private::finish!{@__announce_attrs[::announce::__private::finish!]{[1u64;attr(x){structS;}]attrs(a,c)attrs(b)}}"
+        );
+        // Every path form of the head and of the next element is kept as written.
+        let q: Query = syn::parse_quote! {
+            @__announce_attrs [ crate::a!, ::x::b!, self::d!, e!, f::finish! ] { st }
+        };
+        assert_eq!(
+            s(q.answer(&OwnedAttrs::new())),
+            "::x::b!{@__announce_attrs[::x::b!,self::d!,e!,f::finish!]{st}}"
+        );
+        // The same check twice is a list like any other.
+        let q: Query = syn::parse_quote! { @__announce_attrs [ a!, a!, f::finish! ] { st } };
+        assert_eq!(
+            s(q.answer(&OwnedAttrs::new())),
+            "a!{@__announce_attrs[a!,f::finish!]{st}}"
+        );
+        // The check before `finish!`.
+        let q: Query = syn::parse_quote! { @__announce_attrs [ b!, f::finish! ] { st } };
         assert_eq!(
             s(q.answer(&OwnedAttrs::from_strs(&["a"]))),
-            "f::finish!{@__announce_attrs[]{stattrs(a)}}"
+            "f::finish!{@__announce_attrs[f::finish!]{stattrs(a)}}"
         );
-        // Nothing to call: an error, not a panic.
+    }
+
+    #[test]
+    fn a_list_that_does_not_fit_is_an_error_not_a_panic() {
+        // Nothing at all: a check before this one dropped the whole list.
         let q: Query = syn::parse_quote! { @__announce_attrs [] { st } };
+        let out = s(q.answer(&OwnedAttrs::new()));
+        assert!(
+            out.contains("compile_error") && out.contains("muststartwiththemacrothatiscalled"),
+            "{}",
+            out
+        );
+        // Only the head: nothing to call after the check.
+        let q: Query = syn::parse_quote! { @__announce_attrs [ b::check! ] { st } };
+        let out = s(q.answer(&OwnedAttrs::new()));
+        assert!(
+            out.contains("compile_error") && out.contains("nomacrotocallafterthischeck"),
+            "{}",
+            out
+        );
+        // An attribute continuation is not a macro that can be called.
+        let q: Query = syn::parse_quote! { @__announce_attrs [ #[derive(A)] ] { st } };
+        assert!(s(q.answer(&OwnedAttrs::new())).contains("compile_error"));
+        let q: Query = syn::parse_quote! { @__announce_attrs [ b!, #[derive(A)] ] { st } };
         assert!(s(q.answer(&OwnedAttrs::new())).contains("compile_error"));
         // A reserved name is reported where the check answers.
-        let q: Query = syn::parse_quote! { @__announce_attrs [ f::finish! ] { st } };
+        let q: Query = syn::parse_quote! { @__announce_attrs [ b!, f::finish! ] { st } };
         let out = s(q.answer(&OwnedAttrs::from_strs(&["doc"])));
         assert!(
             out.contains("compile_error") && out.contains("cannotbeanownedattributename"),
@@ -791,7 +851,7 @@ mod tests {
 
     #[test]
     fn a_check_call_is_a_query_or_its_input() {
-        let q: CheckCall = syn::parse_quote! { @__announce_attrs [ f! ] { } };
+        let q: CheckCall = syn::parse_quote! { @__announce_attrs [ c!, f! ] { } };
         assert!(matches!(q, CheckCall::Query(_)));
         let r: CheckCall = syn::parse_quote! { (a, b), struct S; };
         match r {

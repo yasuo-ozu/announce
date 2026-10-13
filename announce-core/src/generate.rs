@@ -1,6 +1,9 @@
 use crate::options::{Layout, Options};
+use crate::timing::Timer;
 use announce_helper::OwnedAttrs;
-use proc_macro2::{Group, Ident, Span, TokenStream, TokenTree};
+use proc_macro2::{Delimiter, Group, Ident, Punct, Spacing, Span, TokenStream, TokenTree};
+use syn::visit::Visit;
+use syn::visit_mut::VisitMut;
 use syn::{Item, Result, Visibility};
 use template_quote::{quote, ToTokens};
 
@@ -32,99 +35,41 @@ pub fn hex(random: u64) -> String {
     format!("{:016x}", random)
 }
 
-/// Escapes every `$` as `$__dollar`, recursively (DESIGN.md section 4: the
-/// payload is un-escaped by a short-lived `macro_rules!` at each hop).
-fn escape_dollar(ts: TokenStream, found: &mut bool) -> TokenStream {
-    let d = Ident::new("__dollar", Span::call_site());
-    let mut out = Vec::new();
-    for tt in ts {
-        match tt {
-            TokenTree::Punct(p) if p.as_char() == '$' => {
-                *found = true;
-                out.push(TokenTree::Punct(p));
-                out.push(TokenTree::Ident(d.clone()));
-            }
-            TokenTree::Group(g) => {
-                let mut ng = Group::new(g.delimiter(), escape_dollar(g.stream(), found));
-                ng.set_span(g.span());
-                out.push(TokenTree::Group(ng));
-            }
-            t => out.push(t),
-        }
+// ---------------------------------------------------------------------------
+// The attributes that do not stay, and the passes over the tokens.
+//
+// DESIGN.md section 4.2: the item is parsed once. A pass over the tree marks
+// the attributes that some copy of the item loses, the tree is printed once,
+// and each copy is made from the printed tokens by a pass that drops the marked
+// attributes it does not keep. The pass that makes the payload also escapes `$`,
+// rewrites `crate::` and counts the tokens.
+// ---------------------------------------------------------------------------
+
+/// The name that stands in for a `#[cfg]` (all copies lose it).
+const CUT_CFG: &str = "__announce_cut_cfg";
+/// The first segment put before the path of a string doc attribute (the payload
+/// and the checks lose it, unless `docs = true`).
+const CUT_DOC: &str = "__announce_cut_doc";
+/// The first segment put before the path of an owned attribute (the copies that
+/// rustc compiles lose it).
+const CUT_OWN: &str = "__announce_cut_own";
+
+const CFG: u8 = 1;
+const DOC: u8 = 2;
+const OWN: u8 = 4;
+
+/// Which kinds of attribute the tree has marks of.
+#[derive(Clone, Copy, Debug, Default)]
+struct Found {
+    cfg: bool,
+    doc: bool,
+    own: bool,
+}
+
+impl Found {
+    fn any(self) -> bool {
+        self.cfg || self.doc || self.own
     }
-    out.into_iter().collect()
-}
-
-/// Rewrites path-leading `crate::` as `$crate::`, so paths in the payload
-/// and META keep referring to the defining crate when the macro is expanded
-/// in another crate. `crate` in `pub(crate)` and in `pub(in crate::m)` is left
-/// alone: there it is the visibility's own syntax, which takes no `$crate`.
-/// That is the `in` that opens the parentheses after `pub`; any other `in`
-/// (`for x in crate::ARR {}`) is followed by an ordinary path, which is
-/// rewritten. Run after `escape_dollar`, so the inserted `$` is not escaped.
-fn crate_to_dollar_crate(ts: TokenStream) -> TokenStream {
-    rewrite_crate(ts, false)
-}
-
-/// `in_pub_paren`: `ts` is the inside of the parentheses that follow `pub`.
-fn rewrite_crate(ts: TokenStream, in_pub_paren: bool) -> TokenStream {
-    let tts: Vec<TokenTree> = ts.into_iter().collect();
-    let mut out = Vec::with_capacity(tts.len());
-    for (i, tt) in tts.iter().enumerate() {
-        let prev = i.checked_sub(1).and_then(|j| tts.get(j));
-        match tt {
-            TokenTree::Ident(id) if id == "crate" => {
-                let next_is_path = matches!(
-                    (tts.get(i + 1), tts.get(i + 2)),
-                    (Some(TokenTree::Punct(a)), Some(TokenTree::Punct(b)))
-                        if a.as_char() == ':' && a.spacing() == proc_macro2::Spacing::Joint && b.as_char() == ':'
-                );
-                let prev2 = i.checked_sub(2).and_then(|j| tts.get(j));
-                let after_in_or_sep = match prev {
-                    // `pub(in crate::m)`: the `in` is the first token inside the
-                    // parentheses of `pub`. And an escaped `$crate` (`$ __dollar
-                    // crate`, AUDIT #2).
-                    Some(TokenTree::Ident(p)) => {
-                        (p == "in" && in_pub_paren && i == 1) || p == "__dollar"
-                    }
-                    // `a::crate` (a path separator), but not `x: crate::T` (AUDIT #1)
-                    Some(TokenTree::Punct(p)) if p.as_char() == ':' => matches!(
-                        prev2,
-                        Some(TokenTree::Punct(q)) if q.as_char() == ':' && q.spacing() == proc_macro2::Spacing::Joint
-                    ),
-                    Some(TokenTree::Punct(p)) => p.as_char() == '$',
-                    _ => false,
-                };
-                if next_is_path && !after_in_or_sep {
-                    let mut dollar = proc_macro2::Punct::new('$', proc_macro2::Spacing::Alone);
-                    dollar.set_span(id.span());
-                    out.push(TokenTree::Punct(dollar));
-                }
-                out.push(tt.clone());
-            }
-            TokenTree::Group(g) => {
-                let after_pub = matches!(prev, Some(TokenTree::Ident(p)) if p == "pub");
-                let pub_paren = after_pub && g.delimiter() == proc_macro2::Delimiter::Parenthesis;
-                let mut ng = Group::new(g.delimiter(), rewrite_crate(g.stream(), pub_paren));
-                ng.set_span(g.span());
-                out.push(TokenTree::Group(ng));
-            }
-            t => out.push(t.clone()),
-        }
-    }
-    out.into_iter().collect()
-}
-
-/// After the derive's cfg evaluation, every `#[cfg]` still present is true.
-/// Remove them so the consumer does not evaluate them again with its own
-/// settings. `#[cfg]` inside macro invocation bodies is left alone.
-///
-/// Returns the item without them (re-parsed) and its tokens. See
-/// `announce_helper::remove_attributes` for how an attribute is removed.
-fn strip_true_cfgs(mut item: Item) -> Result<(Item, TokenStream)> {
-    announce_helper::remove_attributes(&mut item, |a| a.path().is_ident("cfg"))?;
-    let tokens = item.to_token_stream();
-    Ok((item, tokens))
 }
 
 /// A string doc attribute: `#[doc = ".."]`, which is what `///`, `//!`, `/** */`
@@ -135,28 +80,368 @@ fn is_doc_string(a: &syn::Attribute) -> bool {
     a.path().is_ident("doc") && matches!(a.meta, syn::Meta::NameValue(_))
 }
 
-/// The item without its string doc attributes (see [`is_doc_string`]), at any
-/// depth that syn parses: the item, its fields, variants, generic parameters,
-/// trait items, and everything inside an inline `mod`, inner attributes
-/// included. Not inside macro invocations and `macro_rules!` bodies, like
-/// `strip_true_cfgs`. Run it after the cfgs are evaluated, so a
-/// `#[cfg_attr(.., doc = ..)]` is a plain `#[doc = ..]` by then.
-fn strip_docs(mut item: Item) -> Result<TokenStream> {
-    announce_helper::remove_attributes(&mut item, is_doc_string)?;
-    Ok(item.to_token_stream())
+/// Marks, at any depth that syn parses (the item, its fields, variants, generic
+/// parameters, trait items, and everything inside an inline `mod`, inner
+/// attributes included; not inside macro invocations and `macro_rules!` bodies,
+/// which are only tokens), the attributes that some copy of the item loses:
+///
+/// - `#[cfg(..)]`: after the derive's cfg evaluation every one still present is
+///   true; a consumer would evaluate it again with its own settings. Lost by every
+///   copy (the path becomes [`CUT_CFG`]).
+/// - a string doc attribute, unless `docs = true`: lost by the payload and the
+///   checks (the path gets the segment [`CUT_DOC`] in front).
+/// - an attribute of an owned name: lost by the copies that rustc compiles (the
+///   path gets the segment [`CUT_OWN`] in front).
+///
+/// `syn`'s `VisitMut` can change an attribute but not take it out of its list (the
+/// hook for that is recent), so an attribute is renamed here and dropped from
+/// the printed tokens later (see `announce_helper::remove_attributes`, which does
+/// the same and then parses the item again; this does not).
+struct Marker<'a> {
+    keep_docs: bool,
+    owned: &'a OwnedAttrs,
+    found: Found,
+}
+
+impl Marker<'_> {
+    fn prefix(a: &mut syn::Attribute, mark: &str) {
+        let seg = syn::PathSegment::from(Ident::new(mark, Span::call_site()));
+        match &mut a.meta {
+            syn::Meta::Path(p) => p.segments.insert(0, seg),
+            syn::Meta::List(l) => l.path.segments.insert(0, seg),
+            syn::Meta::NameValue(nv) => nv.path.segments.insert(0, seg),
+        }
+    }
+}
+
+impl VisitMut for Marker<'_> {
+    fn visit_attribute_mut(&mut self, a: &mut syn::Attribute) {
+        if a.path().is_ident("cfg") {
+            let mark: syn::Path = Ident::new(CUT_CFG, Span::call_site()).into();
+            match &mut a.meta {
+                syn::Meta::Path(p) => *p = mark,
+                syn::Meta::List(l) => l.path = mark,
+                syn::Meta::NameValue(nv) => nv.path = mark,
+            }
+            self.found.cfg = true;
+        } else if !self.keep_docs && is_doc_string(a) {
+            Self::prefix(a, CUT_DOC);
+            self.found.doc = true;
+        } else if self.owned.owns(a) {
+            Self::prefix(a, CUT_OWN);
+            self.found.own = true;
+        }
+    }
+}
+
+/// The cfg-evaluated item, parsed once, with its attributes marked, and the
+/// tokens it prints.
+pub struct Prepared {
+    item: Item,
+    /// The tokens of `item` (or the tokens it was parsed from, if nothing is
+    /// marked), with the marks.
+    printed: TokenStream,
+    found: Found,
+}
+
+/// Marks the attributes of `item` and prints it. `original` are the tokens
+/// that `item` was parsed from, used instead of the printed tree when nothing is
+/// marked.
+pub fn prepare(
+    mut item: Item,
+    original: Option<TokenStream>,
+    opts: &Options,
+    owned: &OwnedAttrs,
+) -> Prepared {
+    let mut marker = Marker {
+        keep_docs: opts.docs,
+        owned,
+        found: Found::default(),
+    };
+    marker.visit_item_mut(&mut item);
+    let found = marker.found;
+    let printed = match original {
+        Some(tokens) if !found.any() => tokens,
+        _ => item.to_token_stream(),
+    };
+    Prepared {
+        item,
+        printed,
+        found,
+    }
+}
+
+/// What one pass over a token stream does (see [`run`]).
+#[derive(Clone, Copy)]
+struct Pass {
+    /// The marks (`CFG`, `DOC`, `OWN`) whose attributes are dropped. A mark that is
+    /// not dropped is taken off the attribute it stands on.
+    cut: u8,
+    /// Look for marked attributes at all (the item has some).
+    watch: bool,
+    /// Escape every `$` as `$__dollar`.
+    escape: bool,
+    /// Rewrite path-leading `crate::` as `$crate::`.
+    krate: bool,
+}
+
+impl Pass {
+    /// Only the attributes.
+    fn attributes(cut: u8, found: Found) -> Pass {
+        Pass {
+            cut,
+            watch: found.any(),
+            escape: false,
+            krate: false,
+        }
+    }
+
+    fn is_identity(self) -> bool {
+        !self.watch && !self.escape && !self.krate
+    }
+}
+
+/// The result of a [`run`] besides the tokens.
+#[derive(Default)]
+struct Counts {
+    /// A `$` was escaped.
+    dollar: bool,
+    /// Tokens of the result; a group counts its two delimiters and its contents.
+    tokens: usize,
+}
+
+fn mark_of(id: &Ident) -> Option<u8> {
+    if id == CUT_CFG {
+        Some(CFG)
+    } else if id == CUT_DOC {
+        Some(DOC)
+    } else if id == CUT_OWN {
+        Some(OWN)
+    } else {
+        None
+    }
+}
+
+/// The end of the marked attribute that starts at `tts[i]` (`#`), if it is one
+/// that `p` drops. Otherwise, if it is a marked attribute that is kept, pushes it
+/// to `out` without its mark and returns the index after it. `None` when the
+/// tokens at `i` are not a marked attribute (the caller goes on as usual).
+fn marked_attribute(
+    tts: &[TokenTree],
+    i: usize,
+    p: &Pass,
+    c: &mut Counts,
+    out: &mut Vec<TokenTree>,
+) -> Option<usize> {
+    let mut j = i + 1;
+    let bang = matches!(tts.get(j), Some(TokenTree::Punct(b)) if b.as_char() == '!');
+    if bang {
+        j += 1;
+    }
+    let g = match tts.get(j) {
+        Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Bracket => g,
+        _ => return None,
+    };
+    let inner: Vec<TokenTree> = g.stream().into_iter().collect();
+    let mark = match inner.first() {
+        Some(TokenTree::Ident(id)) => mark_of(id)?,
+        _ => return None,
+    };
+    if p.cut & mark != 0 {
+        return Some(j + 1);
+    }
+    // Kept: `#[MARK::path ..]` is `#[path ..]` again. (A `#[cfg]` is always cut.)
+    let rest: TokenStream = inner.into_iter().skip(3).collect();
+    out.push(tts[i].clone());
+    c.tokens += 1;
+    if bang {
+        out.push(tts[i + 1].clone());
+        c.tokens += 1;
+    }
+    let mut ng = Group::new(Delimiter::Bracket, run(rest, p, c, false));
+    ng.set_span(g.span());
+    out.push(TokenTree::Group(ng));
+    c.tokens += 2;
+    Some(j + 1)
+}
+
+/// One pass over `ts`, which does what `p` says at once: drops and restores the
+/// marked attributes, escapes `$` and rewrites `crate::`, and counts the tokens
+/// it produces. (Three passes before: DESIGN.md section 4.2.)
+///
+/// `$` is escaped as `$__dollar` (DESIGN.md section 4: the payload is un-escaped
+/// by the trampoline at each hop).
+///
+/// `crate::` as the start of a path is rewritten as `$crate::`, so paths in the
+/// payload and META keep referring to the defining crate when the macro is
+/// expanded in another crate. `crate` in `pub(crate)` and in `pub(in crate::m)` is
+/// left alone: there it is the visibility's own syntax, which takes no `$crate`.
+/// That is the `in` that opens the parentheses after `pub`; any other `in`
+/// (`for x in crate::ARR {}`) is followed by an ordinary path, which is rewritten.
+/// An escaped `$crate` (`$ __dollar crate`, AUDIT #2) is left alone as well: the
+/// previous token of the input is read, so the decision is that of the two passes
+/// (escape, then rewrite) that this replaces.
+///
+/// `in_pub_paren`: `ts` is the inside of the parentheses that follow `pub`.
+fn run(ts: TokenStream, p: &Pass, c: &mut Counts, in_pub_paren: bool) -> TokenStream {
+    let tts: Vec<TokenTree> = ts.into_iter().collect();
+    let mut out: Vec<TokenTree> = Vec::with_capacity(tts.len() + 4);
+    let mut i = 0;
+    while i < tts.len() {
+        let tt = &tts[i];
+        let prev = i.checked_sub(1).and_then(|j| tts.get(j));
+        match tt {
+            TokenTree::Punct(pt) if p.watch && pt.as_char() == '#' => {
+                if let Some(next) = marked_attribute(&tts, i, p, c, &mut out) {
+                    i = next;
+                    continue;
+                }
+                out.push(tt.clone());
+                c.tokens += 1;
+            }
+            TokenTree::Punct(pt) if p.escape && pt.as_char() == '$' => {
+                c.dollar = true;
+                out.push(tt.clone());
+                out.push(TokenTree::Ident(Ident::new("__dollar", Span::call_site())));
+                c.tokens += 2;
+            }
+            TokenTree::Ident(id) if p.krate && id == "crate" => {
+                let next_is_path = matches!(
+                    (tts.get(i + 1), tts.get(i + 2)),
+                    (Some(TokenTree::Punct(a)), Some(TokenTree::Punct(b)))
+                        if a.as_char() == ':' && a.spacing() == Spacing::Joint && b.as_char() == ':'
+                );
+                let prev2 = i.checked_sub(2).and_then(|j| tts.get(j));
+                let after_in_or_sep = match prev {
+                    // `pub(in crate::m)`: the `in` is the first token inside the
+                    // parentheses of `pub`. And an escaped `$crate` (`$ __dollar
+                    // crate`, AUDIT #2).
+                    Some(TokenTree::Ident(q)) => {
+                        (q == "in" && in_pub_paren && i == 1) || q == "__dollar"
+                    }
+                    // `a::crate` (a path separator), but not `x: crate::T` (AUDIT #1)
+                    Some(TokenTree::Punct(q)) if q.as_char() == ':' => matches!(
+                        prev2,
+                        Some(TokenTree::Punct(r)) if r.as_char() == ':' && r.spacing() == Spacing::Joint
+                    ),
+                    // `$crate`, and the `$` that `escape` puts in front of `__dollar`.
+                    Some(TokenTree::Punct(q)) => q.as_char() == '$',
+                    _ => false,
+                };
+                if next_is_path && !after_in_or_sep {
+                    let mut dollar = Punct::new('$', Spacing::Alone);
+                    dollar.set_span(id.span());
+                    out.push(TokenTree::Punct(dollar));
+                    c.tokens += 1;
+                }
+                out.push(tt.clone());
+                c.tokens += 1;
+            }
+            TokenTree::Group(g) => {
+                let after_pub = matches!(prev, Some(TokenTree::Ident(q)) if q == "pub");
+                let pub_paren = after_pub && g.delimiter() == Delimiter::Parenthesis;
+                let mut ng = Group::new(g.delimiter(), run(g.stream(), p, c, pub_paren));
+                ng.set_span(g.span());
+                out.push(TokenTree::Group(ng));
+                c.tokens += 2;
+            }
+            t => {
+                out.push(t.clone());
+                c.tokens += 1;
+            }
+        }
+        i += 1;
+    }
+    out.into_iter().collect()
+}
+
+/// `run` with the tokens counted, and the stream itself when the pass changes
+/// nothing.
+fn apply(ts: &TokenStream, p: &Pass) -> (TokenStream, Counts) {
+    let mut c = Counts::default();
+    if p.is_identity() {
+        return (ts.clone(), c);
+    }
+    let out = run(ts.clone(), p, &mut c, false);
+    (out, c)
+}
+
+/// `run` over a copy of `ts`, even if the pass changes nothing: the tokens are made
+/// again. A stream the compiler handed to the macro is a handle to its own tokens, in
+/// which a doc comment is still the one token the lexer made, and an old compiler
+/// (1.59) prints it as `///` where it prints what `syn` writes as `#[doc = ".."]`.
+/// The copies that go to the checks and to the compiler are made again, as they
+/// always were, so that they look the same on every compiler.
+fn rebuilt(ts: &TokenStream, p: &Pass) -> TokenStream {
+    run(ts.clone(), p, &mut Counts::default(), false)
+}
+
+/// The item as rustc compiles it: without the `#[cfg]`s and the owned attributes.
+fn compiled(prep: &Prepared) -> TokenStream {
+    rebuilt(&prep.printed, &Pass::attributes(CFG | OWN, prep.found))
+}
+
+/// The item that callbacks and checks get: without the `#[cfg]`s and the string
+/// docs (unless `docs = true`), with the owned attributes.
+fn plain(prep: &Prepared) -> TokenStream {
+    rebuilt(&prep.printed, &Pass::attributes(CFG | DOC, prep.found))
+}
+
+/// A mention of an identifier, in the tokens that `syn` leaves unparsed (a macro
+/// invocation, the arguments of an attribute) and in the tree.
+struct Mentions {
+    word: &'static str,
+    found: bool,
+}
+
+fn mentions_tokens(ts: TokenStream, word: &str) -> bool {
+    ts.into_iter().any(|tt| match tt {
+        TokenTree::Ident(i) => i == word,
+        TokenTree::Group(g) => mentions_tokens(g.stream(), word),
+        _ => false,
+    })
+}
+
+impl<'ast> Visit<'ast> for Mentions {
+    fn visit_ident(&mut self, i: &'ast Ident) {
+        self.found |= i == self.word;
+    }
+
+    fn visit_macro(&mut self, m: &'ast syn::Macro) {
+        self.found |= mentions_tokens(m.tokens.clone(), self.word);
+        syn::visit::visit_macro(self, m);
+    }
+
+    fn visit_attribute(&mut self, a: &'ast syn::Attribute) {
+        // A `#[cfg]` is not part of the item that is announced (it is marked).
+        if a.path().is_ident(CUT_CFG) {
+            return;
+        }
+        if let syn::Meta::List(l) = &a.meta {
+            self.found |= mentions_tokens(l.tokens.clone(), self.word);
+        }
+        syn::visit::visit_attribute(self, a);
+    }
+
+    fn visit_type_impl_trait(&mut self, i: &'ast syn::TypeImplTrait) {
+        self.found |= self.word == "impl";
+        syn::visit::visit_type_impl_trait(self, i);
+    }
+}
+
+fn mentions<'a, T>(
+    word: &'static str,
+    visit: impl FnOnce(&mut Mentions, &'a T),
+    node: &'a T,
+) -> bool {
+    let mut m = Mentions { word, found: false };
+    visit(&mut m, node);
+    m.found
 }
 
 /// Conservative test for "`dyn Trait` is certainly a valid type", so that the
 /// marker impl can never break the definer's build (DESIGN.md section 8).
 fn trait_is_simple_dyn(t: &syn::ItemTrait) -> bool {
-    fn mentions(ts: TokenStream, word: &str) -> bool {
-        ts.into_iter().any(|tt| match tt {
-            TokenTree::Ident(i) => i == word,
-            TokenTree::Group(g) => mentions(g.stream(), word),
-            _ => false,
-        })
-    }
-    let mentions_self = |ts: TokenStream| mentions(ts, "Self");
     // Any generic parameter, lifetimes included (AUDIT #4: `impl Announce for
     // dyn L` does not compile for `trait L<'a>`).
     if !t.generics.params.is_empty() || t.generics.where_clause.is_some() || t.auto_token.is_some()
@@ -202,15 +487,17 @@ fn trait_is_simple_dyn(t: &syn::ItemTrait) -> bool {
                     .inputs
                     .iter()
                     .skip(1)
-                    .all(|a| !mentions_self(a.to_token_stream()))
-                && !mentions_self(sig.output.to_token_stream())
-                && !mentions(sig.to_token_stream(), "impl")
+                    .all(|a| !mentions("Self", |m, a| m.visit_fn_arg(a), a))
+                && !mentions("Self", |m, o| m.visit_return_type(o), &sig.output)
+                && !mentions("impl", |m, s| m.visit_signature(s), sig)
         }
         _ => false,
     })
 }
 
-fn marker_impl(item: &Item, opts: &Options, krate: &syn::Path) -> TokenStream {
+/// The `Announce` impl, if `generate` writes one. Its generics are those of the
+/// item, without the attributes of the parameters.
+fn marker_impl(item: &Item, opts: &Options) -> TokenStream {
     // `#[derive(Announce)]` always implements it. `emit_item = false` means
     // the item is emitted (and its `Announce` impl owned) by someone else, so
     // a second announcement cannot conflict with it (AUDIT #25). A mock is a
@@ -228,10 +515,20 @@ fn marker_impl(item: &Item, opts: &Options, krate: &syn::Path) -> TokenStream {
         | Item::Union(syn::ItemUnion {
             ident, generics, ..
         }) => {
+            let krate = opts.krate();
+            let mut generics = generics.clone();
+            for p in generics.params.iter_mut() {
+                match p {
+                    syn::GenericParam::Type(t) => t.attrs.clear(),
+                    syn::GenericParam::Lifetime(l) => l.attrs.clear(),
+                    syn::GenericParam::Const(c) => c.attrs.clear(),
+                }
+            }
             let (ig, tg, wc) = generics.split_for_impl();
             quote! { impl #ig #krate::Announce for #ident #tg #wc {} }
         }
         Item::Trait(t) if trait_is_simple_dyn(t) => {
+            let krate = opts.krate();
             let ident = &t.ident;
             quote! { impl #krate::Announce for dyn #ident {} }
         }
@@ -259,6 +556,9 @@ pub struct Variant {
 pub const SINGLE_COPY_THRESHOLD: usize = 300;
 
 /// Number of tokens in `ts`; a group counts its two delimiters and its contents.
+/// (The passes of [`run`] count the tokens they produce; this is the reference
+/// of the tests.)
+#[cfg(test)]
 pub(crate) fn token_count(ts: &TokenStream) -> usize {
     ts.clone()
         .into_iter()
@@ -478,10 +778,12 @@ fn arms(fallback: &Ident, plain: &Variant, single: bool) -> TokenStream {
     });
     out
 }
-
 /// The generated macro and its re-export, carrying `payload` (item tokens)
 /// with META = checks, `meta =` entries, `attrs(..)` (the owned attribute
-/// names), `mock(..)` and `extra_meta`.
+/// names), `mock(..)` and `extra_meta`. (The code goes through
+/// [`trampoline_with`]; this is its form for tokens that need no more than the
+/// escaping, which the tests use.)
+#[cfg(test)]
 pub fn trampoline(
     ident: &Ident,
     vis: &Visibility,
@@ -490,6 +792,38 @@ pub fn trampoline(
     random: u64,
     payload: TokenStream,
     extra_meta: TokenStream,
+) -> TokenStream {
+    let pass = Pass {
+        cut: 0,
+        watch: false,
+        escape: true,
+        krate: true,
+    };
+    trampoline_with(
+        ident,
+        vis,
+        opts,
+        owned,
+        random,
+        (&payload, pass),
+        extra_meta,
+        &mut Timer::off(),
+    )
+}
+
+/// [`trampoline`] with the pass that makes the payload from `source`: the
+/// escaping of `$`, the rewriting of `crate::` and (for the tokens of a
+/// [`Prepared`]) the dropping of the marked attributes are one pass over it.
+#[allow(clippy::too_many_arguments)]
+fn trampoline_with(
+    ident: &Ident,
+    vis: &Visibility,
+    opts: &Options,
+    owned: &OwnedAttrs,
+    random: u64,
+    (source, pass): (&TokenStream, Pass),
+    extra_meta: TokenStream,
+    t: &mut Timer,
 ) -> TokenStream {
     let h = hex(random);
     let macro_name = opts.macro_name.clone().unwrap_or_else(|| ident.clone());
@@ -522,20 +856,30 @@ pub fn trampoline(
     if !extra_meta.is_empty() {
         meta_items.push(extra_meta);
     }
-    let meta = crate_to_dollar_crate(quote! { #(#meta_items),* });
-    let mut needs_dollar = false;
-    let payload = crate_to_dollar_crate(escape_dollar(payload, &mut needs_dollar));
-    let single = is_single(opts.layout, token_count(&meta) + token_count(&payload));
+    let (meta, meta_count) = apply(
+        &quote! { #(#meta_items),* },
+        &Pass {
+            cut: 0,
+            watch: false,
+            escape: false,
+            krate: true,
+        },
+    );
+    // The payload is made once, here, and shared by every arm (a stream is a
+    // handle: quoting it again does not copy it).
+    let (payload, counts) = apply(source, &pass);
+    t.step("payload");
+    let single = is_single(opts.layout, meta_count.tokens + counts.tokens);
     // Global options other than a leading `expr` are not interpreted by the
     // trampoline; they are forwarded unchanged (a namespace for helpers, e.g.
     // `gather`'s bookkeeping; AUDIT 3 #9).
     let plain = Variant {
         meta,
         payload,
-        needs_dollar,
+        needs_dollar: counts.dollar,
     };
     let arms = arms(&fallback, &plain, single);
-    quote! {
+    let out = quote! {
         #[doc(hidden)]
         // The payload holds escaped `$crate` / `crate::` tokens (false
         // positive), and `pub` items in fn bodies are fine (AUDIT #24).
@@ -545,14 +889,9 @@ pub fn trampoline(
         #[doc(hidden)]
         #[allow(unused_imports)]
         #vis use #hidden as #macro_name;
-    }
-}
-
-/// The item without the owned attributes (`item` has its cfgs evaluated).
-fn compiled_copy(item: &Item, owned: &OwnedAttrs) -> Result<TokenStream> {
-    let mut item = item.clone();
-    owned.strip(&mut item)?;
-    Ok(item.to_token_stream())
+    };
+    t.step("quote");
+    out
 }
 
 /// Whether `generate` emits the real item itself: when something is removed from
@@ -564,13 +903,21 @@ fn emits_real_item(opts: &Options, owned: &OwnedAttrs) -> bool {
 /// What stands in for `generate` when it fails: the real item, if `generate`
 /// would have emitted it. Without it the error would be followed by errors about
 /// the missing item.
+#[cfg(test)]
 pub fn real_item_on_error(item: Item, opts: &Options, owned: &OwnedAttrs) -> TokenStream {
     if !emits_real_item(opts, owned) {
         return TokenStream::new();
     }
-    strip_true_cfgs(item)
-        .and_then(|(item, _)| compiled_copy(&item, owned))
-        .unwrap_or_default()
+    real_item(&prepare(item, None, opts, owned), opts, owned)
+}
+
+/// The real item, if `generate` emits it ([`emits_real_item`]).
+pub fn real_item(prep: &Prepared, opts: &Options, owned: &OwnedAttrs) -> TokenStream {
+    if emits_real_item(opts, owned) {
+        compiled(prep)
+    } else {
+        TokenStream::new()
+    }
 }
 
 /// Everything the `__Capture` derive emits for one cfg-evaluated item.
@@ -581,45 +928,59 @@ pub fn real_item_on_error(item: Item, opts: &Options, owned: &OwnedAttrs) -> Tok
 /// emits, instead of `#[announce]`, whenever there is anything to remove) and
 /// the hidden copy of a `mock`.
 ///
-/// The payload and the checks also lose the string doc attributes
-/// ([`strip_docs`]), unless `opts.docs` is set; they get the same item. The
-/// copies that rustc compiles keep their docs, so rustdoc shows what the
-/// author wrote.
+/// The payload and the checks also lose the string doc attributes, unless
+/// `opts.docs` is set; they get the same item. The copies that rustc compiles
+/// keep their docs, so rustdoc shows what the author wrote.
+#[cfg(test)]
 pub fn generate(
     item: Item,
     opts: &Options,
     random: u64,
     owned: &OwnedAttrs,
 ) -> Result<TokenStream> {
-    let (ident, vis) = ident_vis(&item)?;
-    let krate = opts.krate();
+    generate_timed(item, opts, random, owned, &mut Timer::off())
+}
+
+/// [`generate`], with the steps timed by `t`.
+pub(crate) fn generate_timed(
+    item: Item,
+    opts: &Options,
+    random: u64,
+    owned: &OwnedAttrs,
+    t: &mut Timer,
+) -> Result<TokenStream> {
+    let prep = prepare(item, None, opts, owned);
+    t.step("strip");
+    emit(&prep, opts, random, owned, t)
+}
+
+/// [`generate`] for a [`Prepared`] item. The steps are timed by `t` (the caller
+/// has ended the step of `prepare`).
+pub(crate) fn emit(
+    prep: &Prepared,
+    opts: &Options,
+    random: u64,
+    owned: &OwnedAttrs,
+    t: &mut Timer,
+) -> Result<TokenStream> {
+    let item = &prep.item;
+    let (ident, vis) = ident_vis(item)?;
     let h = hex(random);
 
-    let (item, full_item) = strip_true_cfgs(item)?;
-
-    // What callbacks and checks get: the same item, without its docs unless
-    // `docs = true` (a smaller trampoline). Taken after the cfgs are evaluated.
-    let payload = if opts.docs {
-        full_item.clone()
-    } else {
-        strip_docs(item.clone())?
-    };
-
     // What the compiler sees: without the owned attributes, with the docs.
-    let compiled = if owned.is_empty() {
-        full_item.clone()
-    } else {
-        compiled_copy(&item, owned)?
-    };
-    let real_item = emits_real_item(opts, owned).then(|| compiled.clone());
-
+    let real_item = real_item(prep, opts, owned);
+    // What callbacks and checks get: the same item, without its docs unless
+    // `docs = true` (a smaller trampoline). Made only for the checks; the
+    // trampoline makes its payload in its own pass.
+    let checks_item = (!opts.checks.is_empty()).then(|| plain(prep));
     let checks = opts.checks.iter().map(|c| {
         let p = &c.path;
         let a = c.args.clone().unwrap_or_default();
-        quote! { #p! { (#a), #payload } }
+        quote! { #p! { (#a), #checks_item } }
     });
     let mock_copy = opts.mock.as_ref().map(|_| {
         let m = Ident::new(&format!("__announce_mock_{}", h), Span::call_site());
+        let compiled = compiled(prep);
         quote! {
             #[doc(hidden)]
             #[allow(dead_code, non_camel_case_types, unused_imports, unused_variables)]
@@ -630,23 +991,48 @@ pub fn generate(
             }
         }
     });
-    let marker = marker_impl(&item, opts, &krate);
+    t.step("views");
+    let marker = marker_impl(item, opts);
+    t.step("marker");
 
     // DESIGN.md §4.5: `repeater` is required when the item has types that do
-    // not resolve outside this crate.
-    let (leak_impls, leak_meta) = match crate::leak::table(&item, opts, random)? {
-        Some(l) => (l.impls, l.meta),
-        None => (TokenStream::new(), TokenStream::new()),
+    // not resolve outside this crate. When every path in the item certainly
+    // resolves everywhere there is nothing to find, and type-leak is not run
+    // (section 4.5.2).
+    let fast = opts.repeater.is_none() && crate::fastpath::accepts(item, opts);
+    let (leak_impls, leak_meta) = if fast {
+        #[cfg(test)]
+        crate::fastpath::assert_agrees(item, opts);
+        (TokenStream::new(), TokenStream::new())
+    } else {
+        match crate::leak::table(item, opts, random)? {
+            Some(l) => (l.impls, l.meta),
+            None => (TokenStream::new(), TokenStream::new()),
+        }
     };
-    let tramp = trampoline(
-        &ident,
-        &vis,
-        opts,
-        owned,
-        random,
-        payload.clone(),
-        leak_meta,
-    );
+    t.step_labelled("analysis", if fast { "fast" } else { "full" });
+    let payload = match &checks_item {
+        // The item of the checks has lost what the payload loses already.
+        Some(plain) => (
+            plain,
+            Pass {
+                cut: 0,
+                watch: false,
+                escape: true,
+                krate: true,
+            },
+        ),
+        None => (
+            &prep.printed,
+            Pass {
+                cut: CFG | DOC,
+                watch: prep.found.any(),
+                escape: true,
+                krate: true,
+            },
+        ),
+    };
+    let tramp = trampoline_with(&ident, &vis, opts, owned, random, payload, leak_meta, t);
 
     Ok(quote! {
         #real_item
@@ -661,7 +1047,51 @@ pub fn generate(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use proc_macro2::{Delimiter, Spacing};
+
+    /// `$` escaped as `$__dollar`, on its own (the passes of the code are one).
+    fn escape_dollar(ts: TokenStream, found: &mut bool) -> TokenStream {
+        let pass = Pass {
+            cut: 0,
+            watch: false,
+            escape: true,
+            krate: false,
+        };
+        let (out, counts) = apply(&ts, &pass);
+        *found |= counts.dollar;
+        out
+    }
+
+    /// `crate::` rewritten as `$crate::`, on its own.
+    fn crate_to_dollar_crate(ts: TokenStream) -> TokenStream {
+        let pass = Pass {
+            cut: 0,
+            watch: false,
+            escape: false,
+            krate: true,
+        };
+        apply(&ts, &pass).0
+    }
+
+    /// The item without its string docs, as the payload has it.
+    fn strip_docs(item: Item) -> Result<TokenStream> {
+        Ok(plain(&prepare(
+            item,
+            None,
+            &Options::default(),
+            &OwnedAttrs::new(),
+        )))
+    }
+
+    /// The item without its true `#[cfg]`s, as rustc compiles it (no owned names).
+    fn strip_true_cfgs(item: Item) -> Result<(Item, TokenStream)> {
+        let tokens = compiled(&prepare(
+            item,
+            None,
+            &Options::default(),
+            &OwnedAttrs::new(),
+        ));
+        Ok((syn::parse2(tokens.clone())?, tokens))
+    }
 
     fn squash(ts: impl ToTokens) -> String {
         ts.to_token_stream()
@@ -1307,5 +1737,362 @@ mod tests {
             "{}",
             out
         );
+    }
+
+    // ---- the passes over the tokens -----------------------------------------
+
+    /// Both rewrites of the payload in one pass.
+    fn fused(ts: TokenStream) -> (TokenStream, Counts) {
+        let pass = Pass {
+            cut: 0,
+            watch: false,
+            escape: true,
+            krate: true,
+        };
+        apply(&ts, &pass)
+    }
+
+    const PAYLOADS: &[&str] = &[
+        "pub struct S { pub a: crate::T, pub b: Vec<crate::U> }",
+        "pub(crate) struct S(pub(in crate::m) u8, crate::T);",
+        "pub fn f(x: crate::T) { for y in crate::ARR { let _ = $x; } }",
+        "mod m { macro_rules! k { ($($x:expr),*) => { 0 $(+ $x)* }; } pub fn f() -> u8 { k!(crate::A) } }",
+        "const C: u8 = $crate::N + crate::M + a::crate::b + ::crate::c;",
+        "struct S { x: $crate::T, y: $ crate::U, z: crate::V }",
+        "fn f(a: crate::A) -> crate::B where crate::C: crate::D { crate::g() }",
+        "use crate; struct S(pub in crate::x);",
+        "trait Tr { fn f(&self) -> crate::T; const N: usize = $crate::K; }",
+        "a $ b $ crate :: c",
+        "",
+    ];
+
+    #[test]
+    fn the_fused_pass_equals_the_two_it_replaces() {
+        for src in PAYLOADS {
+            let ts: TokenStream = src.parse().unwrap();
+            let mut found = false;
+            let chained = crate_to_dollar_crate(escape_dollar(ts.clone(), &mut found));
+            let (both, counts) = fused(ts);
+            assert_eq!(squash(&both), squash(&chained), "{}", src);
+            assert_eq!(counts.dollar, found, "{}", src);
+        }
+    }
+
+    #[test]
+    fn the_pass_counts_the_tokens_it_produces() {
+        for src in PAYLOADS {
+            let (out, counts) = fused(src.parse().unwrap());
+            assert_eq!(counts.tokens, token_count(&out), "{}", src);
+        }
+        // The meta stream: only the rewrite of `crate::`.
+        let pass = Pass {
+            cut: 0,
+            watch: false,
+            escape: false,
+            krate: true,
+        };
+        let (out, counts) = apply(&quote! { a::check(crate::x), b }, &pass);
+        assert_eq!(squash(&out), "a::check($crate::x),b");
+        assert_eq!(counts.tokens, token_count(&out));
+        assert!(!counts.dollar);
+    }
+
+    #[test]
+    fn a_pass_that_changes_nothing_is_the_stream_itself() {
+        let pass = Pass::attributes(CFG | DOC, Found::default());
+        assert!(pass.is_identity());
+        let ts = quote! { struct S; };
+        let (out, counts) = apply(&ts, &pass);
+        assert_eq!(squash(&out), squash(&ts));
+        assert_eq!(counts.tokens, 0);
+    }
+
+    fn prepared(src: TokenStream, opts: &str, owned: &[&str]) -> (Prepared, Options, OwnedAttrs) {
+        let opts: Options = syn::parse2(opts.parse().unwrap()).unwrap();
+        let owned = OwnedAttrs::from_strs(owned);
+        let item: Item = syn::parse2(src).unwrap();
+        (prepare(item, None, &opts, &owned), opts, owned)
+    }
+
+    #[test]
+    fn marks_decide_what_each_copy_loses() {
+        let item = quote! {
+            /// docs
+            #[cfg(a)]
+            #[my_lib(item)]
+            pub struct S {
+                #[cfg(b)] #[doc = "field"] #[my_lib(skip)] #[other] pub a: u8,
+            }
+        };
+        let (prep, _, _) = prepared(item.clone(), "", &["my_lib"]);
+        assert!(prep.found.cfg && prep.found.doc && prep.found.own);
+        // The payload: no cfg, no docs; the owned attributes and the others stay.
+        let payload = squash(plain(&prep));
+        assert_eq!(
+            payload,
+            "#[my_lib(item)]pubstructS{#[my_lib(skip)]#[other]puba:u8,}"
+        );
+        // What rustc compiles: no cfg, no owned; the docs stay, as written.
+        let compiled = squash(compiled(&prep));
+        assert_eq!(
+            compiled,
+            "#[doc=\"docs\"]pubstructS{#[doc=\"field\"]#[other]puba:u8,}"
+        );
+        // A mark never reaches a copy.
+        for out in [&payload, &compiled] {
+            assert!(!out.contains("__announce_cut"), "{}", out);
+        }
+        // `docs = true`: the payload keeps them.
+        let (prep, _, _) = prepared(item, "docs = true", &["my_lib"]);
+        assert!(!prep.found.doc);
+        assert_eq!(
+            squash(plain(&prep)),
+            "#[doc=\"docs\"]#[my_lib(item)]pubstructS{#[doc=\"field\"]#[my_lib(skip)]#[other]puba:u8,}"
+        );
+    }
+
+    #[test]
+    fn marks_are_not_made_inside_macros_or_for_other_attributes() {
+        let (prep, _, _) = prepared(
+            quote! {
+                #[doc(hidden)]
+                pub mod m {
+                    #![doc(html_no_source)]
+                    k!(#[cfg(z)] #[doc = "in a call"] #[my_lib] x);
+                    macro_rules! k { () => { #[doc = "in a macro"] }; }
+                    #[cfg_attr(a, derive(Clone))]
+                    pub struct T;
+                }
+            },
+            "",
+            &["my_lib"],
+        );
+        assert!(!prep.found.any());
+        let out = squash(plain(&prep));
+        assert!(
+            out.contains("k!(#[cfg(z)]#[doc=\"inacall\"]#[my_lib]x);"),
+            "{}",
+            out
+        );
+        assert!(out.contains("#[doc=\"inamacro\"]"), "{}", out);
+        assert!(
+            out.contains("#[doc(hidden)]") && out.contains("#![doc(html_no_source)]"),
+            "{}",
+            out
+        );
+        assert!(out.contains("#[cfg_attr(a,derive(Clone))]"), "{}", out);
+    }
+
+    #[test]
+    fn the_tokens_the_item_was_parsed_from_are_kept_when_nothing_is_marked() {
+        let tokens = quote! { pub struct S { pub a: u8 } };
+        let item: Item = syn::parse2(tokens.clone()).unwrap();
+        let (opts, owned) = (Options::default(), OwnedAttrs::new());
+        let prep = prepare(item.clone(), Some(tokens.clone()), &opts, &owned);
+        assert!(!prep.found.any());
+        assert_eq!(squash(&prep.printed), squash(&tokens));
+        // With marks the tree is printed (the original has the attributes).
+        let documented = quote! { /** x */ pub struct S; };
+        let item: Item = syn::parse2(documented.clone()).unwrap();
+        let prep = prepare(item, Some(documented), &opts, &owned);
+        assert!(prep.found.doc);
+        assert!(squash(&prep.printed).contains("__announce_cut_doc"));
+        assert_eq!(squash(plain(&prep)), "pubstructS;");
+    }
+
+    #[test]
+    fn the_payload_is_made_in_one_pass_from_the_printed_tree() {
+        // docs and cfgs dropped, `$` escaped, `crate::` rewritten, all at once;
+        // with the same result as the passes one after the other.
+        let (prep, opts, owned) = prepared(
+            quote! {
+                /// doc
+                #[cfg(a)]
+                #[my_lib(crate::x)]
+                pub struct S { #[cfg(b)] #[doc = "f"] pub a: crate::T, pub b: m!($x) }
+            },
+            "",
+            &["my_lib"],
+        );
+        let ident = Ident::new("S", Span::call_site());
+        let vis: Visibility = syn::parse_quote!(pub);
+        let pass = Pass {
+            cut: CFG | DOC,
+            watch: true,
+            escape: true,
+            krate: true,
+        };
+        let one = trampoline_with(
+            &ident,
+            &vis,
+            &opts,
+            &owned,
+            1,
+            (&prep.printed, pass),
+            TokenStream::new(),
+            &mut Timer::off(),
+        );
+        let separately = trampoline(
+            &ident,
+            &vis,
+            &opts,
+            &owned,
+            1,
+            plain(&prep),
+            TokenStream::new(),
+        );
+        assert_eq!(squash(&one), squash(&separately));
+        let out = squash(&one);
+        assert!(
+            out.contains("=>[attrs(my_lib)]{#[my_lib($crate::x)]pubstructS{puba:$crate::T,pubb:m!($__dollarx)}}"),
+            "{}",
+            out
+        );
+    }
+
+    #[test]
+    fn the_announce_impl_leaves_out_the_attributes_of_the_parameters() {
+        let opts = Options::default();
+        let (prep, _, _) = prepared(
+            quote! { pub struct S<#[cfg(a)] #[doc = "t"] #[my_lib] T, 'a, #[cfg(b)] const N: usize>(T); },
+            "",
+            &["my_lib"],
+        );
+        let out = squash(marker_impl(&prep.item, &opts));
+        assert!(out.ends_with("forS<'a,T,N>{}"), "{}", out);
+        assert!(!out.contains('#'), "{}", out);
+    }
+
+    /// The test of the version before the item was parsed once: tokens of the
+    /// pieces of the signature (`mentions`), which `trait_is_simple_dyn` replaces
+    /// by a walk of the tree.
+    fn reference_simple_dyn(t: &syn::ItemTrait) -> bool {
+        fn mentions(ts: TokenStream, word: &str) -> bool {
+            ts.into_iter().any(|tt| match tt {
+                TokenTree::Ident(i) => i == word,
+                TokenTree::Group(g) => mentions(g.stream(), word),
+                _ => false,
+            })
+        }
+        let mentions_self = |ts: TokenStream| mentions(ts, "Self");
+        if !t.generics.params.is_empty()
+            || t.generics.where_clause.is_some()
+            || t.auto_token.is_some()
+        {
+            return false;
+        }
+        let supers_ok = t.supertraits.iter().all(|b| match b {
+            syn::TypeParamBound::Lifetime(_) => true,
+            syn::TypeParamBound::Trait(tb) => {
+                let p = tb.path.to_token_stream().to_string().replace(' ', "");
+                tb.lifetimes.is_none()
+                    && matches!(
+                        p.trim_start_matches("::"),
+                        "core::marker::Send"
+                            | "core::marker::Sync"
+                            | "std::marker::Send"
+                            | "std::marker::Sync"
+                    )
+            }
+            _ => false,
+        });
+        if !supers_ok {
+            return false;
+        }
+        t.items.iter().all(|ti| match ti {
+            syn::TraitItem::Fn(f) => {
+                let sig = &f.sig;
+                let receiver_ok = matches!(
+                    sig.inputs.first(),
+                    Some(syn::FnArg::Receiver(r)) if r.reference.is_some() && r.colon_token.is_none()
+                );
+                receiver_ok
+                    && sig.asyncness.is_none()
+                    && sig
+                        .generics
+                        .params
+                        .iter()
+                        .all(|p| matches!(p, syn::GenericParam::Lifetime(_)))
+                    && sig.generics.where_clause.is_none()
+                    && sig
+                        .inputs
+                        .iter()
+                        .skip(1)
+                        .all(|a| !mentions_self(a.to_token_stream()))
+                    && !mentions_self(sig.output.to_token_stream())
+                    && !mentions(sig.to_token_stream(), "impl")
+            }
+            _ => false,
+        })
+    }
+
+    #[test]
+    fn simple_dyn_is_what_it_was() {
+        let traits = [
+            "pub trait T { fn f(&self); }",
+            "pub trait T { fn f(&self) -> u8; fn g(&mut self, x: &u8) -> &u8; }",
+            "/// doc\n pub trait T { /// m\n #[inline] fn f(&self, #[a] x: u8); }",
+            "trait T { fn f(&'static self); fn g<'a>(&'a self, x: &'a u8) -> &'a u8; }",
+            "trait T: ::core::marker::Send + ::std::marker::Sync + 'static { fn f(&self); }",
+            "trait T: Send { fn f(&self); }",
+            "trait T: Base { fn f(&self); }",
+            "trait T<'a> { fn f(&self); }",
+            "trait T<X> { fn f(&self); }",
+            "trait T where u8: Copy { fn f(&self); }",
+            "unsafe trait T { fn f(&self); }",
+            "trait T { fn f(&self, x: Self); }",
+            "trait T { fn f(&self) -> Self; }",
+            "trait T { fn f(&self) -> Option<Self>; }",
+            "trait T { fn f(&self, x: m!(Self)); }",
+            "trait T { fn f(&self, x: m!(y)); }",
+            "trait T { fn f(&self, #[a(Self)] x: u8); }",
+            "trait T { fn f(&self, #[a(impl)] x: u8); }",
+            "trait T { fn f(&self, #[cfg(Self)] x: u8); }",
+            "trait T { fn f(&self, #[cfg(impl)] x: u8); }",
+            "trait T { fn f(&self, x: impl Debug); }",
+            "trait T { fn f(&self) -> impl Debug; }",
+            "trait T { fn f(&self, x: Box<impl Debug>); }",
+            "trait T { fn f(&self, x: fn(Self)); }",
+            "trait T { fn f(self); }",
+            "trait T { fn f(self: Box<Self>); }",
+            "trait T { fn f(); }",
+            "trait T { fn f(&self) { let _: Self = x(); } }",
+            "trait T { async fn f(&self); }",
+            "trait T { fn f<U>(&self, u: U); }",
+            "trait T { fn f(&self) where u8: Copy; }",
+            "trait T { type A; fn f(&self); }",
+            "trait T { const C: u8; }",
+            "trait T { m!(); }",
+            "trait T {}",
+            "trait T { fn f(&self, x: [u8; 3], y: (u8, bool), z: &[u8]); }",
+            "trait T { fn f(&self, Self_: u8); }",
+        ];
+        for src in traits {
+            let item: Item = syn::parse_str(src).unwrap_or_else(|e| panic!("{}: {}", e, src));
+            // The reference saw the item without its `#[cfg]`s; the code sees
+            // the marked tree.
+            let (stripped, _) = strip_true_cfgs(item.clone()).unwrap();
+            let (stripped, marked) = match (stripped, item) {
+                (Item::Trait(a), Item::Trait(b)) => (a, b),
+                _ => unreachable!(),
+            };
+            let marked = match prepare(
+                Item::Trait(marked),
+                None,
+                &Options::default(),
+                &OwnedAttrs::new(),
+            )
+            .item
+            {
+                Item::Trait(t) => t,
+                _ => unreachable!(),
+            };
+            assert_eq!(
+                trait_is_simple_dyn(&marked),
+                reference_simple_dyn(&stripped),
+                "{}",
+                src
+            );
+        }
     }
 }
