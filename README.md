@@ -108,11 +108,6 @@ how to run it: `bench/`.
 <img src="https://raw.githubusercontent.com/yasuo-ozu/announce/main/bench/plots/defining-rmeta.svg" alt="Defining crate: .rmeta size against K" width="49%"> <img src="https://raw.githubusercontent.com/yasuo-ozu/announce/main/bench/plots/defining-time.svg" alt="Defining crate: rebuild time against K" width="49%">
 <img src="https://raw.githubusercontent.com/yasuo-ozu/announce/main/bench/plots/calling-rmeta.svg" alt="Calling crate: .rmeta size against K" width="49%"> <img src="https://raw.githubusercontent.com/yasuo-ozu/announce/main/bench/plots/calling-time.svg" alt="Calling crate: rebuild time against K" width="49%">
 
-| S | K | defining crate `.rmeta`, plain / announced | defining crate rebuild, plain / announced |
-|---:|---:|---:|---:|
-| 1 | 1 | 2.6 / 10.1 KiB | 72 / 78 ms |
-| 200 | 96 | 5,562 / 8,629 KiB | 427 / 1,117 ms |
-
 - The cost is metadata of the defining crate: about 6 KiB per definition plus
   copies of the item (one copy for items above about 21 trait methods). Doc
   comments are not recorded.
