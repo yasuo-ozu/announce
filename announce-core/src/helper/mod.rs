@@ -1,5 +1,5 @@
 //! Helpers for proc-macro crates that use [`announce`](https://docs.rs/announce)
-//! trampolines.
+//! trampolines: `announce::helper`.
 //!
 //! - Receive definitions: [`callback!`] defines a callback that parses its [`Input`].
 //!   [`Input::gather`] asks for more definitions. [`Input::forward`] continues the
@@ -15,7 +15,7 @@
 //! - Read META: [`Entry::find_meta`] and [`KvArgs`] parse `key = value` lists.
 //!   [`Entry::owned_attrs`] and [`Entry::item_without_owned_attrs`] read owned
 //!   attributes.
-//! - Resolve relative types (feature `type-leak`, on by default):
+//! - Resolve relative types:
 //!   [`Entry::type_leak`] reads the [`TypeLeak`] table of a definition announced with
 //!   `repeater = ..`. [`TypeLeak::apply`] rewrites an item so that its types resolve
 //!   in any crate.
@@ -24,21 +24,22 @@
 
 pub mod attrs;
 mod kv;
-#[cfg(feature = "type-leak")]
 pub mod leak;
 mod transformer;
-#[cfg(feature = "type-leak")]
 mod typeleak;
 
 pub use attrs::{remove_attributes, CheckCall, OwnedAttrs, Query};
 pub use kv::KvArgs;
 pub use transformer::signature_only;
 /// The version of `type-leak` that [`TypeLeak`] uses. Name it through this crate,
-/// so there is never a second, incompatible copy. (Feature `type-leak`.)
-#[cfg(feature = "type-leak")]
+/// so there is never a second, incompatible copy.
 pub use type_leak;
-#[cfg(feature = "type-leak")]
 pub use typeleak::TypeLeak;
+
+// The macros are `#[macro_export]`ed, so they live at the crate root of
+// `announce-core`; this makes them `announce::helper::callback!` and
+// `announce::helper::transformer!`. Their `$crate` paths point at this module.
+pub use crate::{callback, transformer};
 
 use proc_macro2::{Ident, Span, TokenStream};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -363,8 +364,7 @@ impl Entry {
     }
 
     /// The `type_leak(..)` META of an entry announced with `repeater = ..`.
-    /// Unknown keys are ignored. Needs the feature `type-leak` (on by default).
-    #[cfg(feature = "type-leak")]
+    /// Unknown keys are ignored.
     pub fn type_leak(&self) -> Result<Option<TypeLeak>> {
         let m = match self.find_meta("type_leak") {
             Some(m) => m,
@@ -474,7 +474,8 @@ impl ToTokens for Entry {
 /// Ignore elements you do not know.
 ///
 /// ```
-/// use announce_helper::Input;
+/// # use announce_core as announce;
+/// use announce::helper::Input;
 ///
 /// let input: Input = syn::parse_quote! {
 ///     [cb!]
@@ -532,7 +533,7 @@ impl ToTokens for Entry {
 /// [show!]
 /// defs::Length! => [
 ///     type_leak(repeater = $crate::wire::Repeater, id = ID,
-///               context = 0, referrer = ["type-leak-format-13" (Meters)])
+///               context = 0, referrer = ["type-leak-format-14" (Meters)])
 /// ] {
 ///     pub struct Length(pub Meters);
 /// }
@@ -850,12 +851,12 @@ pub mod __private {
 /// `syn::Result<proc_macro2::TokenStream>`.
 ///
 /// ```ignore
-/// announce_helper::callback! {
+/// announce::helper::callback! {
 ///     /// Receives trait definitions.
 ///     pub fn my_callback(input) {
 ///         let entries = match input.gather(needed(&input)?) {
-///             announce_helper::Gather::Ready(e) => e,
-///             announce_helper::Gather::Fetch(ts) => return Ok(ts),
+///             announce::helper::Gather::Ready(e) => e,
+///             announce::helper::Gather::Fetch(ts) => return Ok(ts),
 ///         };
 ///         generate(entries)
 ///     }
@@ -871,8 +872,8 @@ macro_rules! callback {
         #[proc_macro]
         $vis fn $name(__announce_ts: ::proc_macro::TokenStream) -> ::proc_macro::TokenStream {
             let __announce_run = |__announce_ts: ::proc_macro::TokenStream|
-             -> $crate::__private::syn::Result<$crate::__private::proc_macro2::TokenStream> {
-                let $input: $crate::Input = $crate::__private::syn::parse(__announce_ts)?;
+             -> $crate::helper::__private::syn::Result<$crate::helper::__private::proc_macro2::TokenStream> {
+                let $input: $crate::helper::Input = $crate::helper::__private::syn::parse(__announce_ts)?;
                 $body
             };
             match __announce_run(__announce_ts) {
@@ -908,8 +909,8 @@ macro_rules! callback {
 /// /// Rejects `#[my_lib(bad)]` and tuple structs.
 /// #[proc_macro]
 /// pub fn my_check(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-///     announce_helper::check(input.into(), &["my_lib", "other"], |c| {
-///         // `c` is an `announce_helper::CheckInput`.
+///     announce::helper::check(input.into(), &["my_lib", "other"], |c| {
+///         // `c` is an `announce::helper::CheckInput`.
 ///         for attr in c.owned_attributes() {
 ///             if attr.path().is_ident("my_lib") && attr.parse_args::<syn::Ident>().map_or(false, |i| i == "bad") {
 ///                 return Err(syn::Error::new_spanned(&attr, "`bad` is not allowed"));
@@ -925,7 +926,8 @@ macro_rules! callback {
 /// `proc_macro` crate:
 ///
 /// ```
-/// use announce_helper::check;
+/// # use announce_core as announce;
+/// use announce::helper::check;
 /// use proc_macro2::TokenStream;
 ///
 /// let run = |input: TokenStream| {
@@ -1028,7 +1030,7 @@ pub fn payload(item: TokenStream) -> Option<TokenStream> {
 /// ```ignore
 /// #[proc_macro_derive(Parse)]
 /// pub fn derive_parse(input: TokenStream) -> TokenStream {
-///     if let Some(out) = announce_helper::redirect(input.clone().into(), &syn::parse_quote!(::pars::ParseAnnounce)) {
+///     if let Some(out) = announce::helper::redirect(input.clone().into(), &syn::parse_quote!(::pars::ParseAnnounce)) {
 ///         return out.into();
 ///     }
 ///     // normal derive
@@ -1082,9 +1084,9 @@ impl Parse for CheckInput {
             return Err(input.error(
                 "announce: this check received the attribute query `@__announce_attrs` that \
                  `#[announce]` sends first, and does not answer it. Run the check with \
-                 `announce_helper::check`, or parse `announce_helper::CheckCall` and answer \
+                 `announce::helper::check`, or parse `announce::helper::CheckCall` and answer \
                  `Query` (a `macro_rules!` check needs one more arm); every check must \
-                 answer. See the `announce_helper::attrs` docs",
+                 answer. See the `announce::helper::attrs` docs",
             ));
         }
         let content;
@@ -1196,7 +1198,7 @@ mod tests {
         .unwrap()
         .to_string();
         assert!(
-            e.contains("does not answer it") && e.contains("announce_helper::check`"),
+            e.contains("does not answer it") && e.contains("announce::helper::check`"),
             "{}",
             e
         );
@@ -1483,7 +1485,6 @@ mod kv_tests {
             .contains("missing `x`"));
     }
 
-    #[cfg(feature = "type-leak")]
     #[test]
     fn stable_referrer_is_deterministic() {
         let item: syn::ItemStruct = syn::parse_quote! {
@@ -1492,7 +1493,10 @@ mod kv_tests {
         let analyse = || {
             let mut l = type_leak::Leaker::new();
             let context = l.intern_struct(&item, true).unwrap();
-            (crate::leak::StableReferrer::new(l.finish()), context)
+            (
+                crate::helper::leak::StableReferrer::new(l.finish()),
+                context,
+            )
         };
         let order = || {
             let (r, _) = analyse();
@@ -1528,7 +1532,6 @@ mod kv_tests {
         assert_eq!(ty.to_token_stream().to_string(), "T5");
     }
 
-    #[cfg(feature = "type-leak")]
     #[test]
     fn stable_referrer_numbers_required_entries_only() {
         // `::other::X` names another crate: an optional entry, left as written.
@@ -1537,7 +1540,7 @@ mod kv_tests {
         };
         let mut l = type_leak::Leaker::new();
         let context = l.intern_struct(&item, true).unwrap();
-        let r = crate::leak::StableReferrer::new(l.finish());
+        let r = crate::helper::leak::StableReferrer::new(l.finish());
         let types: Vec<String> = r
             .types()
             .iter()
@@ -1557,7 +1560,7 @@ mod kv_tests {
     }
 }
 
-#[cfg(all(test, feature = "type-leak"))]
+#[cfg(test)]
 mod options_tests {
     use super::*;
 

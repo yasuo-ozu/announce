@@ -83,7 +83,7 @@ All options of `#[announce(..)]` are in the
 | crate | use it to |
 |---|---|
 | [`announce`](https://docs.rs/announce) | define items: `#[announce]`, `#[derive(Announce)]`, trait `Announce` |
-| [`announce-helper`](https://docs.rs/announce-helper) | write callbacks and checks, start chains, redirect derives |
+| [`announce::helper`](https://docs.rs/announce/latest/announce/helper/index.html) (a module of `announce`) | write callbacks and checks, start chains, redirect derives |
 | [`announce-std`](https://docs.rs/announce-std) | announce std/core traits (`announce_std::iter::Iterator!`) |
 
 A proc-macro crate can announce items it builds itself with

@@ -102,7 +102,7 @@ pub fn derive_plain(input: TokenStream) -> TokenStream {
 /// and `#[derive(Plain)]`: the machinery sends the same query as `#[announce]`.
 #[proc_macro]
 pub fn owner(input: TokenStream) -> TokenStream {
-    announce_helper::check(input.into(), &["field_attr"], |ci| {
+    announce::helper::check(input.into(), &["field_attr"], |ci| {
         for attr in ci.owned_attributes() {
             if matches!(attr.parse_args::<syn::Ident>(), Ok(i) if i == "bad") {
                 return Err(syn::Error::new_spanned(

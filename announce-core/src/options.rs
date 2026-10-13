@@ -279,7 +279,7 @@ impl Parse for Options {
 /// out when there are none.
 pub struct CaptureArgs {
     pub random: u64,
-    pub owned: announce_helper::OwnedAttrs,
+    pub owned: crate::helper::OwnedAttrs,
     pub opts: Options,
 }
 
@@ -293,9 +293,9 @@ impl Parse for CaptureArgs {
             let names: syn::punctuated::Punctuated<Ident, Token![,]> =
                 syn::punctuated::Punctuated::parse_terminated(&content)?;
             input.parse::<Token![;]>()?;
-            announce_helper::OwnedAttrs::from_idents(names)
+            crate::helper::OwnedAttrs::from_idents(names)
         } else {
-            announce_helper::OwnedAttrs::new()
+            crate::helper::OwnedAttrs::new()
         };
         Ok(CaptureArgs {
             random: lit.base10_parse()?,

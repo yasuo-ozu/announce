@@ -1,7 +1,7 @@
 // A large item's trampoline holds the item once (DESIGN.md section 4.1). The
 // calls that are errors for every trampoline say the same; the one that only
 // that layout has is a derive or attribute head written by hand, without the
-// path `announce_helper::redirect` adds.
+// path `announce::helper::redirect` adds.
 macro_rules! cb { ($($t:tt)*) => {}; }
 
 // Without `redirect`, a large trampoline cannot call itself.

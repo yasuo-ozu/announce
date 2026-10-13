@@ -9,7 +9,7 @@
 //! `public_fields!` rewrites the newest entry (item and/or META) and forwards
 //! to `cb!`. The definer writes a plain `#[announce]`.
 
-use crate::{Entry, Input};
+use crate::helper::{Entry, Input};
 use proc_macro2::TokenStream;
 use syn::{Error, Item, Result};
 use template_quote::quote;
@@ -46,7 +46,7 @@ impl Input {
 /// to the next list element.
 ///
 /// ```ignore
-/// announce_helper::transformer! {
+/// announce::helper::transformer! {
 ///     /// Drops non-`pub` fields and lists the kept ones in META.
 ///     pub fn public_fields(entry) {
 ///         let mut item: syn::ItemStruct = syn::parse2(entry.item.clone())?;
@@ -64,17 +64,17 @@ macro_rules! transformer {
         #[proc_macro]
         $vis fn $name(__announce_ts: ::proc_macro::TokenStream) -> ::proc_macro::TokenStream {
             let __announce_run = |__announce_ts: ::proc_macro::TokenStream|
-             -> $crate::__private::syn::Result<$crate::__private::proc_macro2::TokenStream> {
-                let __announce_input: $crate::Input = $crate::__private::syn::parse(__announce_ts)?;
+             -> $crate::helper::__private::syn::Result<$crate::helper::__private::proc_macro2::TokenStream> {
+                let __announce_input: $crate::helper::Input = $crate::helper::__private::syn::parse(__announce_ts)?;
                 let __announce_newest = __announce_input.newest().cloned().ok_or_else(|| {
-                    $crate::__private::syn::Error::new(
-                        $crate::__private::proc_macro2::Span::call_site(),
+                    $crate::helper::__private::syn::Error::new(
+                        $crate::helper::__private::proc_macro2::Span::call_site(),
                         "announce: a transformer must come after the definition it transforms",
                     )
                 })?;
                 #[allow(unused_mut)]
-                let mut $entry: $crate::Entry = __announce_newest;
-                let __announce_new = (move || -> $crate::__private::syn::Result<$crate::Entry> { $body })()?;
+                let mut $entry: $crate::helper::Entry = __announce_newest;
+                let __announce_new = (move || -> $crate::helper::__private::syn::Result<$crate::helper::Entry> { $body })()?;
                 __announce_input.forward_transformed(__announce_new)
             };
             match __announce_run(__announce_ts) {

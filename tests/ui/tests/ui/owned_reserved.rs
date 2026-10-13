@@ -1,5 +1,5 @@
 // An owned attribute name must not be an attribute that rustc or a tool uses.
-// A proc-macro check (`announce_helper::check`) reports it where the check is used.
+// A proc-macro check (`announce::helper::check`) reports it where the check is used.
 #[announce::announce(announce_test_derive::doc_owner)]
 pub struct A {
     pub a: u8,

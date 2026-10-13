@@ -15,4 +15,3 @@ proc-macro = true
 syn = { version = "2.0.25", features = ["full", "extra-traits"] }
 template-quote = "0.4"
 announce-core = { path = "../announce-core", version = "0.1.0" }
-announce-helper = { path = "../announce-helper", version = "0.1.0" }

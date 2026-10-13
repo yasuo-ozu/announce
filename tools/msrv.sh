@@ -1,14 +1,13 @@
 #!/bin/sh
 # Builds and tests announce on its minimum Rust versions, in a scratch copy:
-#   1.56   announce-helper (with and without its `type-leak` feature, on by default)
-#   1.57   announce, announce-core, announce-macros, announce-std, announce-helper
-#          and the machinery tests (everything without a `repeater`)
+#   1.57   announce, announce-core (with `announce::helper`), announce-macros,
+#          announce-std and the tests without a `repeater` (derive, machinery*)
 #   1.59   the whole workspace
-# Needs the rustup toolchains 1.56, 1.57.0 and 1.59.0 (`rustup toolchain install
+# Needs the rustup toolchains 1.57.0 and 1.59.0 (`rustup toolchain install
 # 1.57.0 --profile minimal`), and a stable cargo of 1.84 or newer. Set
 # CARGO_NET_OFFLINE=true to use only the local cargo cache.
 #
-# Why a copy: cargo 1.56 cannot read a lock file of the current format, nor the
+# Why a copy: cargo 1.57 cannot read a lock file of the current format, nor the
 # current registry cache. The copy gets a lock file that the MSRV-aware resolver
 # of a recent cargo makes (`fallback`), with `unicode-width` pinned (it declares
 # no `rust-version`, but 0.1.14 needs rustc 1.66), and its sources vendored.
@@ -40,9 +39,7 @@ run() {
     cargo "+$@" --offline
 }
 
-run 1.56 test -p announce-helper --no-default-features
-run 1.56 test -p announce-helper
-run 1.57.0 test -p announce -p announce-core -p announce-macros -p announce-std -p announce-helper \
+run 1.57.0 test -p announce -p announce-core -p announce-macros -p announce-std \
     -p announce-test-derive -p announce-test-machinery -p announce-test-machinery-lib \
     -p announce-test-machinery-user
 run 1.57.0 build -p announce-std --no-default-features

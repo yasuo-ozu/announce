@@ -15,22 +15,24 @@ include = ["src/**/*", "build.rs", "README.md", "LICENSE", "Cargo.toml"]
 
 [dependencies]
 announce-macros = { path = "announce-macros", version = "0.1.0" }
-# Re-exported as `announce::machinery`: the generation code behind
-# `#[announce]` and `#[derive(Announce)]`, callable from other proc-macro crates.
+# Re-exported as `announce::machinery` (the generation code behind `#[announce]`
+# and `#[derive(Announce)]`, callable from other proc-macro crates) and as
+# `announce::helper` (the helpers for callbacks and checks).
 announce-core = { path = "announce-core", version = "0.1.0" }
 # Re-exported as `announce::type_leak`.
-type-leak = "0.8.1"
+type-leak = "0.8.2"
 
 [dev-dependencies]
-# The `announce::machinery` doc test.
+# The `announce::machinery` doc test, and tests/helper_api.rs (`announce::helper`).
 proc-macro2 = "1"
+syn = { version = "2.0.25", features = ["full", "extra-traits", "visit", "visit-mut"] }
+template-quote = "0.4"
 
 [workspace]
 # The root package `announce` is a member implicitly.
 members = [
     "announce-core",
     "announce-macros",
-    "announce-helper",
     "announce-std",
     "tests/defs",
     "tests/user",
@@ -47,7 +49,6 @@ default-members = [
     ".",
     "announce-core",
     "announce-macros",
-    "announce-helper",
     "announce-std",
     "tests/defs",
     "tests/user",
@@ -63,4 +64,4 @@ exclude = ["tests/ui", "tests/renamed-ws"]
 resolver = "2"
 
 # No `[workspace.package]` / `[workspace.dependencies]` inheritance: the
-# manifests must parse with cargo 1.56 (announce-helper's MSRV), and inheritance needs 1.64.
+# manifests must parse with cargo 1.57 (the MSRV), and inheritance needs 1.64.

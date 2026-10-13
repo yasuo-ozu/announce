@@ -42,10 +42,10 @@
 //! repeater's slots (`RepeaterSlots`). The payload stays the original item; the
 //! entry's META gets `type_leak(repeater = .., id = .., context = .., referrer =
 //! [..])`, the `Referrer` as type-leak serializes it, and a callback rewrites
-//! the payload with that `Referrer` (`announce_helper::TypeLeak::apply`), so the
+//! the payload with that `Referrer` (`announce::helper::TypeLeak::apply`), so the
 //! consumer's arguments are type-leak's too.
 
-use announce_helper::TypeLeak;
+use crate::helper::TypeLeak;
 use proc_macro2::{Ident, Span, TokenStream};
 use syn::visit::Visit;
 use syn::{Item, Path, Result, Type};
@@ -628,7 +628,7 @@ pub fn table(item: &Item, opts: &crate::options::Options, random: u64) -> Result
 /// The `Referrer` that a consumer parses from `meta` is the one the impls were
 /// written from (same entries, same indices, same contexts).
 fn check_round_trip(meta: &TokenStream, referrer: &Referrer) -> Result<()> {
-    let element: announce_helper::Meta = syn::parse2(meta.clone())?;
+    let element: crate::helper::Meta = syn::parse2(meta.clone())?;
     let read = TypeLeak::from_kv(&mut element.kv()?)?;
     if read.referrer == *referrer {
         Ok(())
@@ -1236,7 +1236,7 @@ mod tests {
             meta
         );
         // The consumer reads it back, with nothing to replace.
-        let m: announce_helper::Meta = syn::parse2(leaked.meta).unwrap();
+        let m: crate::helper::Meta = syn::parse2(leaked.meta).unwrap();
         let read = TypeLeak::from_kv(&mut m.kv().unwrap()).unwrap();
         assert_eq!(read.types().count(), 0);
     }
@@ -1246,7 +1246,7 @@ mod tests {
         let leaked = leaked(quote! {
             struct S<T> { a: Local, b: Wrap<T>, c: ::other::X<u8> }
         });
-        let m: announce_helper::Meta = syn::parse2(leaked.meta).unwrap();
+        let m: crate::helper::Meta = syn::parse2(leaked.meta).unwrap();
         let read = TypeLeak::from_kv(&mut m.kv().unwrap()).unwrap();
         let impls = squash(&leaked.impls);
         // The impls are for the required entries; `::other::X<u8>` is optional.

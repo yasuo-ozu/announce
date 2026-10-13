@@ -558,7 +558,7 @@ mod manifest_tests {
         );
         // Another crate renamed to a name that merely contains `announce`.
         assert_eq!(
-            name_of("[dependencies]\nannounce-helper = \"0.1\"\nmy-announce = \"1\"\n"),
+            name_of("[dependencies]\nannounce-macros = \"0.1\"\nmy-announce = \"1\"\n"),
             None
         );
     }

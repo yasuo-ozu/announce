@@ -16,7 +16,8 @@ use syn::{Error, Result, Token};
 /// A key without `=` is a flag.
 ///
 /// ```
-/// use announce_helper::KvArgs;
+/// # use announce_core as announce;
+/// use announce::helper::KvArgs;
 /// let mut kv: KvArgs = syn::parse_quote!(ty = Vec<u8, A>, paths = [a::b, c], n = 3, fast);
 /// let ty: syn::Type = kv.require("ty").unwrap();
 /// let paths: Vec<syn::Path> = kv.list("paths").unwrap().unwrap();

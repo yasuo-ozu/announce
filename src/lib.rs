@@ -18,10 +18,7 @@ pub use announce_macros::signature_only;
 ///
 /// A consumer can require `T: Announce` next to a trampoline call. That gives a
 /// clear error when the callee was not announced.
-/// [`check_type`] and [`check_trait`] of `announce-helper` write that bound.
-///
-/// [`check_type`]: https://docs.rs/announce-helper/latest/announce_helper/fn.check_type.html
-/// [`check_trait`]: https://docs.rs/announce-helper/latest/announce_helper/fn.check_trait.html
+/// [`helper::check_type`] and [`helper::check_trait`] write that bound.
 #[cfg_attr(
     announce_diagnostic,
     diagnostic::on_unimplemented(
@@ -33,17 +30,21 @@ pub use announce_macros::signature_only;
 pub trait Announce {}
 
 /// Re-export of [`type-leak`](https://docs.rs/type-leak), the library that the
-/// `repeater` option and `announce_helper::TypeLeak` are built on.
+/// `repeater` option and [`helper::TypeLeak`] are built on.
 ///
-/// It is the version that `announce-macros` and `announce-helper` use. A macro
+/// It is the version that `announce-macros` and `announce::helper` use. A macro
 /// crate that works with the types announce leaks (for example with
-/// `announce_helper::leak::StableReferrer`) can name it through `announce`, and so
+/// [`helper::leak::StableReferrer`]) can name it through `announce`, and so
 /// cannot end up with a second, incompatible copy.
 ///
 /// ```
 /// let _leaker = announce::type_leak::Leaker::new();
 /// ```
 pub use type_leak;
+
+// The docs of the module are those of `announce_core::helper`, inlined here.
+#[doc(inline)]
+pub use announce_core::helper;
 
 pub mod machinery;
 

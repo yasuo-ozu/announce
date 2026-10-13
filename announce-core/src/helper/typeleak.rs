@@ -13,14 +13,14 @@
 //! [`Referrer::repeater_impl_with`], which encodes the same generics, so the two
 //! sides cannot disagree.
 
-use crate::KvArgs;
+use crate::helper::KvArgs;
 use proc_macro2::TokenStream;
 use syn::{Item, LitInt, Path, Result, Type};
 use template_quote::quote;
 use type_leak::{ContextId, Referrer, RepeaterSlots, UseSite};
 
 /// Type table of an entry announced with `#[announce(repeater = ..)]`, from
-/// [`Entry::type_leak`](crate::Entry::type_leak).
+/// [`Entry::type_leak`](crate::helper::Entry::type_leak).
 ///
 /// The payload is the original item. The definer numbered its relative types: the
 /// *entries* `0, 1, ..` of [`referrer`](Self::referrer). An entry is a type in the
@@ -129,7 +129,7 @@ impl TypeLeak {
     /// # Panics
     ///
     /// If the table is inconsistent (it cannot be, when it comes from
-    /// [`Entry::type_leak`](crate::Entry::type_leak)). Use
+    /// [`Entry::type_leak`](crate::helper::Entry::type_leak)). Use
     /// [`try_apply`](Self::try_apply) to get the error.
     pub fn apply(&self, item: &mut Item) {
         if let Err(e) = self.try_apply(item) {
@@ -177,7 +177,7 @@ impl TypeLeak {
     }
 
     /// Reads the arguments of the `type_leak(..)` META element
-    /// ([`Meta::kv`](crate::Meta::kv)). Unknown keys are ignored.
+    /// ([`Meta::kv`](crate::helper::Meta::kv)). Unknown keys are ignored.
     pub fn from_kv(kv: &mut KvArgs) -> Result<Self> {
         let call_site = proc_macro2::Span::call_site();
         let repeater = kv
@@ -189,7 +189,7 @@ impl TypeLeak {
             syn::Error::new(
                 call_site,
                 "announce: the `type_leak(..)` META has no `context` and `referrer`: the \
-                 definition was announced by an older `announce`, which this `announce-helper` \
+                 definition was announced by an older `announce`, whose output this version \
                  cannot read",
             )
         };
@@ -254,7 +254,7 @@ mod tests {
     }
 
     fn read(tl: &TypeLeak) -> TypeLeak {
-        let meta: crate::Meta = syn::parse2(tl.meta()).unwrap();
+        let meta: crate::helper::Meta = syn::parse2(tl.meta()).unwrap();
         let mut kv = meta.kv().unwrap();
         TypeLeak::from_kv(&mut kv).unwrap()
     }
@@ -284,20 +284,20 @@ mod tests {
     fn meta_ignores_unknown_keys_and_reports_an_old_format() {
         let tl = table_of(&syn::parse_quote! { struct S { a: Local } });
         let meta = tl.meta().to_string();
-        let with_extra: crate::Meta =
+        let with_extra: crate::helper::Meta =
             syn::parse_str(&meta.replace("id = 7u64", "id = 7u64, future = [1, 2], other"))
                 .unwrap();
         let mut kv = with_extra.kv().unwrap();
         assert!(TypeLeak::from_kv(&mut kv).is_ok());
 
-        let old: crate::Meta = syn::parse_str(
+        let old: crate::helper::Meta = syn::parse_str(
             "type_leak(repeater = ::my::R, id = 7u64, generics = [()], types = [Local])",
         )
         .unwrap();
         let err = TypeLeak::from_kv(&mut old.kv().unwrap()).unwrap_err();
         assert!(err.to_string().contains("older `announce`"), "{}", err);
 
-        let bad: crate::Meta = syn::parse_str(&format!(
+        let bad: crate::helper::Meta = syn::parse_str(&format!(
             "type_leak(repeater = ::my::R, id = 7u64, context = 9, referrer = [\"type-leak-format-{}\" (Local)])",
             type_leak::Referrer::FORMAT_VERSION
         ))

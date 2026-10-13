@@ -9,7 +9,7 @@ use template_quote::quote;
 #[proc_macro_derive(Parse)]
 pub fn derive_parse(input: TokenStream) -> TokenStream {
     let input: TokenStream2 = input.into();
-    if let Some(out) = announce_helper::redirect(
+    if let Some(out) = announce::helper::redirect(
         input,
         &syn::parse_quote!(::announce_test_defs::conflict::ParseAnnounce),
     ) {
@@ -22,7 +22,7 @@ pub fn derive_parse(input: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn parse_attr(_: TokenStream, input: TokenStream) -> TokenStream {
     let input: TokenStream2 = input.into();
-    match announce_helper::redirect(
+    match announce::helper::redirect(
         input.clone(),
         &syn::parse_quote!(::announce_test_defs::conflict::ParseAnnounce),
     ) {
@@ -36,7 +36,7 @@ pub fn parse_attr(_: TokenStream, input: TokenStream) -> TokenStream {
 #[proc_macro_derive(BigParse)]
 pub fn derive_big_parse(input: TokenStream) -> TokenStream {
     let input: TokenStream2 = input.into();
-    match announce_helper::redirect(
+    match announce::helper::redirect(
         input,
         &syn::parse_quote!(::announce_test_defs::large::BigParseAnnounce),
     ) {
@@ -49,7 +49,7 @@ pub fn derive_big_parse(input: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn big_parse_attr(_: TokenStream, input: TokenStream) -> TokenStream {
     let input: TokenStream2 = input.into();
-    match announce_helper::redirect(
+    match announce::helper::redirect(
         input.clone(),
         &syn::parse_quote!(::announce_test_defs::large::BigParseAnnounce),
     ) {
@@ -63,7 +63,7 @@ pub fn big_parse_attr(_: TokenStream, input: TokenStream) -> TokenStream {
 #[proc_macro_derive(SmallSingleParse)]
 pub fn derive_small_single_parse(input: TokenStream) -> TokenStream {
     let input: TokenStream2 = input.into();
-    match announce_helper::redirect(
+    match announce::helper::redirect(
         input,
         &syn::parse_quote!(::announce_test_defs::large::SmallSingleParseAnnounce),
     ) {
@@ -77,7 +77,7 @@ pub fn derive_small_single_parse(input: TokenStream) -> TokenStream {
 /// in visiting order, and forwards if more continuations remain.
 #[proc_macro]
 pub fn summary(input: TokenStream) -> TokenStream {
-    let input: announce_helper::Input = match syn::parse(input) {
+    let input: announce::helper::Input = match syn::parse(input) {
         Ok(i) => i,
         Err(e) => return e.to_compile_error().into(),
     };
@@ -115,7 +115,7 @@ pub fn summary(input: TokenStream) -> TokenStream {
 /// Attribute continuations get random dummy names.
 #[proc_macro]
 pub fn start(input: TokenStream) -> TokenStream {
-    struct Start(announce_helper::ContList, TokenStream2);
+    struct Start(announce::helper::ContList, TokenStream2);
     impl syn::parse::Parse for Start {
         fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
             let content;
@@ -133,7 +133,7 @@ pub fn start(input: TokenStream) -> TokenStream {
 /// It owns no attributes, and answers the attribute query all the same.
 #[proc_macro]
 pub fn no_tuple(input: TokenStream) -> TokenStream {
-    announce_helper::check(input.into(), &[], |ci| match &ci.item {
+    announce::helper::check(input.into(), &[], |ci| match &ci.item {
         syn::Item::Struct(s) if matches!(s.fields, syn::Fields::Unnamed(_)) => {
             let msg = format!("this macro does not support tuple structs ({})", ci.args);
             Err(syn::Error::new_spanned(&s.fields, msg))
@@ -146,7 +146,7 @@ pub fn no_tuple(input: TokenStream) -> TokenStream {
 /// Owns the attribute `my_lib`, and rejects `#[my_lib(bad)]` anywhere in the item.
 #[proc_macro]
 pub fn lib_check(input: TokenStream) -> TokenStream {
-    announce_helper::check(input.into(), &["my_lib"], |ci| {
+    announce::helper::check(input.into(), &["my_lib"], |ci| {
         for attr in ci.owned_attributes() {
             if matches!(attr.parse_args::<syn::Ident>(), Ok(i) if i == "bad") {
                 return Err(syn::Error::new_spanned(
@@ -163,7 +163,7 @@ pub fn lib_check(input: TokenStream) -> TokenStream {
 /// Owns the attributes `other` and `tag`, and rejects `#[other(forbidden)]`.
 #[proc_macro]
 pub fn other_check(input: TokenStream) -> TokenStream {
-    announce_helper::check(input.into(), &["other", "tag"], |ci| {
+    announce::helper::check(input.into(), &["other", "tag"], |ci| {
         for attr in ci.owned_attributes() {
             if attr.path().is_ident("other")
                 && attr
@@ -185,7 +185,7 @@ pub fn other_check(input: TokenStream) -> TokenStream {
 /// string for each owned attribute (without spaces), in source order.
 #[proc_macro]
 pub fn record_attrs(input: TokenStream) -> TokenStream {
-    announce_helper::check(input.into(), &["my_lib"], |ci| {
+    announce::helper::check(input.into(), &["my_lib"], |ci| {
         let name = match &ci.item {
             syn::Item::Struct(s) => s.ident.to_string(),
             syn::Item::Enum(s) => s.ident.to_string(),
@@ -220,7 +220,7 @@ pub fn record_attrs(input: TokenStream) -> TokenStream {
 /// Owns an attribute that rustc uses: always an error where it is used.
 #[proc_macro]
 pub fn doc_owner(input: TokenStream) -> TokenStream {
-    announce_helper::check(input.into(), &["doc"], |_| Ok(TokenStream2::new())).into()
+    announce::helper::check(input.into(), &["doc"], |_| Ok(TokenStream2::new())).into()
 }
 
 /// A check that reads the attribute query by hand and asserts that the list is
@@ -229,7 +229,7 @@ pub fn doc_owner(input: TokenStream) -> TokenStream {
 /// with `Query::answer`, which drops the head and calls the next element.
 #[proc_macro]
 pub fn head_probe(input: TokenStream) -> TokenStream {
-    use announce_helper::{CheckCall, Cont, OwnedAttrs};
+    use announce::helper::{CheckCall, Cont, OwnedAttrs};
     match syn::parse::<CheckCall>(input) {
         Ok(CheckCall::Query(q)) => {
             let is_me = matches!(
@@ -269,7 +269,7 @@ pub fn derive_rules(_: TokenStream) -> TokenStream {
 /// parses `CheckInput` and does not answer the query.
 #[proc_macro]
 pub fn old_style_check(input: TokenStream) -> TokenStream {
-    match syn::parse::<announce_helper::CheckInput>(input) {
+    match syn::parse::<announce::helper::CheckInput>(input) {
         Ok(_) => TokenStream::new(),
         Err(e) => e.to_compile_error().into(),
     }
@@ -282,7 +282,7 @@ pub fn check_marker(input: TokenStream) -> TokenStream {
         Ok(t) => t,
         Err(e) => return e.to_compile_error().into(),
     };
-    announce_helper::check_type(&syn::parse_quote!(::announce), &ty).into()
+    announce::helper::check_type(&syn::parse_quote!(::announce), &ty).into()
 }
 
 /// A derive that announces its own input via `#[announce(emit_item = false)]`.
@@ -292,7 +292,7 @@ pub fn derive_announced(input: TokenStream) -> TokenStream {
     TokenStream::from(quote! { #[::announce::announce(emit_item = false)] #input })
 }
 
-announce_helper::transformer! {
+announce::helper::transformer! {
     /// Transformer: keeps only `pub` fields in the newest entry's struct and
     /// lists their names in META as `fields(..)`.
     pub fn public_fields(entry) {
@@ -330,16 +330,16 @@ impl syn::parse::Parse for GatherRest {
     }
 }
 
-announce_helper::callback! {
+announce::helper::callback! {
     /// `gathered! { [gathered!] (a::A, b::B) NAME }` fetches the listed
     /// definitions (in one go) and emits `NAME: &[&str]` with their item
     /// idents in the requested order.
     pub fn gathered(input) {
         let rest: GatherRest = input.rest_as()?;
-        let needed = rest.paths.iter().cloned().map(announce_helper::Cont::bang);
+        let needed = rest.paths.iter().cloned().map(announce::helper::Cont::bang);
         let entries = match input.gather(needed) {
-            announce_helper::Gather::Ready(e) => e,
-            announce_helper::Gather::Fetch(ts) => return Ok(ts),
+            announce::helper::Gather::Ready(e) => e,
+            announce::helper::Gather::Fetch(ts) => return Ok(ts),
         };
         let mut idents = Vec::new();
         for e in entries {
@@ -357,16 +357,16 @@ announce_helper::callback! {
     }
 }
 
-announce_helper::callback! {
+announce::helper::callback! {
     /// `fetched_raw! { [fetched_raw!] (a::A, b::B) NAME }`: like `gathered`, but
     /// with the raw `Input::fetch` for what is still missing. Emits `NAME: &[&str]`
     /// with the item idents in the requested order, and `NAME_OPTIONS: &str`, the
     /// options group the callback was last called with.
     pub fn fetched_raw(input) {
         let rest: GatherRest = input.rest_as()?;
-        let needed: Vec<announce_helper::Cont> =
-            rest.paths.iter().cloned().map(announce_helper::Cont::bang).collect();
-        let missing: Vec<announce_helper::Cont> =
+        let needed: Vec<announce::helper::Cont> =
+            rest.paths.iter().cloned().map(announce::helper::Cont::bang).collect();
+        let missing: Vec<announce::helper::Cont> =
             needed.iter().filter(|c| input.entry_for(c).is_none()).cloned().collect();
         if !missing.is_empty() {
             return Ok(input.fetch(missing));
@@ -393,7 +393,7 @@ announce_helper::callback! {
     }
 }
 
-announce_helper::callback! {
+announce::helper::callback! {
     /// Records, for every entry in visiting order, `pub const <REST>: &[(&str, usize, usize, String)]`
     /// is not possible in a const, so the rows are strings: `"names|in item|in stripped"`:
     /// the owned attribute names of the entry (`Entry::owned_attrs`, comma separated), the
@@ -412,7 +412,7 @@ announce_helper::callback! {
     }
 }
 
-announce_helper::callback! {
+announce::helper::callback! {
     /// Reports what a callback receives next to the entries, for the tests that
     /// REST is the caller's tokens and nothing else. Emits, with fixed names:
     /// `REST: &str` (`input.rest`, printed), `ENTRIES: usize`, `OWNED: &[&str]` (the
@@ -441,7 +441,7 @@ announce_helper::callback! {
     }
 }
 
-announce_helper::callback! {
+announce::helper::callback! {
     /// Re-emits every entry's item, rewritten with its type-leak information
     /// (`TypeLeak::apply`) when the definition has an repeater, and records the
     /// META as `pub const <REST>: &[&str]`.
@@ -461,7 +461,7 @@ announce_helper::callback! {
     }
 }
 
-announce_helper::callback! {
+announce::helper::callback! {
     /// Reads the `type_leak(..)` META through `Entry::type_leak` and records,
     /// for every entry in visiting order, `pub const <REST>: &[&str]` with
     /// `"-"` when the entry has no table, else `"[Type@Args,..]"`: each
@@ -480,7 +480,7 @@ announce_helper::callback! {
                 Some(tl) => {
                     let mut pairs = Vec::new();
                     for (ix, ty) in tl.types() {
-                        let args = tl.entry_args(ix, &announce_helper::type_leak::UseSite::identity())?;
+                        let args = tl.entry_args(ix, &announce::helper::type_leak::UseSite::identity())?;
                         pairs.push(format!("{}@{}", squash(ty), squash(&args)));
                     }
                     pairs.sort();

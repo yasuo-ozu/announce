@@ -1,6 +1,6 @@
 [package]
 name = "announce-core"
-description = "Definition-side machinery of announce, as plain functions (use `announce::machinery` instead)"
+description = "Definition-side machinery and callback/check helpers of announce (use `announce::machinery` and `announce::helper` instead)"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.57"
@@ -12,5 +12,4 @@ repository = "https://github.com/yasuo-ozu/announce"
 syn = { version = "2.0.25", features = ["full", "extra-traits", "visit", "visit-mut"] }
 proc-macro2 = "1"
 template-quote = "0.4"
-announce-helper = { path = "../announce-helper", version = "0.1.0" }
-type-leak = "0.8.1"
+type-leak = "0.8.2"

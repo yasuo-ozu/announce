@@ -2,12 +2,12 @@
 //! The chain that produces it is run by `tests/user/tests/wire.rs`, which compares
 //! it with the same block.
 
-use announce_helper::Input;
+use announce_core::helper::Input;
 use template_quote::ToTokens;
 
 /// The ```text block after `<!-- wire-example -->` in the docs of `Input`.
 fn documented() -> String {
-    const SRC: &str = include_str!("../src/lib.rs");
+    const SRC: &str = include_str!("../src/helper/mod.rs");
     let mut lines = SRC.lines().map(str::trim_start);
     lines
         .by_ref()

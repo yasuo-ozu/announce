@@ -33,7 +33,7 @@ use proc_macro::TokenStream;
 /// empty without options. In the item, `#[cfg]` is already evaluated in the defining
 /// crate, `crate::` reads `$crate::`, and doc attributes are gone (see
 /// [Docs](#docs)). The [wire format] is the same for every item. Write callbacks
-/// with `announce-helper`.
+/// with [`announce::helper`].
 ///
 /// # Options
 ///
@@ -42,7 +42,7 @@ use proc_macro::TokenStream;
 ///
 /// - `macro_name = Ident`: name of the trampoline. Default: the item's name. Set it
 ///   when a derive or attribute macro owns that name: the derive forwards to the
-///   trampoline with `announce_helper::redirect`. Also needed to announce an item
+///   trampoline with `announce::helper::redirect`. Also needed to announce an item
 ///   twice.
 /// - `crate = path`: path to the `announce` crate in generated code. Default: read
 ///   from the `Cargo.toml` of the crate being compiled, so a renamed dependency
@@ -100,7 +100,7 @@ use proc_macro::TokenStream;
 /// - A transformer is a list element right after the definition. It rewrites the
 ///   entry and forwards to the rest, as in `[Item!, ::announce::signature_only!, cb!]`
 ///   (see [`signature_only!`](macro@signature_only), or write your own with
-///   `announce_helper::transformer!`). The caller chooses transformers, never the
+///   `announce::helper::transformer!`). The caller chooses transformers, never the
 ///   definition.
 /// - The call works in any other position too: statement, expression, type and
 ///   pattern, also for items containing `$`.
@@ -125,9 +125,9 @@ use proc_macro::TokenStream;
 /// - `#[announce]` **removes** the owned attributes from the item it emits, so rustc
 ///   never sees them.
 /// - The payload **keeps** them. Callbacks see them, and `META` lists the names as
-///   one element, `attrs(my_lib, other)` (`announce_helper::Entry::owned_attrs`). A
+///   one element, `attrs(my_lib, other)` (`announce::helper::Entry::owned_attrs`). A
 ///   callback that emits the item itself must remove them first
-///   (`announce_helper::Entry::item_without_owned_attrs`).
+///   (`announce::helper::Entry::item_without_owned_attrs`).
 /// - The check gets the item **with** them and can validate them. Its
 ///   `compile_error!` points at the attribute where the item is defined.
 ///
@@ -137,7 +137,7 @@ use proc_macro::TokenStream;
 ///
 /// An owned name `my_lib` matches `#[my_lib]`, `#[my_lib(..)]`, `#[my_lib = ..]` and
 /// `#[my_lib::..]`, anywhere in the item: fields, variants, methods, an inline `mod`
-/// and more (exact rules: [`announce_helper::attrs`]). A name that rustc or a
+/// and more (exact rules: [`announce::helper::attrs`]). A name that rustc or a
 /// standard tool uses (`cfg`, `doc`, `derive`, `allow`, `rustfmt`, `rustc_*`, ..)
 /// cannot be owned: that is an error where `#[announce]` is used. Two checks must not
 /// own the same name for different purposes. An owned name must not be read by
@@ -146,9 +146,9 @@ use proc_macro::TokenStream;
 ///
 /// **The query.** With checks, `#[announce]` first asks each of them which attribute
 /// names it owns. **Every check must answer**, also one that owns no attribute.
-/// `announce_helper::check` runs a proc-macro check and answers for you. A
+/// `announce::helper::check` runs a proc-macro check and answers for you. A
 /// `macro_rules!` check needs one more arm. The protocol is in
-/// [`announce_helper::attrs`]. Without checks there is no query.
+/// [`announce::helper::attrs`]. Without checks there is no query.
 ///
 /// **`#[cfg]` and `#[cfg_attr]`.** Owned attributes are removed after the item's
 /// cfgs are evaluated in the defining crate. An owned attribute inside
@@ -291,8 +291,8 @@ use proc_macro::TokenStream;
 ///
 /// With a `repeater`, `META` always has one more element, `type_leak(..)`, with no
 /// entries when no type needed it. A callback reads it with
-/// `announce_helper::Entry::type_leak`. Its format and the encoding of the generics
-/// are in [`announce_helper::TypeLeak`]. `TypeLeak::apply` rewrites every entry in an
+/// `announce::helper::Entry::type_leak`. Its format and the encoding of the generics
+/// are in [`announce::helper::TypeLeak`]. `TypeLeak::apply` rewrites every entry in an
 /// item to `<() as $crate::Repeater<ARGS, ID, I>>::Type`:
 ///
 /// ```ignore
@@ -406,9 +406,10 @@ use proc_macro::TokenStream;
 /// For a struct, enum or union that you write yourself, you can use
 /// [`#[derive(Announce)]`](derive@Announce) instead.
 ///
-/// [wire format]: https://docs.rs/announce-helper/latest/announce_helper/struct.Input.html#the-wire-format
-/// [`announce_helper::attrs`]: https://docs.rs/announce-helper/latest/announce_helper/attrs/index.html
-/// [`announce_helper::TypeLeak`]: https://docs.rs/announce-helper/latest/announce_helper/struct.TypeLeak.html
+/// [wire format]: https://docs.rs/announce/latest/announce/helper/struct.Input.html#the-wire-format
+/// [`announce::helper::attrs`]: https://docs.rs/announce/latest/announce/helper/attrs/index.html
+/// [`announce::helper::TypeLeak`]: https://docs.rs/announce/latest/announce/helper/struct.TypeLeak.html
+/// [`announce::helper`]: https://docs.rs/announce/latest/announce/helper/index.html
 /// [`announce::machinery`]: https://docs.rs/announce/latest/announce/machinery/index.html
 #[proc_macro_attribute]
 pub fn announce(attr: TokenStream, item: TokenStream) -> TokenStream {
@@ -467,7 +468,7 @@ pub fn derive_announce(input: TokenStream) -> TokenStream {
 
 /// The end of the attribute query of `#[announce(check, ..)]`: the last element of the
 /// list that the checks forward. Not part of the API, never written by hand
-/// (`announce_helper::attrs` describes the query).
+/// (`announce::helper::attrs` describes the query).
 #[doc(hidden)]
 #[proc_macro]
 pub fn finish(input: TokenStream) -> TokenStream {
@@ -480,7 +481,7 @@ pub fn remove(_attr: TokenStream, _item: TokenStream) -> TokenStream {
     TokenStream::new()
 }
 
-announce_helper::transformer! {
+announce_core::helper::transformer! {
     /// Transformer that strips the newest entry's item down to signatures.
     ///
     /// Put it in the list right after the definition. The callback then gets the
@@ -527,11 +528,11 @@ announce_helper::transformer! {
     ///   placeholder would not compile there if the callback emits the item.
     /// - Structs, enums, unions and type aliases are unchanged.
     ///
-    /// To write your own transformer, use `announce_helper::transformer!`. The function
-    /// `announce_helper::signature_only` does this rewrite on a `syn::Item`.
+    /// To write your own transformer, use `announce::helper::transformer!`. The function
+    /// `announce::helper::signature_only` does this rewrite on a `syn::Item`.
     pub fn signature_only(entry) {
         let mut item: syn::Item = syn::parse2(entry.item.clone())?;
-        announce_helper::signature_only(&mut item);
+        announce_core::helper::signature_only(&mut item);
         entry.item = template_quote::ToTokens::to_token_stream(&item);
         Ok(entry)
     }

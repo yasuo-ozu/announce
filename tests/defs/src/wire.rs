@@ -1,5 +1,5 @@
 //! The definitions behind the wire format example in the docs of
-//! `announce_helper::Input`. The test that captures the chain is
+//! `announce::helper::Input`. The test that captures the chain is
 //! `tests/user/tests/wire.rs`.
 
 use announce::announce;

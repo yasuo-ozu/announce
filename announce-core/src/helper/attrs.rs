@@ -33,12 +33,12 @@
 //! and expands to what `#[announce]` expands to without checks, except that the item
 //! it emits has no attribute of the owned names. The `META` of the trampoline lists
 //! the names in one element, `attrs(my_lib, other)`
-//! ([`Entry::owned_attrs`](crate::Entry::owned_attrs)).
+//! ([`Entry::owned_attrs`](crate::helper::Entry::owned_attrs)).
 //!
 //! **Every check must answer**, also one that owns no attributes. A check that does
 //! not answer stops the chain: the item is not emitted, and rustc reports the call of
 //! that check. A `macro_rules!` check says "no rules expected the token `@`". A
-//! proc-macro check that parses [`CheckInput`](crate::CheckInput) by hand says that
+//! proc-macro check that parses [`CheckInput`](crate::helper::CheckInput) by hand says that
 //! it did not answer.
 //!
 //! A list that does not fit is an error where it is noticed:
@@ -55,15 +55,15 @@
 //!
 //! # Writing a check
 //!
-//! A proc-macro check calls [`check`](crate::check) with its input. The function
+//! A proc-macro check calls [`check`](crate::helper::check) with its input. The function
 //! answers the query with the names the check owns. It parses the check's own input,
-//! `(ARGS), ITEM` ([`CheckInput`](crate::CheckInput)), and runs a closure on it.
+//! `(ARGS), ITEM` ([`CheckInput`](crate::helper::CheckInput)), and runs a closure on it.
 //! (By hand, parse a [`CheckCall`] and answer its [`Query`] with [`Query::answer`].)
 //!
 //! ```ignore
 //! #[proc_macro]
 //! pub fn my_check(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-//!     announce_helper::check(input.into(), &["my_lib", "other"], |c| {
+//!     announce::helper::check(input.into(), &["my_lib", "other"], |c| {
 //!         for attr in c.owned_attributes() { /* validate */ }
 //!         Ok(proc_macro2::TokenStream::new())
 //!     })
@@ -106,7 +106,7 @@
 //!
 //! [announce-checks]: https://docs.rs/announce/latest/announce/attr.announce.html#checks-and-attributes-of-your-own
 
-use crate::{Cont, ContList};
+use crate::helper::{Cont, ContList};
 use proc_macro2::{Ident, Span, TokenStream};
 use std::collections::HashSet;
 use syn::ext::IdentExt;
@@ -253,12 +253,13 @@ fn reserved(name: &str) -> Option<&'static str> {
 /// A set of attribute names that a check owns: `my_lib`, `other`.
 ///
 /// A check answers the query with it ([`Query::answer`]), META lists it as
-/// `attrs(..)` ([`Entry::owned_attrs`](crate::Entry::owned_attrs)), and it finds
+/// `attrs(..)` ([`Entry::owned_attrs`](crate::helper::Entry::owned_attrs)), and it finds
 /// ([`find`](Self::find)) and removes ([`strip`](Self::strip)) the attributes in
 /// an item. The [module docs](self#what-is-matched) say what a name matches.
 ///
 /// ```
-/// use announce_helper::OwnedAttrs;
+/// # use announce_core as announce;
+/// use announce::helper::OwnedAttrs;
 /// let owned = OwnedAttrs::from_strs(&["my_lib"]);
 /// let mut item: syn::Item = syn::parse_quote! {
 ///     #[derive(Debug)]
@@ -415,8 +416,9 @@ const MARK: &str = "__announce_removed_attribute";
 /// parses the item again.
 ///
 /// ```
+/// # use announce_core as announce;
 /// let mut item: syn::Item = syn::parse_quote! { #[a] struct S { #[b] x: u8 } };
-/// let removed = announce_helper::remove_attributes(&mut item, |a| a.path().is_ident("b")).unwrap();
+/// let removed = announce::helper::remove_attributes(&mut item, |a| a.path().is_ident("b")).unwrap();
 /// assert!(removed);
 /// let out = template_quote::ToTokens::to_token_stream(&item).to_string();
 /// assert!(out.contains("# [a]") && !out.contains("# [b]"));
@@ -487,7 +489,7 @@ fn drop_marked_attributes(ts: TokenStream) -> TokenStream {
 /// The query a check receives: `@__announce_attrs [ THIS!, NEXT!, .. ] { STATE }`.
 ///
 /// Answer it with [`answer`](Self::answer). The [module docs](self#the-query) have
-/// the protocol. [`check`](crate::check) does this for a proc-macro check.
+/// the protocol. [`check`](crate::helper::check) does this for a proc-macro check.
 #[derive(Clone, Debug)]
 pub struct Query {
     /// The macro being called (the head, the check itself), then the elements still
@@ -558,13 +560,13 @@ impl Query {
 /// What a proc-macro check receives: the attribute [`Query`], or its own input
 /// (`(ARGS), ITEM`).
 ///
-/// [`check`](crate::check) parses this and answers the query for you.
+/// [`check`](crate::helper::check) parses this and answers the query for you.
 #[allow(clippy::large_enum_variant)]
 pub enum CheckCall {
     /// The query of `#[announce]`: answer it with [`Query::answer`].
     Query(Query),
     /// The check itself.
-    Run(crate::CheckInput),
+    Run(crate::helper::CheckInput),
 }
 
 impl Parse for CheckCall {
@@ -578,7 +580,7 @@ impl Parse for CheckCall {
 }
 
 /// The attribute names of a META `attrs(..)` element, if it is one.
-pub(crate) fn owned_from_meta(meta: &crate::Meta) -> Option<OwnedAttrs> {
+pub(crate) fn owned_from_meta(meta: &crate::helper::Meta) -> Option<OwnedAttrs> {
     if !meta.path.is_ident(META_NAME) {
         return None;
     }
@@ -586,7 +588,7 @@ pub(crate) fn owned_from_meta(meta: &crate::Meta) -> Option<OwnedAttrs> {
 }
 
 /// All the owned names that the META of an entry lists, merged.
-pub(crate) fn owned_from_metas(metas: &[crate::Meta]) -> OwnedAttrs {
+pub(crate) fn owned_from_metas(metas: &[crate::helper::Meta]) -> OwnedAttrs {
     let mut out = OwnedAttrs::new();
     let mut seen = HashSet::new();
     for m in metas {

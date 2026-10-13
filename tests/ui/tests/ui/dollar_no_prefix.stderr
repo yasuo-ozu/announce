@@ -1,4 +1,4 @@
-error: announce: invalid trampoline input; expected `Item! { [Item!, next!, ..] .. }` (a head and at least one continuation; a derive or attribute head goes through `announce_helper::redirect`)
+error: announce: invalid trampoline input; expected `Item! { [Item!, next!, ..] .. }` (a head and at least one continuation; a derive or attribute head goes through `announce::helper::redirect`)
  --> tests/ui/dollar_no_prefix.rs:6:1
   |
 6 | / announce_test_defs::kinds::with_macro! {
@@ -8,7 +8,7 @@ error: announce: invalid trampoline input; expected `Item! { [Item!, next!, ..] 
   |
   = note: this error originates in the macro `announce_test_defs::kinds::with_macro` (in Nightly builds, run with -Z macro-backtrace for more info)
 
-error: announce: invalid trampoline input; expected `Item! { [Item!, next!, ..] .. }` (a head and at least one continuation; a derive or attribute head goes through `announce_helper::redirect`)
+error: announce: invalid trampoline input; expected `Item! { [Item!, next!, ..] .. }` (a head and at least one continuation; a derive or attribute head goes through `announce::helper::redirect`)
   --> tests/ui/dollar_no_prefix.rs:10:1
    |
 10 | / announce_test_defs::kinds::with_macro2! {

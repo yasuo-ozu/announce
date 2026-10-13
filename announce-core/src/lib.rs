@@ -1,24 +1,29 @@
 //! The implementation behind `#[announce]` and `#[derive(Announce)]`, as plain
-//! functions. Do not depend on this crate: go through `announce::machinery`
-//! (of [`announce`](https://docs.rs/announce)), which re-exports its public API.
+//! functions, and the helpers for callbacks and checks. Do not depend on this
+//! crate: go through [`announce`](https://docs.rs/announce), which re-exports
+//! the public API as `announce::machinery` and `announce::helper`.
 //!
 //! A proc-macro crate cannot export functions, so the code behind the macros
 //! lives here, in an ordinary library. `announce-macros` is a thin wrapper
 //! around it. The crate name and layout are not a stable interface.
 //!
-//! The API is [`announce()`], [`derive_announce()`] and [`Options`]. See their
-//! docs, and `announce::machinery` for how a library uses them.
+//! The API of the generation is [`announce()`], [`derive_announce()`] and
+//! [`Options`] (`announce::machinery`). See their docs, and
+//! `announce::machinery` for how a library uses them. [`helper`] is what
+//! callbacks and checks use (`announce::helper`): the parser of the tokens a
+//! trampoline sends, and the macros [`callback!`] and [`transformer!`].
 
 mod cratepath;
 mod fastpath;
 mod finish;
 mod generate;
+pub mod helper;
 mod leak;
 mod options;
 mod scan;
 mod timing;
 
-use announce_helper::OwnedAttrs;
+use crate::helper::OwnedAttrs;
 use proc_macro2::{Ident, Span, TokenStream};
 use std::sync::atomic::{AtomicU64, Ordering};
 use template_quote::{quote, ToTokens};
@@ -50,7 +55,7 @@ fn random_u64() -> u64 {
 /// attributes it owns. The last element of the query is the hidden macro
 /// `finish!` of the `announce` crate (`<crate path>::__private::finish!`, see
 /// [`finish()`]), which expands to what is described above, without the
-/// attributes the checks own. See `announce_helper::attrs` for the protocol.
+/// attributes the checks own. See [`helper::attrs`] for the protocol.
 ///
 /// A returned error is a syntax or type-context error of the same kind as
 /// `#[announce]` reports. Here it comes back as a `compile_error!` invocation

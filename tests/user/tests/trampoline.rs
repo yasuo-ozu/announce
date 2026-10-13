@@ -113,7 +113,7 @@ mod derive_route {
     ::announce_test_defs::kinds::Greet! {
         [::announce_test_defs::kinds::Greet!, #[derive(::announce_test_defs::conflict::Parse)] Named1, summary!] VIA_DERIVE
     }
-    // Two unnamed derive routes in one module: announce-helper names them.
+    // Two unnamed derive routes in one module: `announce::helper` names them.
     pub mod twice {
         use announce_test_derive::{start, summary};
         start!([#[derive(::announce_test_defs::conflict::Parse)], summary!] ONE);

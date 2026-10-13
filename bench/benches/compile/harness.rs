@@ -182,7 +182,6 @@ fn revision(repo: &Path) -> String {
                 "build.rs",
                 "announce-core",
                 "announce-macros",
-                "announce-helper",
                 "Cargo.toml",
                 "Cargo.lock",
             ])
@@ -261,7 +260,23 @@ impl Harness {
         } else {
             repo.to_path_buf()
         };
-        let helper = repo.join("announce-helper");
+        // A checkout from before `announce-helper` was merged into `announce-core`
+        // (`announce::helper`) still has it as a crate of its own.
+        let old_helper = repo.join("announce-helper/Cargo.toml").exists();
+        let (helper_dep, helper_path) = if old_helper {
+            (
+                format!(
+                    "announce-helper = {{ path = \"{}\" }}\n",
+                    repo.join("announce-helper").display()
+                ),
+                "announce_helper",
+            )
+        } else {
+            (
+                format!("announce = {{ path = \"{}\" }}\n", announce.display()),
+                "announce::helper",
+            )
+        };
         let mut members = vec!["bench_cb".to_string(), "baseline".to_string()];
         let ws = &self.ws;
         let put =
@@ -272,14 +287,15 @@ impl Harness {
             "Cargo.toml",
             &cargo_toml(
                 "bench_cb",
-                &format!(
-                    "announce-helper = {{ path = \"{}\" }}\nsyn = \"2\"\nproc-macro2 = \"1\"\n",
-                    helper.display()
-                ),
+                &format!("{helper_dep}syn = \"2\"\nproc-macro2 = \"1\"\n"),
                 "\n[lib]\nproc-macro = true\n",
             ),
         );
-        put("bench_cb", "src/lib.rs", sources::CALLBACK_LIB);
+        put(
+            "bench_cb",
+            "src/lib.rs",
+            &sources::CALLBACK_LIB.replace("HELPER", helper_path),
+        );
         put("baseline", "Cargo.toml", &cargo_toml("baseline", "", ""));
         put("baseline", "src/lib.rs", "pub const ENTRIES: usize = 0;\n");
         put(

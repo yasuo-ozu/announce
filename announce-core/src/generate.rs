@@ -1,6 +1,6 @@
+use crate::helper::OwnedAttrs;
 use crate::options::{Layout, Options};
 use crate::timing::Timer;
-use announce_helper::OwnedAttrs;
 use proc_macro2::{Delimiter, Group, Ident, Punct, Spacing, Span, TokenStream, TokenTree};
 use syn::visit::Visit;
 use syn::visit_mut::VisitMut;
@@ -95,7 +95,7 @@ fn is_doc_string(a: &syn::Attribute) -> bool {
 ///
 /// `syn`'s `VisitMut` can change an attribute but not take it out of its list (the
 /// hook for that is recent), so an attribute is renamed here and dropped from
-/// the printed tokens later (see `announce_helper::remove_attributes`, which does
+/// the printed tokens later (see [`crate::helper::remove_attributes`], which does
 /// the same and then parses the item again; this does not).
 struct Marker<'a> {
     keep_docs: bool,
@@ -584,7 +584,7 @@ pub(crate) fn is_single(layout: Layout, size: usize) -> bool {
 const BAD_INPUT: &str =
     "announce: invalid trampoline input; expected `Item! { [Item!, next!, ..] .. }` \
      (a head and at least one continuation; a derive or attribute head goes through \
-     `announce_helper::redirect`)";
+     `announce::helper::redirect`)";
 
 /// The derive/attribute route emits an item (the dummy enum): an error in
 /// expression position (`(expr)`, section 4.6).
@@ -681,7 +681,7 @@ fn shape_arms(
 /// real `$`, so substituting it un-escapes the payload in place. The caller
 /// does not write the prefix: a bang-head call re-invokes the trampoline
 /// once through its own path (the head) with the prefix added, and
-/// `announce_helper::redirect` adds it for the derive route. No helper items
+/// `announce::helper::redirect` adds it for the derive route. No helper items
 /// are emitted, so the expansion is a single macro call in every position
 /// (DESIGN.md section 4.6).
 ///

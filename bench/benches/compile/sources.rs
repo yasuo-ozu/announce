@@ -106,9 +106,11 @@ pub fn definer(p: Point, announced: bool) -> String {
     out
 }
 
-/// The callback: consumes the whole payload (parsed as `announce_helper::Input`)
+/// The callback: consumes the whole payload (parsed as `announce::helper::Input`)
 /// and emits a trivial item, so the user crate's size is the protocol's cost
-/// plus a constant.
+/// plus a constant. `HELPER` is the path of the helper module: `announce::helper`,
+/// or `announce_helper` for a checkout from before the crate was merged into
+/// `announce-core`.
 pub const CALLBACK_LIB: &str = r#"//! Benchmark callback: consumes what it receives, emits a trivial item.
 use proc_macro::TokenStream;
 
@@ -117,7 +119,7 @@ use proc_macro::TokenStream;
 #[proc_macro]
 pub fn count(input: TokenStream) -> TokenStream {
     let input: proc_macro2::TokenStream = input.into();
-    let parsed: announce_helper::Input = match syn::parse2(input) {
+    let parsed: HELPER::Input = match syn::parse2(input) {
         Ok(p) => p,
         Err(e) => return e.to_compile_error().into(),
     };

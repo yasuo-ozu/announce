@@ -1,9 +1,9 @@
-//! The wire format example in the docs of `announce_helper::Input` (section "A real
+//! The wire format example in the docs of `announce::helper::Input` (section "A real
 //! example"): the chain below gives exactly the documented block, and the block is
 //! read from the source of the docs, so the two cannot drift.
 //!
 //! The definitions are in `announce_test_defs::wire`. When the output changes on
-//! purpose, update the ```text block in `announce-helper/src/lib.rs`.
+//! purpose, update the ```text block in `announce-core/src/helper/mod.rs`.
 
 use announce_test_defs::wire as defs;
 
@@ -18,7 +18,7 @@ const WIRE: &str = defs::Point! { (expr) [defs::Point!, defs::Length!, show!] so
 /// The documented block: the ```text block after `<!-- wire-example -->` in the docs
 /// of `Input`, without the `///` of the doc comment.
 fn documented() -> String {
-    const SRC: &str = include_str!("../../../announce-helper/src/lib.rs");
+    const SRC: &str = include_str!("../../../announce-core/src/helper/mod.rs");
     let mut lines = SRC.lines().map(str::trim_start);
     lines
         .by_ref()
@@ -96,6 +96,6 @@ fn the_documented_wire_format_is_what_a_callback_gets() {
     assert_eq!(
         masked_chain(WIRE),
         documented,
-        "the docs of `announce_helper::Input` show another wire format than the chain gives"
+        "the docs of `announce::helper::Input` show another wire format than the chain gives"
     );
 }

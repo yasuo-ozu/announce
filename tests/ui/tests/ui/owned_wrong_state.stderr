@@ -1,4 +1,4 @@
-error: announce: the state of the attribute query was changed by a check. A check must forward `{ STATE }` unchanged and may only append `attrs(name, ..)`; see the `announce_helper::attrs` docs
+error: announce: the state of the attribute query was changed by a check. A check must forward `{ STATE }` unchanged and may only append `attrs(name, ..)`; see the `announce::helper::attrs` docs
   --> tests/ui/owned_wrong_state.rs:5:104
    |
  3 | / macro_rules! bad_state {

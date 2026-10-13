@@ -66,7 +66,7 @@
 //! With checks in the options (`my_lib::check`), the output is not that yet. It is
 //! a call of the first check, with the attribute *query* that asks each check
 //! which attributes it owns (the protocol is in
-//! [`announce_helper::attrs`][attrs]). The last element of the query's list is
+//! [`announce::helper::attrs`][attrs]). The last element of the query's list is
 //! `<crate path>::__private::finish!`, a hidden macro of the `announce` crate. The
 //! path in `crate = ..` must reach it, which a library that re-exports `announce`
 //! does. `finish!` expands to the output above, without the attributes that the
@@ -102,7 +102,7 @@
 //! forms return the `syn::Error`, to combine it with others or to report it with
 //! another span. The API uses the types of `proc-macro2` 1 and `syn` 2.
 //!
-//! [attrs]: https://docs.rs/announce-helper/latest/announce_helper/attrs/index.html
+//! [attrs]: crate::helper::attrs
 pub use announce_core::{
     announce, define_repeater, derive_announce, derive_announce_with, finish, try_announce,
     try_define_repeater, try_derive_announce, try_finish, Check, Layout, Options,

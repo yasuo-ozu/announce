@@ -2,7 +2,7 @@
 //! 4.7): the query that `#[announce]` sends through the checks, and `finish`, the
 //! macro that ends it.
 //!
-//! The protocol that the checks see is documented in `announce_helper::attrs`.
+//! The protocol that the checks see is documented in [`crate::helper::attrs`].
 //! This is the part around it: the state that travels in `{ STATE }` and what
 //! `finish` does with it.
 //!
@@ -24,8 +24,8 @@
 //! read by `finish`. The `attrs(..)` groups are what the checks add.
 
 use crate::capture_output;
+use crate::helper::{OwnedAttrs, Query};
 use crate::options::Options;
-use announce_helper::{OwnedAttrs, Query};
 use proc_macro2::{Ident, Span, TokenStream};
 use syn::parse::{Parse, ParseStream};
 use syn::{Result, Token};
@@ -51,7 +51,7 @@ impl Mode {
 
 const STATE_ERROR: &str = "announce: the state of the attribute query was changed by a check. \
      A check must forward `{ STATE }` unchanged and may only append `attrs(name, ..)`; see the \
-     `announce_helper::attrs` docs";
+     `announce::helper::attrs` docs";
 
 /// The call of the first check, with the query: the expansion of
 /// `#[announce(a, b, ..)]` when there are checks. `opts.checks` is not empty.
@@ -133,7 +133,7 @@ impl Parse for State {
 
 /// What the hidden macro `finish!` of the `announce` crate does: the end of the
 /// attribute query that `#[announce(check, ..)]` and the derives send through
-/// their checks (see `announce_helper::attrs` for the protocol).
+/// their checks (see [`crate::helper::attrs`] for the protocol).
 ///
 /// `input` is the call's input, `@__announce_attrs [ finish! ] { STATE }` (the
 /// list is headed by the macro that is called, `finish!` itself, and has nothing
@@ -167,7 +167,7 @@ pub fn try_finish(input: TokenStream) -> Result<TokenStream> {
     // The list is headed by the macro that is called, and `finish!` is the last
     // element: exactly `[ finish! ]`.
     match query.list.0.as_slice() {
-        [announce_helper::Cont::Bang(_)] => {}
+        [crate::helper::Cont::Bang(_)] => {}
         [] => {
             return Err(syn::Error::new(
                 Span::call_site(),

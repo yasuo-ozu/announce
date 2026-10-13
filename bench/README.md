@@ -35,7 +35,7 @@ the command line, so the grid is configured with environment variables:
 | `ANNOUNCE_BENCH_LAYOUT` | unset | `single`, `direct` or `auto`: adds `layout = ..` to every `#[announce]` (the trampoline layout, DESIGN.md section 4.1). Unset: no option, so the layout follows the size of the item |
 | `ANNOUNCE_BENCH_OPT_BUILD` | unset | `1`: the generated workspace gets `[profile.dev.build-override] opt-level = 3`, so the proc macros (`announce-macros` and what it uses: `syn`, type-leak, ..) are built with optimizations; the build time of the defining crate is what the user of `announce` gets from that profile setting (DESIGN.md section 4.9) |
 | `ANNOUNCE_BENCH_KEEP` | unset | `1`: keep the generated crates and their build directory |
-| `ANNOUNCE_BENCH_REPO` | the parent of `bench/` | checkout of `announce` (the repository root; or `announce/`, in a checkout from before it moved there), `announce-helper` and the `Cargo.lock` to benchmark, e.g. a `git archive` of a commit |
+| `ANNOUNCE_BENCH_REPO` | the parent of `bench/` | checkout of `announce` (the repository root; or `announce/`, in a checkout from before it moved there; a checkout from before `announce-helper` was merged into `announce-core` keeps working, its `announce-helper/` is used) and the `Cargo.lock` to benchmark, e.g. a `git archive` of a commit |
 | `ANNOUNCE_BENCH_REV` | `git rev-parse` of the checkout | revision to print in the report, for a checkout without `.git` |
 
 The default grid is traits only, S in {1, 10, 100, 200} and K in {1, 2, 4, 8,
@@ -44,7 +44,7 @@ benchmark. It takes about 13 minutes (see [RESULTS.md](RESULTS.md)). The large
 grid in the example above (structs too, S up to 1000, K up to 128) takes about
 30 minutes; the points with S = 1000 and K >= 64 are more than half of that.
 Everything runs offline against the cargo cache; the generated crates depend on
-`announce` and `announce-helper` by path.
+`announce` by path.
 
 ## Where the results go
 
@@ -72,7 +72,7 @@ ran. The size table has a row for every crate that was built.
 | `use_calls_*` | K separate calls `Di! { [Di!, ::bench_cb::count!] ci }` |
 
 `bench_cb::count!` is a proc macro callback. It parses its whole input with
-`announce_helper::Input` (so it consumes every entry) and emits one constant,
+`announce::helper::Input` (so it consumes every entry) and emits one constant,
 `ENTRIES`; each user crate `const`-asserts `ENTRIES == K`. Each user crate also
 has a tiny executable that prints `ENTRIES` and the size of the first
 definition (`size_of::<Di>()`, or of a `&dyn Di`), so that the user crate and
