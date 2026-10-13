@@ -69,7 +69,7 @@ pub mod kinds {
         }
     }
 
-    /// A second module with `$` and a repetition (AUDIT #3: chains of two).
+    /// A second module with `$` and a repetition (chains of two).
     #[announce]
     pub mod with_macro2 {
         macro_rules! prod {
@@ -370,8 +370,7 @@ pub mod leaky {
     pub struct NoRepeater;
 }
 
-/// AUDIT #1/#2 regressions: `crate::` after a single `:` and `$crate` in a
-/// payload macro.
+/// Regressions: `crate::` after a single `:` and `$crate` in a payload macro.
 pub mod crate_paths2 {
     use super::announce;
     pub struct Foo(pub u8);
@@ -398,7 +397,7 @@ pub mod crate_paths2 {
 /// A constant of this crate, named by `crate::ARR` inside a re-emitted payload.
 pub const ARR: [u8; 3] = [1, 2, 3];
 
-/// ALGORITHM_FINDINGS #8: the `crate` after the `in` of a `for` loop is an
+/// The `crate` after the `in` of a `for` loop is an
 /// ordinary path; only the `in` of `pub(in ..)` is part of a visibility.
 #[announce]
 pub mod for_in_crate {
@@ -423,7 +422,7 @@ pub mod allow_opts {
     }
 }
 
-/// AUDIT #4 and #5: these used to break the definer's own build.
+/// These used to break the definer's own build.
 pub mod audit_high {
     use super::announce;
 
@@ -481,7 +480,7 @@ pub mod trait_paths_ok {
     pub struct ArrLocal<const N: usize>(pub [Local; N]);
 }
 
-/// Audit 3 #1-#6: repeater tables and the analysis.
+/// Repeater tables and the analysis.
 pub mod audit3 {
     use super::announce;
 
@@ -796,7 +795,7 @@ pub mod leak08 {
 }
 
 /// The repeater of type-leak 0.8: every entry is written from the context of
-/// the scope where its type occurs (ALGORITHM_FINDINGS A and #1-#4), and const
+/// the scope where its type occurs, and const
 /// generics of every primitive type are carried.
 pub mod contexts {
     use super::announce;
@@ -898,7 +897,7 @@ pub mod contexts {
         pub f: for<'b> fn(Wrap<'b>) -> u8,
     }
 
-    /// ALGORITHM_FINDINGS #12: `Sized` and `?Sized` are accepted bare, in a
+    /// `Sized` and `?Sized` are accepted bare, in a
     /// method's generics, a `where` clause and the item's own generics, with
     /// relative types next to them.
     #[announce(repeater = crate::contexts::Repeater)]

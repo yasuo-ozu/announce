@@ -240,7 +240,7 @@ mod reemitted_for_in {
 
 #[test]
 fn crate_after_in_of_a_for_loop_refers_to_the_defining_crate() {
-    // ALGORITHM_FINDINGS #8.
+    // The `crate` after the `in` of a `for` loop is the defining crate's.
     assert_eq!(reemitted_for_in::for_in_crate::sum(), 6);
 }
 
@@ -286,7 +286,7 @@ mod fetched_raw {
 
 #[test]
 fn raw_fetch_gets_the_definitions_and_records_what_it_fetched() {
-    // ALGORITHM_FINDINGS #13: `Input::fetch` keeps the books `gather` keeps.
+    // `Input::fetch` keeps the books `gather` keeps.
     assert_eq!(fetched_raw::F, ["Shape", "Greet"]);
     assert_eq!(
         norm(fetched_raw::F_OPTIONS),
@@ -385,7 +385,7 @@ fn allow_std_prelude_accepts_prelude_names() {
     assert!(!out.contains("type_leak("), "{}", out);
 }
 
-// AUDIT #3: two `$`-payloads in one chain, and REST containing `$(..)*`.
+// Two `$`-payloads in one chain, and REST containing `$(..)*`.
 macro_rules! reemit_two {
     ([$($l:tt)*]
      $($p1:ident)? $(:: $s1:ident)* ! => [$($m1:tt)*] { $($a:tt)* }

@@ -1,4 +1,4 @@
-# A rename written with dotted keys (ALGORITHM_FINDINGS #10): the generated code
+# A rename written with dotted keys: the generated code
 # must reach the facade as `::ann_dot`.
 [package]
 name = "announce-test-renamed-dotted"

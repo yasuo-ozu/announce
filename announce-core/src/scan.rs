@@ -1,5 +1,5 @@
 //! A scan of the first tokens of an item, which tells its kind and name without
-//! parsing it (DESIGN.md section 4.2).
+//! parsing it.
 //!
 //! `#[announce]` has to refuse an item it does not support (`fn`, `impl`, `mod
 //! m;`, ..) at once, with the error that says what is supported. Everything

@@ -180,7 +180,7 @@ impl ToTokens for Cont {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         match self {
             Cont::Bang(p) => {
-                // Macro paths cannot carry generic arguments (AUDIT #13).
+                // Macro paths cannot carry generic arguments.
                 let mut p = p.clone();
                 for seg in &mut p.segments {
                     seg.arguments = syn::PathArguments::None;
@@ -627,7 +627,7 @@ impl Parse for Input {
                     // `KEY =>` means an entry was intended: report it instead
                     // of silently treating it as REST.
                     // (`KEY => [` or `KEY => {` only; `foo! => bar` is valid
-                    // REST, AUDIT #14.)
+                    // REST.)
                     let probe = input.fork();
                     if probe.parse::<Cont>().is_ok()
                         && probe.parse::<Token![=>]>().is_ok()
@@ -675,8 +675,8 @@ impl Input {
     /// refuses a continuation that was fetched before and left no entry,
     /// records the new ones in the options group, and invokes `[new.., <list>]`.
     fn fetch_conts(&self, new: Vec<Cont>) -> TokenStream {
-        // Already fetched once, but no entry came back: not a trampoline
-        // (AUDIT 3 #9). The bookkeeping travels in the options group.
+        // Already fetched once, but no entry came back: not a trampoline. The
+        // bookkeeping travels in the options group.
         let fetched = self.fetched_paths();
         if let Some(c) = new
             .iter()
@@ -777,7 +777,7 @@ impl Input {
     pub fn gather(&self, needed: impl IntoIterator<Item = Cont>) -> Gather<'_> {
         let needed: Vec<Cont> = needed.into_iter().collect();
         // A callback asking for itself (or for its own head path) would
-        // re-fetch forever (AUDIT #15).
+        // re-fetch forever.
         if let Some(head) = self.list.0.first() {
             if let Some(c) = needed
                 .iter()
@@ -1039,10 +1039,9 @@ pub fn payload(item: TokenStream) -> Option<TokenStream> {
 pub fn redirect(item: TokenStream, target: &Path) -> Option<TokenStream> {
     let body = payload(item)?;
     // A trampoline whose payload contains `$` needs a real `$` from its
-    // caller (`@__announce_dollar { $ }`, DESIGN.md section 4); the others
-    // ignore it. A trampoline that holds its item once calls itself again
-    // and needs its own path (`@__announce_self { path }`, section 4.1); the
-    // others ignore that too. The derive route cannot re-invoke the
+    // caller (`@__announce_dollar { $ }`); the others ignore it. A trampoline
+    // that holds its item once calls itself again and needs its own path
+    // (`@__announce_self { path }`); the others ignore that too. The derive route cannot re-invoke the
     // trampoline itself, so both prefixes are always added here.
     let dollar = proc_macro2::Punct::new('$', proc_macro2::Spacing::Alone);
     Some(quote! { #target ! { @__announce_self { #target } @__announce_dollar { #dollar } #body } })
@@ -1335,7 +1334,7 @@ mod tests {
     fn fetch_prepends_and_returns() {
         let input: Input = syn::parse_quote! { [me!, next!] a::F! => [] { struct S; } (rest) };
         let out = s(input.fetch([Cont::bang(syn::parse_quote!(g::G))]));
-        // The fetch is recorded in the options group (ALGORITHM_FINDINGS #13).
+        // The fetch is recorded in the options group.
         assert_eq!(
             out,
             "g::G!{(__announce_fetched(g::G))[g::G!,me!,next!]a::F!=>[]{structS;}(rest)}"
@@ -1348,7 +1347,7 @@ mod tests {
 
     #[test]
     fn fetch_of_a_path_that_left_no_entry_is_an_error() {
-        // ALGORITHM_FINDINGS #13: the bookkeeping of `gather`, shared. `g::G`
+        // The bookkeeping of `gather`, shared. `g::G`
         // was fetched, the callback is called again and has no entry for it.
         // (`g::G` forwarded to `me` without adding an entry.)
         let again: Input = syn::parse_quote! {
@@ -2027,7 +2026,7 @@ mod gap_tests {
 
     #[test]
     fn only_a_leading_expr_selects_expression_position() {
-        // ALGORITHM_FINDINGS #11: the rule of the trampolines, shared.
+        // The rule of the trampolines, shared.
         let yes = |ts: TokenStream| is_expression_position(&ts);
         assert!(yes(template_quote::quote!(expr)));
         assert!(yes(template_quote::quote!(expr, type_leak)));

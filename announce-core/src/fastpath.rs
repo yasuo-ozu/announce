@@ -1,4 +1,4 @@
-//! The fast path of the type-context analysis (DESIGN.md section 4.5.2).
+//! The fast path of the type-context analysis.
 //!
 //! `leak::analyze` runs type-leak over the whole item, which is by far the most
 //! expensive step of the `Capture` derive for an item with many methods. Most items

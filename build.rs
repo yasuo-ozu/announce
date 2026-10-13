@@ -1,6 +1,6 @@
 use std::process::Command;
 
-// DESIGN.md section 8: `#[diagnostic::on_unimplemented]` needs rustc 1.78.
+// `#[diagnostic::on_unimplemented]` needs rustc 1.78.
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     let rustc = std::env::var("RUSTC").unwrap_or_else(|_| "rustc".into());
@@ -16,7 +16,7 @@ fn main() {
             let minor: u32 = it.next()?.parse().ok()?;
             Some(if major > 1 { u32::MAX } else { minor })
         })
-        // Unknown compiler version: assume a current one (AUDIT #17).
+        // Unknown compiler version: assume a current one.
         .unwrap_or(u32::MAX);
     if minor >= 80 {
         println!("cargo:rustc-check-cfg=cfg(announce_diagnostic)");

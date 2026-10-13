@@ -1,5 +1,5 @@
 //! Uses announce only as `ann_dot`, renamed with the dotted keys
-//! `"ann-dot".package = "announce"` (ALGORITHM_FINDINGS #10). Before, the scanner
+//! `"ann-dot".package = "announce"`. Before, the scanner
 //! of `Cargo.toml` missed the rename and the generated code named `::announce`.
 
 pub mod inner {

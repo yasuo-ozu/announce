@@ -1,6 +1,5 @@
-//! The attribute query round trip of `#[announce(check, ..)]` (DESIGN.md section
-//! 4.7): the query that `#[announce]` sends through the checks, and `finish`, the
-//! macro that ends it.
+//! The attribute query round trip of `#[announce(check, ..)]`: the query that
+//! `#[announce]` sends through the checks, and `finish`, the macro that ends it.
 //!
 //! The protocol that the checks see is documented in [`crate::helper::attrs`].
 //! This is the part around it: the state that travels in `{ STATE }` and what

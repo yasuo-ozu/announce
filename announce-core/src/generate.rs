@@ -38,7 +38,7 @@ pub fn hex(random: u64) -> String {
 // ---------------------------------------------------------------------------
 // The attributes that do not stay, and the passes over the tokens.
 //
-// DESIGN.md section 4.2: the item is parsed once. A pass over the tree marks
+// The item is parsed once. A pass over the tree marks
 // the attributes that some copy of the item loses, the tree is printed once,
 // and each copy is made from the printed tokens by a pass that drops the marked
 // attributes it does not keep. The pass that makes the payload also escapes `$`,
@@ -267,10 +267,10 @@ fn marked_attribute(
 
 /// One pass over `ts`, which does what `p` says at once: drops and restores the
 /// marked attributes, escapes `$` and rewrites `crate::`, and counts the tokens
-/// it produces. (Three passes before: DESIGN.md section 4.2.)
+/// it produces, in place of three separate passes.
 ///
-/// `$` is escaped as `$__dollar` (DESIGN.md section 4: the payload is un-escaped
-/// by the trampoline at each hop).
+/// `$` is escaped as `$__dollar` (the payload is un-escaped by the trampoline at
+/// each hop).
 ///
 /// `crate::` as the start of a path is rewritten as `$crate::`, so paths in the
 /// payload and META keep referring to the defining crate when the macro is
@@ -278,7 +278,7 @@ fn marked_attribute(
 /// left alone: there it is the visibility's own syntax, which takes no `$crate`.
 /// That is the `in` that opens the parentheses after `pub`; any other `in`
 /// (`for x in crate::ARR {}`) is followed by an ordinary path, which is rewritten.
-/// An escaped `$crate` (`$ __dollar crate`, AUDIT #2) is left alone as well: the
+/// An escaped `$crate` (`$ __dollar crate`) is left alone as well: the
 /// previous token of the input is read, so the decision is that of the two passes
 /// (escape, then rewrite) that this replaces.
 ///
@@ -315,11 +315,11 @@ fn run(ts: TokenStream, p: &Pass, c: &mut Counts, in_pub_paren: bool) -> TokenSt
                 let after_in_or_sep = match prev {
                     // `pub(in crate::m)`: the `in` is the first token inside the
                     // parentheses of `pub`. And an escaped `$crate` (`$ __dollar
-                    // crate`, AUDIT #2).
+                    // crate`).
                     Some(TokenTree::Ident(q)) => {
                         (q == "in" && in_pub_paren && i == 1) || q == "__dollar"
                     }
-                    // `a::crate` (a path separator), but not `x: crate::T` (AUDIT #1)
+                    // `a::crate` (a path separator), but not `x: crate::T`.
                     Some(TokenTree::Punct(q)) if q.as_char() == ':' => matches!(
                         prev2,
                         Some(TokenTree::Punct(r)) if r.as_char() == ':' && r.spacing() == Spacing::Joint
@@ -440,10 +440,10 @@ fn mentions<'a, T>(
 }
 
 /// Conservative test for "`dyn Trait` is certainly a valid type", so that the
-/// marker impl can never break the definer's build (DESIGN.md section 8).
+/// marker impl can never break the definer's build.
 fn trait_is_simple_dyn(t: &syn::ItemTrait) -> bool {
-    // Any generic parameter, lifetimes included (AUDIT #4: `impl Announce for
-    // dyn L` does not compile for `trait L<'a>`).
+    // Any generic parameter, lifetimes included (`impl Announce for dyn L` does
+    // not compile for `trait L<'a>`).
     if !t.generics.params.is_empty() || t.generics.where_clause.is_some() || t.auto_token.is_some()
     {
         return false;
@@ -451,7 +451,7 @@ fn trait_is_simple_dyn(t: &syn::ItemTrait) -> bool {
     let supers_ok = t.supertraits.iter().all(|b| match b {
         syn::TypeParamBound::Lifetime(_) => true,
         // Only the std auto traits by full path: a user trait that is merely
-        // *named* `Send` may have associated types (AUDIT #4).
+        // *named* `Send` may have associated types.
         syn::TypeParamBound::Trait(tb) => {
             let p = tb.path.to_token_stream().to_string().replace(' ', "");
             tb.lifetimes.is_none()
@@ -500,7 +500,7 @@ fn trait_is_simple_dyn(t: &syn::ItemTrait) -> bool {
 fn marker_impl(item: &Item, opts: &Options) -> TokenStream {
     // `#[derive(Announce)]` always implements it. `emit_item = false` means
     // the item is emitted (and its `Announce` impl owned) by someone else, so
-    // a second announcement cannot conflict with it (AUDIT #25). A mock is a
+    // a second announcement cannot conflict with it. A mock is a
     // stand-in, not the real item.
     if opts.mock.is_some() || !(opts.derived || opts.emit_item) {
         return TokenStream::new();
@@ -548,7 +548,7 @@ pub struct Variant {
 /// item once (`Layout::Single`) instead of copying it into each arm
 /// (`Layout::Direct`), counted on the escaped payload plus META.
 ///
-/// Chosen by measurement (DESIGN.md section 4.1): a direct trampoline copies
+/// Chosen by measurement: a direct trampoline copies
 /// the item into three arms and takes one expansion; a single-copy one holds it
 /// once and takes three expansions (two through the derive route). The single
 /// copy has the smaller `.rmeta` from about 90 tokens; 300 weighs that against
@@ -587,7 +587,7 @@ const BAD_INPUT: &str =
      `announce::helper::redirect`)";
 
 /// The derive/attribute route emits an item (the dummy enum): an error in
-/// expression position (`(expr)`, section 4.6).
+/// expression position (`(expr)`).
 const DERIVE_IN_EXPR: &str =
     "announce: a derive/attribute continuation emits items, so it cannot be used with `(expr)`";
 
@@ -624,7 +624,7 @@ fn expr_error_arm(lead: &TokenStream) -> TokenStream {
 }
 
 /// The arms that pass an entry on, one for every next shape (a bang, a named
-/// attribute, an anonymous attribute) (DESIGN.md section 4.1). `lead` is what
+/// attribute, an anonymous attribute). `lead` is what
 /// each pattern starts with, and `entry` is `KEY => [META] { ITEM }` for the
 /// head `key`.
 fn shape_arms(
@@ -682,12 +682,11 @@ fn shape_arms(
 /// does not write the prefix: a bang-head call re-invokes the trampoline
 /// once through its own path (the head) with the prefix added, and
 /// `announce::helper::redirect` adds it for the derive route. No helper items
-/// are emitted, so the expansion is a single macro call in every position
-/// (DESIGN.md section 4.6).
+/// are emitted, so the expansion is a single macro call in every position.
 ///
 /// `redirect` writes `@__announce_self { path } @__announce_dollar { $ }`
-/// before the list, for the layouts that call themselves again (DESIGN.md
-/// section 4.1); the arms of this layout ignore the self path. A payload
+/// before the list, for the layouts that call themselves again; the arms of
+/// this layout ignore the self path. A payload
 /// without `$` ignores the dollar prefix too.
 fn direct_arms(fallback: &Ident, v: &Variant) -> TokenStream {
     let Variant {
@@ -718,7 +717,7 @@ fn direct_arms(fallback: &Ident, v: &Variant) -> TokenStream {
 }
 
 /// `Layout::Single`: the item is in one arm, and the routing and output arms
-/// carry none (DESIGN.md section 4.1).
+/// carry none.
 ///
 /// 1. A call `($(opts)? [head! ..] REST)` has its head's path re-invoked with
 ///    `@__announce_self { head path } @__announce_dollar { $ }` before it
@@ -766,7 +765,7 @@ fn single_arms(fallback: &Ident, v: &Variant) -> TokenStream {
     out
 }
 
-/// The arms of DESIGN.md section 4.1, and the catch-all error arm.
+/// The arms of the chosen layout, and the catch-all error arm.
 fn arms(fallback: &Ident, plain: &Variant, single: bool) -> TokenStream {
     let mut out = if single {
         single_arms(fallback, plain)
@@ -827,7 +826,7 @@ fn trampoline_with(
 ) -> TokenStream {
     let h = hex(random);
     let macro_name = opts.macro_name.clone().unwrap_or_else(|| ident.clone());
-    // `r#match` is not usable inside a longer identifier (AUDIT #5).
+    // `r#match` is not usable inside a longer identifier.
     let hidden = Ident::new(
         &format!("__announce_{}_{}", syn::ext::IdentExt::unraw(ident), h),
         Span::call_site(),
@@ -872,7 +871,7 @@ fn trampoline_with(
     let single = is_single(opts.layout, meta_count.tokens + counts.tokens);
     // Global options other than a leading `expr` are not interpreted by the
     // trampoline; they are forwarded unchanged (a namespace for helpers, e.g.
-    // `gather`'s bookkeeping; AUDIT 3 #9).
+    // `gather`'s bookkeeping).
     let plain = Variant {
         meta,
         payload,
@@ -882,7 +881,7 @@ fn trampoline_with(
     let out = quote! {
         #[doc(hidden)]
         // The payload holds escaped `$crate` / `crate::` tokens (false
-        // positive), and `pub` items in fn bodies are fine (AUDIT #24).
+        // positive), and `pub` items in fn bodies are fine.
         #[allow(unknown_lints, clippy::crate_in_macro_def, non_local_definitions)]
         #(if export) { #[macro_export] }
         macro_rules! #hidden { #arms }
@@ -895,7 +894,7 @@ fn trampoline_with(
 }
 
 /// Whether `generate` emits the real item itself: when something is removed from
-/// it, the derive emits it instead of `#[announce]` (section 4.7 of DESIGN.md).
+/// it, the derive emits it instead of `#[announce]`.
 fn emits_real_item(opts: &Options, owned: &OwnedAttrs) -> bool {
     !owned.is_empty() && opts.emit_item && opts.mock.is_none() && !opts.derived
 }
@@ -995,10 +994,9 @@ pub(crate) fn emit(
     let marker = marker_impl(item, opts);
     t.step("marker");
 
-    // DESIGN.md §4.5: `repeater` is required when the item has types that do
-    // not resolve outside this crate. When every path in the item certainly
-    // resolves everywhere there is nothing to find, and type-leak is not run
-    // (section 4.5.2).
+    // `repeater` is required when the item has types that do not resolve
+    // outside this crate. When every path in the item certainly resolves
+    // everywhere there is nothing to find, and type-leak is not run.
     let fast = opts.repeater.is_none() && crate::fastpath::accepts(item, opts);
     let (leak_impls, leak_meta) = if fast {
         #[cfg(test)]
@@ -1221,7 +1219,7 @@ mod tests {
 
     #[test]
     fn crate_after_an_ordinary_in_is_rewritten() {
-        // ALGORITHM_FINDINGS #8: only the `in` of `pub(in ..)` is the visibility's.
+        // Only the `in` of `pub(in ..)` is the visibility's.
         assert_eq!(dc(quote! { for x in crate::ARR {} }), "forxin$crate::ARR{}");
         assert_eq!(
             dc(quote! { const C: u8 = { let mut s = 0; for x in crate::ARR { s += x; } s }; }),
@@ -1243,7 +1241,7 @@ mod tests {
     #[test]
     fn keeps_an_escaped_dollar_crate() {
         // `$crate` written by the user is escaped first (`$ __dollar crate`):
-        // adding a `$` would unescape nothing and break the pair (AUDIT #2).
+        // adding a `$` would unescape nothing and break the pair.
         let mut found = false;
         let escaped = escape_dollar(quote! { $crate::x }, &mut found);
         assert!(found);
@@ -1262,7 +1260,7 @@ mod tests {
         // `a::crate::b`: `crate` is a path segment after `::`.
         assert_eq!(dc(quote! { a::crate::b }), "a::crate::b");
         assert_eq!(dc(quote! { ::crate::b }), "::crate::b");
-        // `x: crate::T` is a type ascription after a single colon (AUDIT #1).
+        // `x: crate::T` is a type ascription after a single colon.
         assert_eq!(dc(quote! { fn f(x: crate::T) {} }), "fnf(x:$crate::T){}");
         assert_eq!(
             dc(quote! { struct S { a: crate::T, b: Vec<crate::U> } }),

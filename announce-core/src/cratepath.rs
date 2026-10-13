@@ -694,7 +694,7 @@ mod manifest_tests {
 
     #[test]
     fn dotted_key_package_rename() {
-        // ALGORITHM_FINDINGS #10.
+        // `package = ..` written as a dotted key of the dependency.
         let m = "[dependencies]\nann.package = \"announce\"\nann.version = \"0.1\"\n";
         assert_eq!(name_of(m).as_deref(), Some("ann"));
         // In any order, between other dependencies, with spaces around the dot.
@@ -784,7 +784,7 @@ mod manifest_tests {
 
     #[test]
     fn inline_table_over_several_lines() {
-        // ALGORITHM_FINDINGS #10.
+        // The inline table of a dependency may span several lines.
         let m = "[dependencies]\nann = { version = \"0.1\",\n        package = \"announce\" }\n";
         assert_eq!(name_of(m).as_deref(), Some("ann"));
         let m = "[dependencies]\nann = {\n    version = \"0.1\",\n    package = \"announce\",\n}\nserde = \"1\"\n";

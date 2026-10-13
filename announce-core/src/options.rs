@@ -27,8 +27,7 @@ impl ToTokens for Check {
 
 /// How the generated trampoline holds the item (`layout = ..`, advanced).
 ///
-/// The default, [`Layout::Auto`], is the right choice almost always; see
-/// DESIGN.md section 4.1.
+/// The default, [`Layout::Auto`], is the right choice almost always.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Layout {
@@ -79,7 +78,7 @@ pub struct Options {
     /// already exists). Default `true`.
     pub emit_item: bool,
     /// `layout = auto | single | direct`: how the trampoline holds the item.
-    /// Default `auto`: by the size of the item (advanced, DESIGN.md section 4.1).
+    /// Default `auto`: by the size of the item (advanced).
     pub layout: Layout,
     /// `docs = true`: keep the doc attributes (`#[doc = ".."]`, so `///` and
     /// `//!` too) in the item that callbacks and checks receive. Default

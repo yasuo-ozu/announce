@@ -356,7 +356,7 @@ mod tests {
 
     #[test]
     fn apply_tells_scopes_apart() {
-        // ALGORITHM_FINDINGS A: the same text in two scopes with different
+        // The same text in two scopes with different
         // generics is two entries; a method generic named like a leaked type
         // does not make `Local` a generic elsewhere.
         let item: Item = syn::parse_quote! {

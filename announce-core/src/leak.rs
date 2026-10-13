@@ -1,5 +1,5 @@
 //! Type context of a definition: `#[announce(repeater = path)]` and the
-//! type-leak table (DESIGN.md section 4.5).
+//! type-leak table.
 //!
 //! On the cfg-evaluated item, type-leak finds the types that would not
 //! resolve at a caller: relative paths such as `Local` or `super::X`.
@@ -77,7 +77,7 @@ impl Analysis {
 
 /// The repeater must be a local trait (`crate::..` / `$crate::..`): the table
 /// implements it for `()`, which the orphan rule only allows for a local
-/// trait (AUDIT 3 #7). Callers resolve it through `$crate`.
+/// trait. Callers resolve it through `$crate`.
 pub fn check_repeater(repeater: &Path) -> Result<()> {
     let first = repeater.segments.first().map(|s| s.ident.to_string());
     if repeater.leading_colon.is_none()
@@ -196,8 +196,8 @@ fn check_trait_paths(item: &Item, allow_prelude: bool) -> Result<()> {
 /// Value expressions inside types and signatures (array lengths, enum
 /// discriminants, const generic arguments, const defaults) are copied to
 /// callers like the types around them, but a repeater cannot carry values:
-/// every path in them must be absolute, `Self::..`, or a const parameter
-/// (AUDIT 3 #5). A relative array length would make type-leak carry the whole
+/// every path in them must be absolute, `Self::..`, or a const parameter. A
+/// relative array length would make type-leak carry the whole
 /// array type. The types named inside a value (`size_of::<Local>()`) are
 /// type-leak's business, not checked here.
 fn check_values(item: &Item, const_params: &[String]) -> Result<()> {
@@ -833,7 +833,7 @@ mod tests {
 
     #[test]
     fn types_in_associated_const_defaults_are_not_read() {
-        // ALGORITHM_FINDINGS #14, still open: type-leak does not read the
+        // A known limit: type-leak does not read the
         // default of an associated const, so nothing is carried.
         let it = quote! { trait Tr { const N: usize = ::core::mem::size_of::<inner::Local>(); } };
         assert!(analysed(it, &opts()).is_empty());
@@ -874,7 +874,7 @@ mod tests {
 
     #[test]
     fn bare_sized_needs_no_prelude_option() {
-        // ALGORITHM_FINDINGS #12: `Sized` cannot be meaningfully shadowed.
+        // `Sized` cannot be meaningfully shadowed.
         for ok in [
             quote! { struct S<T: ?Sized>(::std::boxed::Box<T>); },
             quote! { struct S<T>(T) where T: ?Sized; },
@@ -973,7 +973,7 @@ mod tests {
     #[test]
     fn higher_ranked_lifetime_in_a_leaked_type_is_carried() {
         // The entry's context declares `'b`, so the impl does and the consumer's
-        // projection (inside the `for<'b>`) passes it (ALGORITHM_FINDINGS #7).
+        // projection (inside the `for<'b>`) passes it.
         let impls = squash(&leaked(quote! { struct S { f: for<'b> fn(Local<'b>) } }).impls);
         assert!(
             impls.contains("impl<'b>crate::R<(&'b(),),42u64,0usize>for(){typeType=Local<'b>;}"),
@@ -1119,7 +1119,7 @@ mod tests {
 
     #[test]
     fn same_text_in_two_contexts_is_two_entries_with_their_own_generics() {
-        // ALGORITHM_FINDINGS A: the bound of `X` in `f` must not reach `g`.
+        // The bound of `X` in `f` must not reach `g`.
         let leaked = leaked(quote! {
             trait T {
                 fn f<X: ::core::clone::Clone>(&self) -> inner::GC<X>;
@@ -1145,7 +1145,7 @@ mod tests {
 
     #[test]
     fn a_method_generic_named_like_a_type_does_not_make_it_a_generic() {
-        // ALGORITHM_FINDINGS A: `Local` is a generic only inside `f`.
+        // `Local` is a generic only inside `f`.
         let leaked = leaked(quote! {
             trait U { fn f<Local>(&self, x: Local); fn g(&self) -> Local; }
         });
@@ -1159,7 +1159,7 @@ mod tests {
 
     #[test]
     fn bounds_naming_other_parameters_stay_in_the_context() {
-        // ALGORITHM_FINDINGS #1: `T: Into<V>` needs `V`, which comes with it.
+        // `T: Into<V>` needs `V`, which comes with it.
         let impls = squash(
             &leaked(quote! {
                 struct BF<T: ::core::convert::Into<V>, V>(pub inner::LocalG<T>, pub V);
@@ -1176,7 +1176,7 @@ mod tests {
 
     #[test]
     fn where_clauses_reach_the_impl() {
-        // ALGORITHM_FINDINGS #2.
+        // The `where` clause of the item is carried to the impl too.
         let impls = squash(
             &leaked(quote! {
                 struct WC<T>(pub inner::LocalC<T>) where T: ::core::clone::Clone;
@@ -1193,7 +1193,7 @@ mod tests {
 
     #[test]
     fn a_name_that_is_a_parameter_only_elsewhere_is_not_one() {
-        // ALGORITHM_FINDINGS #3 and #4.
+        // `U` is a parameter of `f` only: the `inner::U` of `g` is a type, not that parameter.
         let impls = squash(
             &leaked(quote! {
                 trait MD { fn f<U>(&self, x: inner::LocalG<U>); fn g(&self) -> inner::U; }

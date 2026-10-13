@@ -1,5 +1,4 @@
-//! A developer aid: the time each step of the proc macros takes (DESIGN.md
-//! section 4.9).
+//! A developer aid: the time each step of the proc macros takes.
 //!
 //! With the environment variable `ANNOUNCE_TIMING` set (to anything but `0` or the
 //! empty string) in the environment of the compiler, every expansion of

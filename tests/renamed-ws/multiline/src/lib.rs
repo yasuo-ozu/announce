@@ -1,5 +1,5 @@
 //! Uses announce only as `ann_multi`, renamed with an inline table over
-//! several lines (ALGORITHM_FINDINGS #10). Before, the scanner of `Cargo.toml`
+//! several lines. Before, the scanner of `Cargo.toml`
 //! saw `ann-multi = {` only and the generated code named `::announce`.
 
 #[ann_multi::announce]

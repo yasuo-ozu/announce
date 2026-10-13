@@ -72,7 +72,7 @@ pub fn announce(attr: TokenStream, item: TokenStream) -> TokenStream {
 ///
 /// The item is not parsed here: only its kind and name are read (`scan`), to
 /// refuse what is not supported at once. Its syntax is validated by the parse of
-/// the `Capture` derive that the result contains (DESIGN.md section 4.2).
+/// the `Capture` derive that the result contains.
 pub fn try_announce(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> {
     let mut t = timing::Timer::new("attribute");
     let opts: Options = syn::parse2(attr.clone())?;
@@ -93,11 +93,10 @@ pub fn try_announce(attr: TokenStream, item: TokenStream) -> syn::Result<TokenSt
 /// What `#[announce]` expands to once the attribute names that its checks own
 /// are known (`owned`; empty without checks): the item and the capture dummy.
 ///
-/// DESIGN.md section 4.2: the derive sees the copy with every nested cfg
+/// The derive sees the copy with every nested cfg
 /// evaluated in this crate, then `remove` deletes the dummy. Without owned
 /// attributes the item is emitted here, as written. With owned attributes it
-/// is the derive that emits it, from its cfg-evaluated copy and without them
-/// (section 4.7).
+/// is the derive that emits it, from its cfg-evaluated copy and without them.
 pub(crate) fn capture_output(
     opts: &Options,
     attr: &TokenStream,
@@ -420,7 +419,7 @@ fn read_dummy(input: TokenStream) -> syn::Result<Dummy> {
 /// The body of the hidden `Capture` derive that `#[announce]` expands to.
 /// Not part of the API.
 ///
-/// The item is parsed here, once (DESIGN.md section 4.2): everything else is done
+/// The item is parsed here, once: everything else is done
 /// on that tree and on the tokens it prints.
 #[doc(hidden)]
 pub fn capture(input: TokenStream) -> syn::Result<TokenStream> {

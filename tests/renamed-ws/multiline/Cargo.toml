@@ -1,6 +1,6 @@
-# A rename written as an inline table over several lines (ALGORITHM_FINDINGS
-# #10; TOML 1.1, which cargo reads since 1.94): the generated code must reach
-# the facade as `::ann_multi`.
+# A rename written as an inline table over several lines (TOML 1.1, which
+# cargo reads since 1.94): the generated code must reach the facade as
+# `::ann_multi`.
 [package]
 name = "announce-test-renamed-multiline"
 version = "0.0.0"

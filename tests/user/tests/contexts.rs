@@ -165,7 +165,7 @@ fn a_lifetime_that_the_item_binds() {
 
 #[test]
 fn bare_sized_and_maybe_sized_are_carried() {
-    // ALGORITHM_FINDINGS #12.
+    // `Sized` and `?Sized` need no prelude option.
     use bare_sized::BareSized as _;
     assert_eq!(X.len_of("abc"), LocalG(3));
     assert_eq!(X.len_of(&[1u8, 2][..]), LocalG(2));

@@ -1,5 +1,5 @@
 //! Items above `SINGLE_COPY_THRESHOLD` tokens: their trampoline holds the item
-//! once (`Layout::Single`, DESIGN.md section 4.1). Each one is well over 300
+//! once (`Layout::Single`). Each one is well over 300
 //! tokens; `tests/user/tests/large.rs` runs them through every route and
 //! `tests/ui/tests/ui/large_errors.rs` pins the errors only that layout has.
 

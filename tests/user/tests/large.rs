@@ -1,4 +1,4 @@
-//! The single-copy layout (DESIGN.md section 4.1): the definitions in
+//! The single-copy layout: the definitions in
 //! `announce_test_defs::large` and `large_leak` are above the size threshold,
 //! so their trampolines hold the item once and take three expansions per call
 //! (two through the derive route). Everything a caller sees is the same as with
@@ -116,11 +116,11 @@ fn a_chain_of_thirty_definitions_fits_the_default_recursion_limit() {
     assert_eq!(long_chain::ALL[29].0, "Shape");
 }
 
-// The limits in DESIGN.md section 4.1, measured to the entry: at the default
+// The limits of the layouts, measured to the entry: at the default
 // recursion limit (128) a chain holds exactly 127 small definitions (one
 // expansion each, the callback is the 128th), 63 small definitions with `$` (two
 // each) and 42 large ones (three each); one more of any kind is an error
-// ("recursion limit reached", ALGORITHM_FINDINGS #9).
+// ("recursion limit reached").
 mod at_the_limit {
     use super::summary;
     pub mod large {
