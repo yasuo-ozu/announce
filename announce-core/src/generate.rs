@@ -57,13 +57,21 @@ fn escape_dollar(ts: TokenStream, found: &mut bool) -> TokenStream {
 
 /// Rewrites path-leading `crate::` as `$crate::`, so paths in the payload
 /// and META keep referring to the defining crate when the macro is expanded
-/// in another crate. `crate` in `pub(crate)` and after `in` (`pub(in
-/// crate::m)`) is left alone. Run after `escape_dollar`, so the inserted `$`
-/// is not escaped.
+/// in another crate. `crate` in `pub(crate)` and in `pub(in crate::m)` is left
+/// alone: there it is the visibility's own syntax, which takes no `$crate`.
+/// That is the `in` that opens the parentheses after `pub`; any other `in`
+/// (`for x in crate::ARR {}`) is followed by an ordinary path, which is
+/// rewritten. Run after `escape_dollar`, so the inserted `$` is not escaped.
 fn crate_to_dollar_crate(ts: TokenStream) -> TokenStream {
+    rewrite_crate(ts, false)
+}
+
+/// `in_pub_paren`: `ts` is the inside of the parentheses that follow `pub`.
+fn rewrite_crate(ts: TokenStream, in_pub_paren: bool) -> TokenStream {
     let tts: Vec<TokenTree> = ts.into_iter().collect();
     let mut out = Vec::with_capacity(tts.len());
     for (i, tt) in tts.iter().enumerate() {
+        let prev = i.checked_sub(1).and_then(|j| tts.get(j));
         match tt {
             TokenTree::Ident(id) if id == "crate" => {
                 let next_is_path = matches!(
@@ -71,11 +79,14 @@ fn crate_to_dollar_crate(ts: TokenStream) -> TokenStream {
                     (Some(TokenTree::Punct(a)), Some(TokenTree::Punct(b)))
                         if a.as_char() == ':' && a.spacing() == proc_macro2::Spacing::Joint && b.as_char() == ':'
                 );
-                let prev = i.checked_sub(1).and_then(|j| tts.get(j));
                 let prev2 = i.checked_sub(2).and_then(|j| tts.get(j));
                 let after_in_or_sep = match prev {
-                    // `pub(in crate::m)`, and an escaped `$crate` (`$ __dollar crate`, AUDIT #2)
-                    Some(TokenTree::Ident(p)) => p == "in" || p == "__dollar",
+                    // `pub(in crate::m)`: the `in` is the first token inside the
+                    // parentheses of `pub`. And an escaped `$crate` (`$ __dollar
+                    // crate`, AUDIT #2).
+                    Some(TokenTree::Ident(p)) => {
+                        (p == "in" && in_pub_paren && i == 1) || p == "__dollar"
+                    }
                     // `a::crate` (a path separator), but not `x: crate::T` (AUDIT #1)
                     Some(TokenTree::Punct(p)) if p.as_char() == ':' => matches!(
                         prev2,
@@ -92,7 +103,9 @@ fn crate_to_dollar_crate(ts: TokenStream) -> TokenStream {
                 out.push(tt.clone());
             }
             TokenTree::Group(g) => {
-                let mut ng = Group::new(g.delimiter(), crate_to_dollar_crate(g.stream()));
+                let after_pub = matches!(prev, Some(TokenTree::Ident(p)) if p == "pub");
+                let pub_paren = after_pub && g.delimiter() == proc_macro2::Delimiter::Parenthesis;
+                let mut ng = Group::new(g.delimiter(), rewrite_crate(g.stream(), pub_paren));
                 ng.set_span(g.span());
                 out.push(TokenTree::Group(ng));
             }
@@ -112,6 +125,25 @@ fn strip_true_cfgs(mut item: Item) -> Result<(Item, TokenStream)> {
     announce_helper::remove_attributes(&mut item, |a| a.path().is_ident("cfg"))?;
     let tokens = item.to_token_stream();
     Ok((item, tokens))
+}
+
+/// A string doc attribute: `#[doc = ".."]`, which is what `///`, `//!`, `/** */`
+/// and an explicit `#[doc = ".."]` all are, also `#[doc = include_str!(..)]`.
+/// The list forms (`#[doc(hidden)]`, `#[doc(alias = "x")]`, `#[doc(inline)]`,
+/// `#[doc(cfg(..))]`, ..) are not: they steer rustdoc, not the reader.
+fn is_doc_string(a: &syn::Attribute) -> bool {
+    a.path().is_ident("doc") && matches!(a.meta, syn::Meta::NameValue(_))
+}
+
+/// The item without its string doc attributes (see [`is_doc_string`]), at any
+/// depth that syn parses: the item, its fields, variants, generic parameters,
+/// trait items, and everything inside an inline `mod`, inner attributes
+/// included. Not inside macro invocations and `macro_rules!` bodies, like
+/// `strip_true_cfgs`. Run it after the cfgs are evaluated, so a
+/// `#[cfg_attr(.., doc = ..)]` is a plain `#[doc = ..]` by then.
+fn strip_docs(mut item: Item) -> Result<TokenStream> {
+    announce_helper::remove_attributes(&mut item, is_doc_string)?;
+    Ok(item.to_token_stream())
 }
 
 /// Conservative test for "`dyn Trait` is certainly a valid type", so that the
@@ -548,6 +580,11 @@ pub fn real_item_on_error(item: Item, opts: &Options, owned: &OwnedAttrs) -> Tok
 /// them. The copies that rustc compiles lose them: the real item (which this
 /// emits, instead of `#[announce]`, whenever there is anything to remove) and
 /// the hidden copy of a `mock`.
+///
+/// The payload and the checks also lose the string doc attributes
+/// ([`strip_docs`]), unless `opts.docs` is set; they get the same item. The
+/// copies that rustc compiles keep their docs, so rustdoc shows what the
+/// author wrote.
 pub fn generate(
     item: Item,
     opts: &Options,
@@ -560,7 +597,15 @@ pub fn generate(
 
     let (item, full_item) = strip_true_cfgs(item)?;
 
-    // What the compiler sees: without the owned attributes.
+    // What callbacks and checks get: the same item, without its docs unless
+    // `docs = true` (a smaller trampoline). Taken after the cfgs are evaluated.
+    let payload = if opts.docs {
+        full_item.clone()
+    } else {
+        strip_docs(item.clone())?
+    };
+
+    // What the compiler sees: without the owned attributes, with the docs.
     let compiled = if owned.is_empty() {
         full_item.clone()
     } else {
@@ -571,7 +616,7 @@ pub fn generate(
     let checks = opts.checks.iter().map(|c| {
         let p = &c.path;
         let a = c.args.clone().unwrap_or_default();
-        quote! { #p! { (#a), #full_item } }
+        quote! { #p! { (#a), #payload } }
     });
     let mock_copy = opts.mock.as_ref().map(|_| {
         let m = Ident::new(&format!("__announce_mock_{}", h), Span::call_site());
@@ -585,7 +630,7 @@ pub fn generate(
             }
         }
     });
-    let marker = marker_impl(&syn::parse2(full_item.clone())?, opts, &krate);
+    let marker = marker_impl(&item, opts, &krate);
 
     // DESIGN.md §4.5: `repeater` is required when the item has types that do
     // not resolve outside this crate.
@@ -599,7 +644,7 @@ pub fn generate(
         opts,
         owned,
         random,
-        full_item.clone(),
+        payload.clone(),
         leak_meta,
     );
 
@@ -733,6 +778,36 @@ mod tests {
         // A bare `crate` that is not followed by `::`.
         assert_eq!(dc(quote! { use crate; }), "usecrate;");
         assert_eq!(dc(quote! { a.crate }), "a.crate");
+        // Also inside other groups: a field, a module body.
+        assert_eq!(
+            dc(quote! { struct S(pub(in crate::m) u8, crate::T); }),
+            "structS(pub(incrate::m)u8,$crate::T);"
+        );
+        assert_eq!(
+            dc(quote! { mod m { pub(in crate::a::b) fn f(x: crate::T) {} } }),
+            "modm{pub(incrate::a::b)fnf(x:$crate::T){}}"
+        );
+    }
+
+    #[test]
+    fn crate_after_an_ordinary_in_is_rewritten() {
+        // ALGORITHM_FINDINGS #8: only the `in` of `pub(in ..)` is the visibility's.
+        assert_eq!(dc(quote! { for x in crate::ARR {} }), "forxin$crate::ARR{}");
+        assert_eq!(
+            dc(quote! { const C: u8 = { let mut s = 0; for x in crate::ARR { s += x; } s }; }),
+            "constC:u8={letmuts=0;forxin$crate::ARR{s+=x;}s};"
+        );
+        // `in` inside parentheses that do not follow `pub`.
+        assert_eq!(dc(quote! { f(in crate::x) }), "f(in$crate::x)");
+        assert_eq!(dc(quote! { not_pub(in crate::x) }), "not_pub(in$crate::x)");
+        // `pub in crate::x` without the parentheses is not a visibility.
+        assert_eq!(dc(quote! { pub in crate::x }), "pubin$crate::x");
+        // Next to a visibility.
+        assert_eq!(
+            dc(quote! { pub(in crate::m) fn f() { for x in crate::ARR {} } }),
+            "pub(incrate::m)fnf(){forxin$crate::ARR{}}"
+        );
+        assert_eq!(dc(quote! { pub(in a in crate::m) }), "pub(inain$crate::m)");
     }
 
     #[test]
@@ -973,7 +1048,26 @@ mod tests {
             out
         );
         // The payload and the check have them (once each: the macro holds one copy per
-        // arm of the layout, so count the check's).
+        // arm of the layout, so count the check's), but not the doc: both lose it.
+        assert!(
+            out.contains("c::check!{(x),#[my_lib(item)]pubstructS{#[my_lib(skip)]puba:u8,#[other]"),
+            "{}",
+            out
+        );
+        assert!(
+            out.contains(
+                "=>[c::check(x),attrs(my_lib)]{#[my_lib(item)]pubstructS{#[my_lib(skip)]puba:u8"
+            ),
+            "{}",
+            out
+        );
+        assert_eq!(out.matches("#[doc=\"kept\"]").count(), 1, "{}", out);
+        // `docs = true` keeps it in the payload and the check as well.
+        let out = generate_for(
+            "crate = ::l::announce, docs = true, c::check(x)",
+            &["my_lib"],
+            item.clone(),
+        );
         assert!(
             out.contains(
                 "c::check!{(x),#[my_lib(item)]pubstructS{#[my_lib(skip)]#[doc=\"kept\"]puba:u8"
@@ -982,7 +1076,7 @@ mod tests {
             out
         );
         assert!(
-            out.contains("=>[c::check(x),attrs(my_lib)]{#[my_lib(item)]pubstructS{#[my_lib(skip)]"),
+            out.contains("=>[c::check(x),attrs(my_lib)]{#[my_lib(item)]pubstructS{#[my_lib(skip)]#[doc=\"kept\"]"),
             "{}",
             out
         );
@@ -1053,6 +1147,119 @@ mod tests {
             ..Options::default()
         };
         assert!(real_item_on_error(item2, &no_emit, &owned).is_empty());
+    }
+
+    #[test]
+    fn string_docs_are_stripped_everywhere_but_in_macro_bodies() {
+        let item: Item = syn::parse2(quote! {
+            /// DOCMARK item
+            #[doc = "DOCMARK explicit"]
+            #[doc(hidden)]
+            #[doc(alias = "other")]
+            pub mod m {
+                //! DOCMARK inner
+                #![doc = "DOCMARK inner explicit"]
+                #![doc(html_no_source)]
+                /** DOCMARK block */
+                pub struct S<#[doc = "DOCMARK generic"] T> {
+                    /// DOCMARK field
+                    pub x: T,
+                }
+                pub enum E {
+                    /// DOCMARK variant
+                    A(#[doc = "DOCMARK tuple field"] u8),
+                }
+                pub trait Tr {
+                    /// DOCMARK method
+                    #[doc(inline)]
+                    fn f(&self) {
+                        /// DOCMARK statement
+                        let _ = 0;
+                    }
+                    /// DOCMARK assoc
+                    type A;
+                }
+                macro_rules! k { () => { #[doc = "in a macro"] }; }
+                k!(#[doc = "in a call"] x);
+            }
+        })
+        .unwrap();
+        let out = squash(strip_docs(item).unwrap());
+        assert!(
+            !out.contains("on a") && !out.contains("DOCMARK explicit"),
+            "{}",
+            out
+        );
+        assert!(
+            !out.contains("inner doc") && !out.contains("block doc"),
+            "{}",
+            out
+        );
+        assert!(!out.contains("__announce_removed_attribute"), "{}", out);
+        // Non-string `doc(..)` attributes stay, also the inner one.
+        assert!(
+            out.contains("#[doc(hidden)]#[doc(alias=\"other\")]pubmodm{#![doc(html_no_source)]"),
+            "{}",
+            out
+        );
+        assert!(out.contains("#[doc(inline)]fnf(&self)"), "{}", out);
+        // Macro bodies are opaque.
+        assert!(
+            out.contains("macro_rules!k{()=>{#[doc=\"inamacro\"]};}k!(#[doc=\"inacall\"]x);"),
+            "{}",
+            out
+        );
+        // Nothing to strip: unchanged.
+        let item: Item = syn::parse2(quote! { #[doc(hidden)] pub struct S; }).unwrap();
+        assert_eq!(
+            squash(strip_docs(item).unwrap()),
+            "#[doc(hidden)]pubstructS;"
+        );
+    }
+
+    #[test]
+    fn docs_are_stripped_from_the_payload_and_the_checks_not_from_the_compiled_copy() {
+        let item = quote! {
+            /// the item
+            #[my_lib(item)]
+            pub struct S {
+                /// a field
+                pub a: u8,
+            }
+        };
+        // A mock: the hidden copy that rustc compiles keeps its docs, the
+        // payload and the check do not.
+        let out = generate_for(
+            "crate = ::l::announce, mock = a::S, c::check",
+            &[],
+            item.clone(),
+        );
+        let copy = out.split("usesuper::*;").nth(1).unwrap();
+        assert!(
+            copy.starts_with(
+                "#[doc=\"theitem\"]#[my_lib(item)]pubstructS{#[doc=\"afield\"]puba:u8,}}"
+            ),
+            "{}",
+            copy
+        );
+        assert!(
+            out.contains("c::check!{(),#[my_lib(item)]pubstructS{puba:u8,}}"),
+            "{}",
+            out
+        );
+        assert!(
+            out.contains("=>[c::check,mock(a::S)]{#[my_lib(item)]pubstructS{puba:u8,}}"),
+            "{}",
+            out
+        );
+        assert_eq!(out.matches("theitem").count(), 1, "{}", out);
+        // `docs = true`: the payload has them too.
+        let out = generate_for("crate = ::l::announce, mock = a::S, docs = true", &[], item);
+        assert!(
+            out.contains("=>[mock(a::S)]{#[doc=\"theitem\"]#[my_lib(item)]pubstructS{#[doc=\"afield\"]puba:u8,}}"),
+            "{}",
+            out
+        );
     }
 
     #[test]

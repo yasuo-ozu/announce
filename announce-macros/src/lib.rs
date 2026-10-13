@@ -31,8 +31,9 @@ use proc_macro::TokenStream;
 ///
 /// `META` is the list of what the definer attached: checks, `meta` entries and
 /// so on. It is empty without options. In the item, `#[cfg]` is already
-/// evaluated in the defining crate and `crate::` reads `$crate::`. The
-/// `announce` crate docs show how to chain several definitions into one callback.
+/// evaluated in the defining crate, `crate::` reads `$crate::`, and the doc
+/// attributes are gone (see [Docs](#docs)). The `announce` crate docs show how
+/// to chain several definitions into one callback.
 ///
 /// # Options
 ///
@@ -64,6 +65,9 @@ use proc_macro::TokenStream;
 ///   Default: `true`.
 /// - `layout = auto | single | direct` (advanced): how the macro holds the item.
 ///   See [Size and recursion](#size-and-recursion). Default: `auto`.
+/// - `docs = bool`: with `true`, the item that callbacks and checks receive keeps
+///   its doc attributes. Default: `false`, they are removed from it
+///   (the emitted item keeps them). See [Docs](#docs).
 ///
 /// ```ignore
 /// #[announce(macro_name = ParseAnnounce, meta = my_lib::info(version = 1))]
@@ -167,6 +171,51 @@ use proc_macro::TokenStream;
 /// query, so the checks run, can validate the attributes and `META` lists
 /// `attrs(..)`, but the item keeps them. A callback that re-emits it elsewhere
 /// strips them with `Entry::item_without_owned_attrs`.
+///
+/// # Docs
+///
+/// Documentation is for readers of the definition, and callbacks that use the
+/// tokens do not need it, so by default **the item that callbacks and checks
+/// receive has no doc attributes**. The item that is emitted keeps all of them:
+/// rustdoc shows the definition as you wrote it, and `#![deny(missing_docs)]`
+/// still passes. Dropping them also makes the trampoline smaller, which is part
+/// of the defining crate's metadata (an item with a few lines of documentation
+/// on each method is about a sixth smaller).
+///
+/// - Removed: every `#[doc = ..]` attribute, which is what `///`, `//!`,
+///   `/** .. */` and an explicit `#[doc = "text"]` all are, also
+///   `#[doc = include_str!(..)]`. It is removed wherever syn parses attributes
+///   inside the item: the item, its fields, variants, generic parameters,
+///   trait items, function parameters and statements, and everything inside an
+///   inline `mod`, with its inner attributes (`//!`, `#![doc = ..]`). Not inside
+///   macro invocations and `macro_rules!` bodies, which are only tokens.
+/// - Kept: the list forms `#[doc(hidden)]`, `#[doc(alias = "x")]`,
+///   `#[doc(inline)]`, `#[doc(cfg(..))]` and the like. They steer rustdoc
+///   (what is shown, found or inlined), they are not text, and a callback that
+///   re-emits the item may want them.
+/// - This is done after `#[cfg]` and `#[cfg_attr]` are evaluated in the
+///   defining crate, so `#[cfg_attr(feature = "x", doc = "..")]` goes whether
+///   or not the feature is on, and `#[cfg_attr(feature = "x", doc(hidden))]`
+///   stays when it is.
+/// - **Checks** get exactly the same item as the payload (without docs, with
+///   the attributes they own), so one check sees what callbacks see.
+/// - `docs = true` keeps the doc attributes in the payload and in what checks
+///   get. The same option is valid in the `#[announce(..)]` helper attribute of
+///   `#[derive(Announce)]` and in `announce::machinery::Options::docs`.
+/// - With `mock`, the hidden copy that rustc compiles keeps its docs like any
+///   emitted item.
+///
+/// ```ignore
+/// /// Says hello.
+/// #[announce]                    // callbacks get `pub trait Greet { fn hi(&self); }`
+/// pub trait Greet {
+///     /// Says hi.
+///     fn hi(&self);
+/// }
+///
+/// #[announce(docs = true)]       // callbacks get the `#[doc = ".."]` attributes too
+/// pub struct Point { /** x */ pub x: i32 }
+/// ```
 ///
 /// # Size and recursion
 ///
@@ -326,9 +375,9 @@ use proc_macro::TokenStream;
 /// - **Trait paths**: supertraits, bounds in generics and `where` clauses, and
 ///   `impl` and `dyn` bounds must be absolute. `trait Sub: Base` is an error; write
 ///   `crate::Base`. `T: std::fmt::Display` is an error too; write
-///   `::core::fmt::Display`. Write `?Sized` as `?::core::marker::Sized`. With
-///   `allow_std_prelude = true`, bare prelude traits (`Clone`, `Send`, `?Sized`,
-///   ...) pass.
+///   `::core::fmt::Display`. `Sized` and `?Sized` may be written bare (`T:
+///   ?Sized`, `where Self: Sized`). With `allow_std_prelude = true`, the other
+///   bare prelude traits (`Clone`, `Send`, ...) pass.
 /// - **Value paths** in array lengths, enum discriminants, const generic arguments
 ///   and const defaults must be absolute (`crate::N`), start with `Self::`, or be a
 ///   const parameter. `[u8; N]` with a const parameter `N` is fine; `[u8; N]` with
@@ -434,7 +483,9 @@ pub fn define_repeater(input: TokenStream) -> TokenStream {
 /// Announces a struct, enum or union as written, and implements `Announce` for it.
 ///
 /// Options go in a helper attribute, `#[announce(..)]`. They are the options of
-/// the `#[announce]` attribute, except `mock` and `emit_item`.
+/// the `#[announce]` attribute, except `mock` and `emit_item`. Doc attributes
+/// are left out of the announced item unless the helper has `docs = true`
+/// (see "Docs" in the docs of the `#[announce]` attribute).
 ///
 /// ```ignore
 /// #[derive(announce::Announce)]

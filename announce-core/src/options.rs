@@ -81,6 +81,11 @@ pub struct Options {
     /// `layout = auto | single | direct`: how the trampoline holds the item.
     /// Default `auto`: by the size of the item (advanced, DESIGN.md section 4.1).
     pub layout: Layout,
+    /// `docs = true`: keep the doc attributes (`#[doc = ".."]`, so `///` and
+    /// `//!` too) in the item that callbacks and checks receive. Default
+    /// `false`: they are removed there, which makes the trampoline smaller.
+    /// The item that is compiled keeps its docs either way.
+    pub docs: bool,
     /// Set by `#[derive(Announce)]`: the item is emitted by the user and always
     /// gets the `Announce` impl. Not an option.
     pub(crate) derived: bool,
@@ -103,6 +108,7 @@ impl Default for Options {
             krate: None,
             emit_item: true,
             layout: Layout::Auto,
+            docs: false,
             derived: false,
             given: Vec::new(),
             checks: Vec::new(),
@@ -153,6 +159,9 @@ impl ToTokens for Options {
             Layout::Auto => {}
             Layout::Single => parts.push(quote! { layout = single }),
             Layout::Direct => parts.push(quote! { layout = direct }),
+        }
+        if self.docs {
+            parts.push(quote! { docs = true });
         }
         for m in &self.metas {
             parts.push(quote! { meta = #m });
@@ -222,6 +231,7 @@ impl Parse for Options {
                             }
                         };
                     }
+                    "docs" => opts.docs = input.parse::<LitBool>()?.value,
                     "allow_primitive" => opts.allow_primitive = input.parse::<LitBool>()?.value,
                     "allow_std_prelude" => opts.allow_std_prelude = input.parse::<LitBool>()?.value,
                     "meta" => {
@@ -239,7 +249,7 @@ impl Parse for Options {
                         return Err(Error::new(
                             key.span(),
                             "unknown announce option; expected one of `macro_name`, \
-                             `mock`, `repeater`, `allow_primitive`, `allow_std_prelude`, `crate`, `emit_item`, `meta` (a bare path is a check)",
+                             `mock`, `repeater`, `allow_primitive`, `allow_std_prelude`, `crate`, `emit_item`, `layout`, `docs`, `meta` (a bare path is a check)",
                         ))
                     }
                 }

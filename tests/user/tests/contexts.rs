@@ -25,9 +25,20 @@ reemit! {
     const_params = ConstParams;
     const_trait = ConstTrait;
     higher_ranked = HigherRanked;
+    bare_sized = BareSized;
+    bare_unsized = BareUnsized;
 }
 
 struct X;
+
+impl bare_sized::BareSized for X {
+    fn len_of<U: ?Sized + ::core::convert::AsRef<[u8]>>(&self, u: &U) -> LocalG<usize> {
+        LocalG(u.as_ref().len())
+    }
+    fn local() -> Local {
+        Local(3)
+    }
+}
 
 impl same_text::SameTextTwice for X {
     fn f<X2: Clone>(&self, x: X2) -> GC<X2> {
@@ -150,4 +161,16 @@ fn a_lifetime_that_the_item_binds() {
     }
     let h = higher_ranked::HigherRanked { f: show };
     assert_eq!((h.f)(Wrap(&9)), 9);
+}
+
+#[test]
+fn bare_sized_and_maybe_sized_are_carried() {
+    // ALGORITHM_FINDINGS #12.
+    use bare_sized::BareSized as _;
+    assert_eq!(X.len_of("abc"), LocalG(3));
+    assert_eq!(X.len_of(&[1u8, 2][..]), LocalG(2));
+    assert_eq!(<X as bare_sized::BareSized>::local(), Local(3));
+    let u: bare_unsized::BareUnsized<[u8]> =
+        bare_unsized::BareUnsized(Box::new([1u8, 2]), Local(1));
+    assert_eq!(u.0.len(), 2);
 }

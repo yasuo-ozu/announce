@@ -284,9 +284,10 @@ mod tests {
         let err = TypeLeak::from_kv(&mut old.kv().unwrap()).unwrap_err();
         assert!(err.to_string().contains("older `announce`"), "{}", err);
 
-        let bad: crate::Meta = syn::parse_str(
-            "type_leak(repeater = ::my::R, id = 7u64, context = 9, referrer = [\"type-leak-format-8\" (Local)])",
-        )
+        let bad: crate::Meta = syn::parse_str(&format!(
+            "type_leak(repeater = ::my::R, id = 7u64, context = 9, referrer = [\"type-leak-format-{}\" (Local)])",
+            type_leak::Referrer::FORMAT_VERSION
+        ))
         .unwrap();
         let err = TypeLeak::from_kv(&mut bad.kv().unwrap()).unwrap_err();
         assert!(err.to_string().contains("context 9"), "{}", err);

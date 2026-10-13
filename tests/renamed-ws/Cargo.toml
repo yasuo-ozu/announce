@@ -10,6 +10,10 @@ rust-version = "1.64"
 publish = false
 
 [workspace]
+# `dotted` and `multiline`: renames in other spellings (dotted keys, an inline
+# table over several lines) that the scanner of `announce-core` has to read.
+members = ["dotted", "multiline"]
+default-members = [".", "dotted", "multiline"]
 
 [workspace.dependencies]
 ann-ws = { package = "announce", path = "../..", version = "0.1.0" }

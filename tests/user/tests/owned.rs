@@ -154,7 +154,15 @@ mod fields {
 fn the_payload_keeps_the_attributes_and_meta_lists_them() {
     let out = norm(fields::OUT);
     assert!(
-        out.starts_with("d::Fields!=>[announce_test_derive::record_attrs,attrs(my_lib)]{#[doc="),
+        out.starts_with(
+            "d::Fields!=>[announce_test_derive::record_attrs,attrs(my_lib)]{#[derive(Clone,Debug,PartialEq)]"
+        ),
+        "{}",
+        out
+    );
+    // The docs (on the item and on `c`) are not in the payload.
+    assert!(
+        !out.contains("#[doc=") && !out.contains("documentedfield"),
         "{}",
         out
     );

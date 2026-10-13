@@ -217,6 +217,19 @@ impl FromIterator<Cont> for ContList {
     }
 }
 
+/// Whether a global options group (the tokens inside `( .. )` before the
+/// continuation list) puts the chain in expression position: its **first**
+/// token is the identifier `expr`, as in `(expr)` or `(expr, other)`. That is
+/// the rule of the generated trampolines (the `(expr $($rest:tt)*)` pattern of
+/// their error arm), so `(other, expr)` does not select it in either. Every
+/// other option is a namespace for helpers, forwarded unchanged.
+pub fn is_expression_position(options: &TokenStream) -> bool {
+    matches!(
+        options.clone().into_iter().next(),
+        Some(proc_macro2::TokenTree::Ident(i)) if i == "expr"
+    )
+}
+
 impl ContList {
     /// Gives every attribute continuation a random dummy name, so two
     /// trampolines in one module never collide.
@@ -236,17 +249,15 @@ impl ContList {
     }
 
     /// Like [`invoke`](Self::invoke), with a global options group `(options) [..] ..`.
+    /// A derive or attribute head is refused (`compile_error!`) when the group
+    /// starts with `expr` ([`is_expression_position`]).
     pub fn invoke_with_options(
         &self,
         options: Option<&TokenStream>,
         body: TokenStream,
     ) -> TokenStream {
         let opts = options.map(|o| quote! { ( #o ) });
-        let in_expr = options.map_or(false, |o| {
-            o.clone()
-                .into_iter()
-                .any(|tt| matches!(tt, proc_macro2::TokenTree::Ident(i) if i == "expr"))
-        });
+        let in_expr = options.map_or(false, is_expression_position);
         let mut list = self.clone();
         list.name_dummies();
         match list.0.first() {
@@ -418,8 +429,10 @@ impl ToTokens for Entry {
 /// What a callback receives: `(OPTIONS)? [list] ENTRY* REST`.
 #[derive(Clone, Debug)]
 pub struct Input {
-    /// The global options group `(..)`. [`forward`](Self::forward),
-    /// [`fetch`](Self::fetch) and [`gather`](Self::gather) pass it on unchanged.
+    /// The global options group `(..)`. [`forward`](Self::forward) passes it on
+    /// unchanged; [`fetch`](Self::fetch) and [`gather`](Self::gather) add
+    /// `__announce_fetched(..)` to it (what they fetched, to detect a
+    /// continuation that is not a trampoline) and pass the rest on.
     pub options: Option<TokenStream>,
     /// The continuation list; its head is the callback itself.
     pub list: ContList,
@@ -500,10 +513,48 @@ impl Input {
     /// Fetches more definitions, then calls this callback again. It invokes
     /// `new[0]` with the list `[new.., <this list>]`; the new entries arrive in
     /// front of the old ones.
+    ///
+    /// The paths are recorded in the options group (`__announce_fetched(..)`),
+    /// as [`gather`](Self::gather) does. If this callback is called again with a
+    /// path in that record but no entry for it, the path is not an `#[announce]`
+    /// trampoline (it returned nothing it was asked for), and `fetch` emits a
+    /// `compile_error!` saying so instead of fetching until the recursion limit.
+    /// A callback that fetches conditionally (only what is still missing, as
+    /// `gather` does) never meets that error for a trampoline.
     pub fn fetch(&self, new: impl IntoIterator<Item = Cont>) -> TokenStream {
+        self.fetch_conts(new.into_iter().collect())
+    }
+
+    /// The bookkeeping of [`fetch`](Self::fetch) and [`gather`](Self::gather):
+    /// refuses a continuation that was fetched before and left no entry,
+    /// records the new ones in the options group, and invokes `[new.., <list>]`.
+    fn fetch_conts(&self, new: Vec<Cont>) -> TokenStream {
+        // Already fetched once, but no entry came back: not a trampoline
+        // (AUDIT 3 #9). The bookkeeping travels in the options group.
+        let fetched = self.fetched_paths();
+        if let Some(c) = new
+            .iter()
+            .find(|c| fetched.contains(&path_key(&c.path())) && self.entry_for(c).is_none())
+        {
+            let msg = format!(
+                "announce: `{}` was fetched but did not provide a definition; is it an `#[announce]` trampoline?",
+                c.to_token_stream()
+            );
+            return quote! { compile_error! { #msg } };
+        }
+        let mut options: Vec<TokenStream> = self.option_items();
+        if !new.is_empty() {
+            let paths = new.iter().map(|c| c.path());
+            options.push(quote! { __announce_fetched(#(#paths),*) });
+        }
+        let opts = if options.is_empty() {
+            None
+        } else {
+            Some(quote! { #(#options),* })
+        };
         let list: ContList = new.into_iter().chain(self.list.0.iter().cloned()).collect();
         let (entries, rest) = (&self.entries, &self.rest);
-        list.invoke_with_options(self.options.as_ref(), quote! { #(#entries)* #rest })
+        list.invoke_with_options(opts.as_ref(), quote! { #(#entries)* #rest })
     }
 
     /// Whether the global options group contains the ident `name`.
@@ -612,29 +663,7 @@ impl Input {
                     .collect(),
             );
         }
-        // Already fetched once, but no entry came back: not a trampoline
-        // (AUDIT 3 #9). The bookkeeping travels in the options group.
-        let fetched = self.fetched_paths();
-        if let Some(c) = missing
-            .iter()
-            .find(|c| fetched.contains(&path_key(&c.path())))
-        {
-            let msg = format!(
-                "announce: `{}` was fetched but did not provide a definition; is it an `#[announce]` trampoline?",
-                c.to_token_stream()
-            );
-            return Gather::Fetch(quote! { compile_error! { #msg } });
-        }
-        let mut options: Vec<TokenStream> = self.option_items();
-        let paths = missing.iter().map(|c| c.path());
-        options.push(quote! { __announce_fetched(#(#paths),*) });
-        let list: ContList = missing
-            .into_iter()
-            .chain(self.list.0.iter().cloned())
-            .collect();
-        let (entries, rest) = (&self.entries, &self.rest);
-        let opts = quote! { #(#options),* };
-        Gather::Fetch(list.invoke_with_options(Some(&opts), quote! { #(#entries)* #rest }))
+        Gather::Fetch(self.fetch_conts(missing))
     }
 
     /// Continues the chain: drops the head and invokes the next element. `None`
@@ -994,8 +1023,86 @@ mod tests {
     fn fetch_prepends_and_returns() {
         let input: Input = syn::parse_quote! { [me!, next!] a::F! => [] { struct S; } (rest) };
         let out = s(input.fetch([Cont::bang(syn::parse_quote!(g::G))]));
-        assert_eq!(out, "g::G!{[g::G!,me!,next!]a::F!=>[]{structS;}(rest)}");
+        // The fetch is recorded in the options group (ALGORITHM_FINDINGS #13).
+        assert_eq!(
+            out,
+            "g::G!{(__announce_fetched(g::G))[g::G!,me!,next!]a::F!=>[]{structS;}(rest)}"
+        );
         assert_eq!(Cont::bang(syn::parse_quote!(a::F)), input.entries[0].key);
+        // Nothing to fetch: nothing to record.
+        let out = s(input.fetch([]));
+        assert_eq!(out, "me!{[me!,next!]a::F!=>[]{structS;}(rest)}");
+    }
+
+    #[test]
+    fn fetch_of_a_path_that_left_no_entry_is_an_error() {
+        // ALGORITHM_FINDINGS #13: the bookkeeping of `gather`, shared. `g::G`
+        // was fetched, the callback is called again and has no entry for it.
+        // (`g::G` forwarded to `me` without adding an entry.)
+        let again: Input = syn::parse_quote! {
+            (__announce_fetched(g::G)) [me!] a::F! => [] { struct S; }
+        };
+        let out = s(again.fetch([Cont::bang(syn::parse_quote!(g::G))]));
+        assert_eq!(
+            out,
+            "compile_error!{\"announce:`g::G!`wasfetchedbutdidnotprovideadefinition;isitan`#[announce]`trampoline?\"}"
+        );
+        // The same message as `gather`.
+        let from_gather = match again.gather([Cont::bang(syn::parse_quote!(g::G))]) {
+            Gather::Fetch(ts) => s(ts),
+            Gather::Ready(_) => panic!(),
+        };
+        assert_eq!(out, from_gather);
+        // Generic arguments do not hide the path.
+        let out = s(again.fetch([Cont::bang(syn::parse_quote!(g::G<u8>))]));
+        assert!(out.contains("wasfetchedbutdidnotprovide"), "{}", out);
+        // A path that did answer (an entry is there) may be fetched again, and
+        // other paths are fetched as usual; the record grows.
+        let answered: Input = syn::parse_quote! {
+            (mine, __announce_fetched(g::G)) [me!] g::G! => [] { struct G; }
+        };
+        let out = s(answered.fetch([Cont::bang(syn::parse_quote!(g::G))]));
+        assert!(
+            out.starts_with("g::G!{(mine,__announce_fetched(g::G),__announce_fetched(g::G))"),
+            "{}",
+            out
+        );
+        let out = s(answered.fetch([Cont::bang(syn::parse_quote!(h::H))]));
+        assert!(
+            out.starts_with("h::H!{(mine,__announce_fetched(g::G),__announce_fetched(h::H))"),
+            "{}",
+            out
+        );
+        // One of several missing paths is enough for the error.
+        let out = s(again.fetch([
+            Cont::bang(syn::parse_quote!(h::H)),
+            Cont::bang(syn::parse_quote!(g::G)),
+        ]));
+        assert!(out.starts_with("compile_error!"), "{}", out);
+    }
+
+    #[test]
+    fn fetch_and_gather_share_the_record() {
+        let input: Input = syn::parse_quote! { [me!] };
+        // `gather` fetches `g::G` ...
+        let first = match input.gather([Cont::bang(syn::parse_quote!(g::G))]) {
+            Gather::Fetch(ts) => ts,
+            Gather::Ready(_) => panic!(),
+        };
+        assert_eq!(s(&first), "g::G!{(__announce_fetched(g::G))[g::G!,me!]}");
+        // ... and the callback, called again by a non-trampoline, fetches it
+        // raw: the error is the same whichever one is used.
+        let body: Input =
+            syn::parse2(template_quote::quote! { (__announce_fetched(g::G)) [me!] }).unwrap();
+        assert!(s(body.fetch([Cont::bang(syn::parse_quote!(g::G))]))
+            .contains("wasfetchedbutdidnotprovide"));
+        // And the other way round.
+        let raw = input.fetch([Cont::bang(syn::parse_quote!(g::G))]);
+        assert_eq!(s(&raw), "g::G!{(__announce_fetched(g::G))[g::G!,me!]}");
+        match body.gather([Cont::bang(syn::parse_quote!(g::G))]) {
+            Gather::Fetch(ts) => assert!(s(ts).contains("wasfetchedbutdidnotprovide")),
+            Gather::Ready(_) => panic!(),
+        }
     }
 
     #[test]
@@ -1182,7 +1289,7 @@ mod options_tests {
             .to_string()
             .replace(' ', "");
         assert!(
-            fetch.starts_with("g::G!{(type_leak)[g::G!,me!,next!]"),
+            fetch.starts_with("g::G!{(type_leak,__announce_fetched(g::G))[g::G!,me!,next!]"),
             "{}",
             fetch
         );
@@ -1599,13 +1706,44 @@ mod gap_tests {
         assert!(out.starts_with("compile_error!{"), "{}", out);
         assert!(out.contains("cannotbeusedwith`(expr)`"), "{}", out);
         assert!(!out.contains("__AnnouncePayload"), "{}", out);
-        // The same with `expr` leading other options. (Only a *leading* `expr` is
-        // the position option for the generated trampolines; this helper looks
-        // for `expr` anywhere. That difference is AUDIT Part 4 #11, not decided
-        // here, so no test pins how a later `expr` is read.)
+        // The same with `expr` leading other options.
         let opts = template_quote::quote!(expr, type_leak);
         let out = s(list.invoke_with_options(Some(&opts), TokenStream::new()));
         assert!(out.contains("cannotbeusedwith`(expr)`"), "{}", out);
+    }
+
+    #[test]
+    fn only_a_leading_expr_selects_expression_position() {
+        // ALGORITHM_FINDINGS #11: the rule of the trampolines, shared.
+        let yes = |ts: TokenStream| is_expression_position(&ts);
+        assert!(yes(template_quote::quote!(expr)));
+        assert!(yes(template_quote::quote!(expr, type_leak)));
+        assert!(yes(template_quote::quote!(expr __announce_fetched(a))));
+        assert!(!yes(template_quote::quote!(type_leak, expr)));
+        assert!(!yes(template_quote::quote!(__announce_fetched(expr))));
+        assert!(!yes(template_quote::quote!((expr))));
+        assert!(!yes(template_quote::quote!(expression)));
+        assert!(!yes(TokenStream::new()));
+        // A derive continuation is refused only for a leading `expr`; with `expr`
+        // later the options are a namespace, and the dummy enum is emitted.
+        let list: ContList = [
+            Cont::derive(syn::parse_quote!(p::D)),
+            Cont::bang(syn::parse_quote!(cb)),
+        ]
+        .into_iter()
+        .collect();
+        let opts = template_quote::quote!(type_leak, expr);
+        let out = s(list.invoke_with_options(Some(&opts), template_quote::quote!(body)));
+        assert!(out.contains("__AnnouncePayload"), "{}", out);
+        assert!(!out.contains("cannotbeusedwith"), "{}", out);
+        let opts = template_quote::quote!(__announce_fetched(expr));
+        let out = s(list.invoke_with_options(Some(&opts), template_quote::quote!(body)));
+        assert!(out.contains("__AnnouncePayload"), "{}", out);
+        // A bang head forwards the group as it is, whatever it holds.
+        let bang: ContList = [Cont::bang(syn::parse_quote!(p::cb))].into_iter().collect();
+        let opts = template_quote::quote!(type_leak, expr);
+        let out = s(bang.invoke_with_options(Some(&opts), template_quote::quote!(body)));
+        assert_eq!(out, "p::cb!{(type_leak,expr)[p::cb!]body}");
     }
 
     #[test]

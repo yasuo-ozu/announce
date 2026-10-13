@@ -36,8 +36,9 @@ show! {
 
 `META` lists what the definer attached (checks, `meta` entries). It is empty
 without options. In the item, `#[cfg]` is already evaluated in the defining crate
-and `crate::` reads `$crate::`. Callers and callbacks need no dependency on
-announce.
+and `crate::` reads `$crate::`. Doc attributes (`///`, `//!`, `#[doc = ".."]`) are
+removed from it, and the emitted item keeps them (`docs = true` keeps them in
+the callback's item too). Callers and callbacks need no dependency on announce.
 
 For a struct, enum or union you write yourself, derive it instead. The derive
 also implements the [`Announce`](https://docs.rs/announce/latest/announce/trait.Announce.html)
@@ -92,6 +93,8 @@ chain holds up to 127 small or 42 large definitions. For a longer one, set
 - Works in any position: item, statement, expression, type, pattern, also for
   items containing `$`. The derive and attribute route works in item position only.
 - Evaluates `#[cfg]` in the defining crate. `crate::` paths keep pointing there.
+- Leaves docs out of the recorded item (`docs = true` keeps them): a smaller
+  trampoline, and `#[doc(hidden)]`-style `doc(..)` attributes stay.
 - Checks at the definition: `#[announce(my_lib::no_tuple_structs)]`. A check can
   own attributes of its own inside the item (below).
 - Metadata for consumers: `#[announce(meta = my_lib::info(k = v))]`.
@@ -203,6 +206,10 @@ plain or K separate calls. Both axes are logarithmic. Made with
   A calling crate's `.rlib` stays 2.4 KiB. Its `.rmeta` does not depend on S and
   grows by about 0.1 KiB per definition in one chain (0.2 for a large one) and
   about 0.5 KiB per separate call (0.6).
+- The benchmark traits have no documentation. Doc attributes are not recorded, so
+  documented items cost less than their size suggests: a trait of 40 methods with
+  five lines of docs each has a 36.8 KiB `.rmeta` (44.7 KiB with `docs = true`),
+  and one of 5 methods 14.1 KiB (17.4 KiB).
 - An executable that uses both crates has the same size at every point
   measured (8,658 KiB in the dev profile, 356 KiB stripped; an empty program
   is 4,495 and 331 KiB): the trampolines do not reach it.

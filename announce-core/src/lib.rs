@@ -38,7 +38,9 @@ fn random_u64() -> u64 {
 /// (`macro_name = Name, my_lib::check`), and `item` the item the attribute is
 /// on. The result replaces the item. It keeps the item as written (unless
 /// `emit_item = false` or `mock`) and adds the code that emits the
-/// trampoline `macro_rules!` and the other generated items.
+/// trampoline `macro_rules!` and the other generated items. The item that the
+/// trampoline holds, and the checks get, has its `#[doc = ..]` attributes
+/// removed unless `docs = true`; the emitted item keeps them.
 ///
 /// With checks (`my_lib::check`) the result is not the item yet: it is the
 /// call of the first check, with the query that asks every check which
@@ -345,7 +347,8 @@ mod tests {
     fn options_round_trip() {
         let src = "crate = ::l::announce, macro_name = N, mock = a::B, repeater = crate::R, \
                    allow_primitive = false, allow_std_prelude = true, emit_item = false, \
-                   layout = single, meta = m::info(1, 2), meta = m::bare, c::check(x), c::bare";
+                   layout = single, docs = true, meta = m::info(1, 2), meta = m::bare, \
+                   c::check(x), c::bare";
         let opts: Options = syn::parse2(ts(src)).unwrap();
         let printed = opts.to_token_stream();
         let again: Options = syn::parse2(printed.clone()).unwrap();
@@ -353,7 +356,7 @@ mod tests {
         assert_eq!(
             norm(&printed),
             "crate=::l::announce,macro_name=N,mock=a::B,repeater=crate::R,\
-             allow_primitive=false,allow_std_prelude=true,emit_item=false,layout=single,\
+             allow_primitive=false,allow_std_prelude=true,emit_item=false,layout=single,docs=true,\
              meta=m::info(1,2),meta=m::bare,c::check(x),c::bare"
         );
         for (src, want) in [("layout = auto", ""), ("layout = direct", "layout=direct")] {

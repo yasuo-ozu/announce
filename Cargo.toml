@@ -19,7 +19,7 @@ announce-macros = { path = "announce-macros", version = "0.1.0" }
 # `#[announce]` and `#[derive(Announce)]`, callable from other proc-macro crates.
 announce-core = { path = "announce-core", version = "0.1.0" }
 # Re-exported as `announce::type_leak`.
-type-leak = "0.8"
+type-leak = "0.8.1"
 
 [dev-dependencies]
 # The `announce::machinery` doc test.

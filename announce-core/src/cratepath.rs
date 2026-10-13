@@ -5,13 +5,17 @@
 //! The caller's `Cargo.toml` (`CARGO_MANIFEST_DIR`) is scanned for the
 //! dependency whose package is `announce`, in `[dependencies]`,
 //! `[dev-dependencies]`, `[build-dependencies]` and their
-//! `[target.'..'.*]` forms, written inline (`ann = { package = "announce" }`),
+//! `[target.'..'.*]` forms, written inline (`ann = { package = "announce" }`,
+//! also over several lines), with dotted keys (`ann.package = "announce"`),
 //! as a table (`[dependencies.ann]` + `package = "announce"`), or inherited
 //! from the workspace (`ann = { workspace = true }` / `ann.workspace = true`,
-//! looked up in the workspace root's `[workspace.dependencies]`). A minimal
-//! scanner is used instead of a TOML library to keep `announce-macros`
-//! dependency-light and within its MSRV. If nothing is found, `::announce` is
-//! used; `#[announce(crate = ..)]` always takes precedence.
+//! looked up in the workspace root's `[workspace.dependencies]`, which may be
+//! written in any of those forms). Keys may be quoted. A minimal scanner is
+//! used instead of a TOML library to keep `announce-macros` dependency-light and
+//! within its MSRV: it joins a value that spans lines until its brackets and
+//! braces balance, drops comments and the content of strings, and reads the
+//! `package` and `workspace` fields of each dependency. If nothing is found,
+//! `::announce` is used; `#[announce(crate = ..)]` always takes precedence.
 
 use std::path::{Path as FsPath, PathBuf};
 
@@ -25,35 +29,147 @@ struct Dep {
     workspace: bool,
 }
 
-fn strip_comment(line: &str) -> &str {
-    // A `#` outside a string starts a comment.
-    let mut in_str = false;
-    for (i, c) in line.char_indices() {
+/// The manifest as logical lines: one `key = value` or `[header]` each, with
+/// comments removed, the content of multi-line strings dropped (`""`), and a
+/// value that spans lines (an inline table or an array) joined with spaces
+/// until its `{` and `[` are closed. Single-line strings are kept as written.
+fn logical_lines(manifest: &str) -> Vec<String> {
+    fn flush(out: &mut Vec<String>, cur: &mut String) {
+        let line = cur.trim();
+        if !line.is_empty() {
+            out.push(line.to_string());
+        }
+        cur.clear();
+    }
+    let chars: Vec<char> = manifest.chars().collect();
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut depth = 0usize;
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
         match c {
-            '"' => in_str = !in_str,
-            '#' if !in_str => return &line[..i],
+            '#' => {
+                while i < chars.len() && chars[i] != '\n' {
+                    i += 1;
+                }
+                continue;
+            }
+            '"' | '\'' => {
+                if chars[i..].starts_with(&[c, c, c]) {
+                    // A multi-line string: its content is of no interest.
+                    i += 3;
+                    while i < chars.len() && !chars[i..].starts_with(&[c, c, c]) {
+                        i += if c == '"' && chars[i] == '\\' { 2 } else { 1 };
+                    }
+                    // Up to two more quotes can belong to the string.
+                    i = (i + 3).min(chars.len());
+                    while i < chars.len() && chars[i] == c {
+                        i += 1;
+                    }
+                    cur.push_str("\"\"");
+                } else {
+                    cur.push(c);
+                    i += 1;
+                    while i < chars.len() && chars[i] != c && chars[i] != '\n' {
+                        if c == '"' && chars[i] == '\\' && i + 1 < chars.len() {
+                            cur.push(chars[i]);
+                            i += 1;
+                        }
+                        cur.push(chars[i]);
+                        i += 1;
+                    }
+                    if i < chars.len() && chars[i] == c {
+                        cur.push(c);
+                        i += 1;
+                    }
+                }
+                continue;
+            }
+            '[' | '{' => depth += 1,
+            ']' | '}' => depth = depth.saturating_sub(1),
+            '\r' => {
+                i += 1;
+                continue;
+            }
+            '\n' => {
+                if depth == 0 {
+                    flush(&mut out, &mut cur);
+                } else {
+                    cur.push(' ');
+                }
+                i += 1;
+                continue;
+            }
             _ => {}
         }
+        cur.push(c);
+        i += 1;
     }
-    line
+    flush(&mut out, &mut cur);
+    out
 }
 
 fn unquote(s: &str) -> String {
     s.trim().trim_matches(|c| c == '"' || c == '\'').to_string()
 }
 
+/// Splits `s` at every `sep` that is outside strings and brackets.
+fn split_top(s: &str, sep: char) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let (mut start, mut depth, mut quote) = (0, 0usize, None);
+    let mut chars = s.char_indices();
+    while let Some((i, c)) = chars.next() {
+        match (quote, c) {
+            (Some(q), _) if c == q => quote = None,
+            (Some('"'), '\\') => {
+                chars.next();
+            }
+            (Some(_), _) => {}
+            (None, '"') | (None, '\'') => quote = Some(c),
+            (None, '[') | (None, '{') => depth += 1,
+            (None, ']') | (None, '}') => depth = depth.saturating_sub(1),
+            (None, _) if c == sep && depth == 0 => {
+                parts.push(&s[start..i]);
+                start = i + c.len_utf8();
+            }
+            _ => {}
+        }
+    }
+    parts.push(&s[start..]);
+    parts
+}
+
+/// `key = value` at the first `=` outside quotes.
+fn split_kv(line: &str) -> Option<(&str, &str)> {
+    let mut quote = None;
+    for (i, c) in line.char_indices() {
+        match (quote, c) {
+            (Some(q), _) if c == q => quote = None,
+            (Some(_), _) => {}
+            (None, '"') | (None, '\'') => quote = Some(c),
+            (None, '=') => return Some((line[..i].trim(), line[i + 1..].trim())),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// The parts of a (dotted) key, unquoted: `ann.package`, `"my-ann".package`.
+fn split_key(key: &str) -> Vec<String> {
+    split_top(key, '.').into_iter().map(unquote).collect()
+}
+
 /// `package = "x"` / `workspace = true` inside an inline table `{ .. }`.
 fn inline_field<'a>(table: &'a str, field: &str) -> Option<&'a str> {
-    for part in table
-        .trim()
-        .trim_start_matches('{')
-        .trim_end_matches('}')
-        .split(',')
-    {
-        let mut kv = part.splitn(2, '=');
-        let k = kv.next()?.trim();
-        if k == field {
-            return Some(kv.next()?.trim());
+    let table = table.trim();
+    let table = table.strip_prefix('{').unwrap_or(table);
+    let table = table.strip_suffix('}').unwrap_or(table);
+    for part in split_top(table, ',') {
+        if let Some((k, v)) = split_kv(part) {
+            if split_key(k) == [field] {
+                return Some(v);
+            }
         }
     }
     None
@@ -96,14 +212,14 @@ fn scan(manifest: &str, workspace: bool) -> Vec<Dep> {
     let mut deps: Vec<Dep> = Vec::new();
     let mut in_deps = false;
     let mut table_key: Option<usize> = None;
-    for raw in manifest.lines() {
-        let line = strip_comment(raw).trim();
-        if line.is_empty() {
-            continue;
-        }
+    // The dependencies of the current table start here: the lines of a dotted
+    // key (`ann.package`, `ann.version`) belong to one dependency.
+    let mut section = 0;
+    for line in logical_lines(manifest) {
         if line.starts_with('[') {
             let header = line.trim_start_matches('[').trim_end_matches(']');
             in_deps = is_dep_table(header, workspace);
+            section = deps.len();
             table_key = dep_table_key(header, workspace).map(|key| {
                 deps.push(Dep {
                     key,
@@ -114,36 +230,50 @@ fn scan(manifest: &str, workspace: bool) -> Vec<Dep> {
             });
             continue;
         }
-        let mut kv = line.splitn(2, '=');
-        let (k, v) = match (kv.next(), kv.next()) {
-            (Some(k), Some(v)) => (k.trim(), v.trim()),
-            _ => continue,
+        let (k, v) = match split_kv(&line) {
+            Some(kv) => kv,
+            None => continue,
         };
+        let parts = split_key(k);
         if let Some(i) = table_key {
-            match k {
-                "package" => deps[i].package = Some(unquote(v)),
-                "workspace" => deps[i].workspace = v == "true",
+            match parts.as_slice() {
+                [f] if f == "package" => deps[i].package = Some(unquote(v)),
+                [f] if f == "workspace" => deps[i].workspace = v == "true",
                 _ => {}
             }
         } else if in_deps {
-            if let Some(key) = k.strip_suffix(".workspace") {
-                deps.push(Dep {
-                    key: unquote(key),
-                    package: None,
-                    workspace: v == "true",
-                });
-            } else if v.starts_with('{') {
-                deps.push(Dep {
-                    key: unquote(k),
-                    package: inline_field(v, "package").map(unquote),
-                    workspace: inline_field(v, "workspace") == Some("true"),
-                });
-            } else {
-                deps.push(Dep {
-                    key: unquote(k),
-                    package: None,
-                    workspace: false,
-                });
+            match parts.as_slice() {
+                // `ann = ".."` / `ann = { .. }`
+                [key] => {
+                    let inline = v.starts_with('{');
+                    deps.push(Dep {
+                        key: key.clone(),
+                        package: inline
+                            .then(|| inline_field(v, "package").map(unquote))
+                            .flatten(),
+                        workspace: inline && inline_field(v, "workspace") == Some("true"),
+                    })
+                }
+                // `ann.package = ".."`, `ann.workspace = true`, `ann.version = ".."`
+                [key, field] => {
+                    let i = match deps[section..].iter().position(|d| d.key == *key) {
+                        Some(i) => section + i,
+                        None => {
+                            deps.push(Dep {
+                                key: key.clone(),
+                                package: None,
+                                workspace: false,
+                            });
+                            deps.len() - 1
+                        }
+                    };
+                    match field.as_str() {
+                        "package" => deps[i].package = Some(unquote(v)),
+                        "workspace" => deps[i].workspace = v == "true",
+                        _ => {}
+                    }
+                }
+                _ => {}
             }
         }
     }
@@ -155,10 +285,7 @@ fn workspace_root(start: &FsPath) -> Option<PathBuf> {
     while let Some(d) = dir {
         let candidate = d.join("Cargo.toml");
         if let Ok(text) = std::fs::read_to_string(&candidate) {
-            if text
-                .lines()
-                .any(|l| strip_comment(l).trim() == "[workspace]")
-            {
+            if logical_lines(&text).iter().any(|l| l == "[workspace]") {
                 return Some(candidate);
             }
         }
@@ -505,18 +632,185 @@ mod manifest_tests {
     }
 
     #[test]
-    #[ignore = "bug: dotted keys other than `.workspace` (`ann.package = \"announce\"`) are valid TOML for a renamed dependency but are not recognised by the scanner, so the rename is missed and `::announce` is used"]
     fn dotted_key_package_rename() {
+        // ALGORITHM_FINDINGS #10.
         let m = "[dependencies]\nann.package = \"announce\"\nann.version = \"0.1\"\n";
         assert_eq!(name_of(m).as_deref(), Some("ann"));
+        // In any order, between other dependencies, with spaces around the dot.
+        let m = "[dependencies]\nserde = \"1\"\nann.version = \"0.1\"\nann . package = \"announce\"\nother.package = \"x\"\n";
+        assert_eq!(name_of(m).as_deref(), Some("ann"));
+        // The other tables, and target tables.
+        assert_eq!(
+            name_of("[dev-dependencies]\nd.package = \"announce\"\n").as_deref(),
+            Some("d")
+        );
+        assert_eq!(
+            name_of("[build-dependencies]\nb.path = \"..\"\nb.package = \"announce\"\n").as_deref(),
+            Some("b")
+        );
+        assert_eq!(
+            name_of("[target.'cfg(unix)'.dependencies]\nt.package = \"announce\"\n").as_deref(),
+            Some("t")
+        );
+        // Single quotes, hyphens.
+        assert_eq!(
+            name_of("[dependencies]\nmy-ann.package = 'announce'\n").as_deref(),
+            Some("my_ann")
+        );
+        // Another package, or a field that is not `package`.
+        assert_eq!(name_of("[dependencies]\nann.package = \"other\"\n"), None);
+        assert_eq!(
+            name_of("[dependencies]\nann.version = \"0.1\"\nann.features = [\"announce\"]\n"),
+            None
+        );
+        // A dotted key of one table does not reach a dependency of the next.
+        let m = "[dependencies]\nann.version = \"0.1\"\n[dev-dependencies]\nann.package = \"x\"\n";
+        assert_eq!(name_of(m), None);
+        // Dotted keys of the workspace table, inherited by a member.
+        let t = TempDir::new("ws-dotted");
+        t.manifest(
+            "",
+            "[workspace]\n[workspace.dependencies]\nws.path = \"a\"\nws.package = \"announce\"\n",
+        );
+        let m = t.manifest(
+            "m",
+            "[dependencies]\nws.workspace = true\nws.optional = true\n",
+        );
+        assert_eq!(dependency_name(&m).as_deref(), Some("ws"));
+    }
+
+    #[test]
+    fn quoted_keys() {
+        assert_eq!(
+            name_of("[dependencies]\n\"ann\" = { package = \"announce\" }\n").as_deref(),
+            Some("ann")
+        );
+        assert_eq!(
+            name_of("[dependencies]\n\"ann\".package = \"announce\"\n").as_deref(),
+            Some("ann")
+        );
+        assert_eq!(
+            name_of("[dependencies]\n'ann'.package = \"announce\"\n").as_deref(),
+            Some("ann")
+        );
+        assert_eq!(
+            name_of("[dependencies]\nann = { \"package\" = \"announce\" }\n").as_deref(),
+            Some("ann")
+        );
+        assert_eq!(
+            name_of("[dependencies]\nann = { 'package' = 'announce' }\n").as_deref(),
+            Some("ann")
+        );
+        assert_eq!(
+            name_of("[dependencies.ann]\n\"package\" = \"announce\"\n").as_deref(),
+            Some("ann")
+        );
+        assert_eq!(
+            name_of("[dependencies.'ann']\npackage = 'announce'\n").as_deref(),
+            Some("ann")
+        );
+        // A quoted key that is not `package`.
+        assert_eq!(
+            name_of("[dependencies]\nann = { \"package-x\" = \"announce\" }\n"),
+            None
+        );
+        // `=` inside a quoted key is part of the key.
+        assert_eq!(
+            name_of("[dependencies]\n\"a=b\" = { package = \"announce\" }\n").as_deref(),
+            Some("a=b")
+        );
+    }
+
+    #[test]
+    fn inline_table_over_several_lines() {
+        // ALGORITHM_FINDINGS #10.
+        let m = "[dependencies]\nann = { version = \"0.1\",\n        package = \"announce\" }\n";
+        assert_eq!(name_of(m).as_deref(), Some("ann"));
+        let m = "[dependencies]\nann = {\n    version = \"0.1\",\n    package = \"announce\",\n}\nserde = \"1\"\n";
+        assert_eq!(name_of(m).as_deref(), Some("ann"));
+        // Comments in between, and a `}` or `#` in a string.
+        let m = "[dependencies]\nann = { # the rename\n    path = \"a}#b\", # path\n    package = \"announce\" # name\n}\n";
+        assert_eq!(name_of(m).as_deref(), Some("ann"));
+        // A multi-line array inside the table, with nested arrays and brackets in strings.
+        let m = "[dependencies]\nann = { version = \"0.1\", features = [\n  \"a]\",\n  [\"b\"],\n], package = \"announce\" }\n";
+        assert_eq!(name_of(m).as_deref(), Some("ann"));
+        // `package` before an array that holds commas and `=`.
+        let m = "[dependencies]\nann = { package = \"announce\", features = [\"a,b\", \"package = x\"] }\n";
+        assert_eq!(name_of(m).as_deref(), Some("ann"));
+        // A dependency after a multi-line one is read as well, and a table that
+        // follows a multi-line array is still a table.
+        let m = "[dependencies]\nother = { version = \"1\",\n  features = [\"x\"] }\nann = { package = \"announce\" }\n";
+        assert_eq!(name_of(m).as_deref(), Some("ann"));
+        let m = "[dependencies.other]\nfeatures = [\n  \"x\",\n]\n[dependencies.ann]\npackage = \"announce\"\n";
+        assert_eq!(name_of(m).as_deref(), Some("ann"));
+        // Not announce, over several lines.
+        let m = "[dependencies]\nann = { version = \"0.1\",\n  package = \"other\" }\n";
+        assert_eq!(name_of(m), None);
+        // A workspace entry over several lines, and `workspace = true` too.
+        let t = TempDir::new("ws-multiline");
+        t.manifest(
+            "",
+            "[workspace]\n[workspace.dependencies]\nws = { path = \"a\",\n  package = \"announce\" }\n",
+        );
+        let m = t.manifest(
+            "m",
+            "[dependencies]\nws = { version = \"1\",\n  workspace = true }\n",
+        );
+        assert_eq!(dependency_name(&m).as_deref(), Some("ws"));
+    }
+
+    #[test]
+    fn multi_line_strings_and_line_endings_do_not_swallow_the_dependencies() {
+        let m = "[package]\ndescription = \"\"\"\nuse { and [ and # here\n\"\"\"\n\
+                 readme = '''\n{\n'''\n[dependencies]\nann = { package = \"announce\" }\n";
+        assert_eq!(name_of(m).as_deref(), Some("ann"));
+        // CRLF line endings.
+        let m = "[dependencies]\r\nann = { version = \"0.1\",\r\n  package = \"announce\" }\r\n";
+        assert_eq!(name_of(m).as_deref(), Some("ann"));
+        // The `[workspace]` header is found with a comment after it and in the
+        // middle of the file.
+        let t = TempDir::new("ws-header");
+        t.manifest(
+            "",
+            "[package]\nname = \"p\"\n[workspace] # root\n[workspace.dependencies]\nann = { package = \"announce\" }\n",
+        );
+        let m = t.manifest("m", "[dependencies]\nann.workspace = true\n");
+        assert_eq!(dependency_name(&m).as_deref(), Some("ann"));
     }
 
     #[test]
     fn scanner_helpers() {
-        assert_eq!(strip_comment("a = 1 # c"), "a = 1 ");
-        assert_eq!(strip_comment("a = \"x#y\" # c"), "a = \"x#y\" ");
-        assert_eq!(strip_comment("# only"), "");
-        assert_eq!(strip_comment("a = 1"), "a = 1");
+        assert_eq!(
+            logical_lines("a = 1 # c\n# only\n\nb = 2"),
+            ["a = 1", "b = 2"]
+        );
+        assert_eq!(logical_lines("a = \"x#y\" # c"), ["a = \"x#y\""]);
+        assert_eq!(logical_lines("a = 'x#y' # c"), ["a = 'x#y'"]);
+        assert_eq!(logical_lines("a = \"x\\\"#y\" # c"), ["a = \"x\\\"#y\""]);
+        assert_eq!(logical_lines("[a.b]\nc = 1"), ["[a.b]", "c = 1"]);
+        // Values over several lines are joined, multi-line strings are dropped.
+        assert_eq!(
+            logical_lines("a = { b = 1,\n c = [2,\n 3] }\nd = 4"),
+            ["a = { b = 1,  c = [2,  3] }", "d = 4"]
+        );
+        assert_eq!(
+            logical_lines("a = \"\"\"\n{ \\\"\"\"\n\"\"\"\nb = 1"),
+            ["a = \"\"", "b = 1"]
+        );
+        assert_eq!(
+            logical_lines("a = '''\n{\n'''\nb = 1"),
+            ["a = \"\"", "b = 1"]
+        );
+        assert_eq!(
+            split_top("a, [b, c], \"d,e\", {f, g}", ','),
+            ["a", " [b, c]", " \"d,e\"", " {f, g}"]
+        );
+        assert_eq!(split_kv("a = b = c"), Some(("a", "b = c")));
+        assert_eq!(split_kv("\"a=b\" = c"), Some(("\"a=b\"", "c")));
+        assert_eq!(split_kv("novalue"), None);
+        assert_eq!(split_key("ann.package"), ["ann", "package"]);
+        assert_eq!(split_key("\"a.b\" . 'c'"), ["a.b", "c"]);
+        assert_eq!(split_key("plain"), ["plain"]);
         assert_eq!(unquote(" \"ann\" "), "ann");
         assert_eq!(unquote("'cfg(unix)'"), "cfg(unix)");
         assert_eq!(

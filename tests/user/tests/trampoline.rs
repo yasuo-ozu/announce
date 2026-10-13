@@ -63,7 +63,10 @@ fn cfg_is_evaluated_in_the_defining_crate() {
     assert!(out.contains("only_without_x"), "{}", out);
     assert!(!out.contains("only_with_x"), "{}", out);
     assert!(!out.contains("#[cfg"), "{}", out);
-    assert!(out.contains("cfg_attrevaluatedinthedefiner"), "{}", out);
+    // `cfg_attr(.., doc = ..)` is evaluated too, and the doc it gives is not
+    // in the payload (`tests/docs.rs`).
+    assert!(!out.contains("cfg_attrevaluatedinthedefiner"), "{}", out);
+    assert!(out.contains("pubc:u8"), "{}", out);
     assert!(!norm(cfg_eval::shape::OUT).contains("OnlyWithX"));
 }
 
@@ -230,6 +233,17 @@ fn crate_paths_refer_to_the_defining_crate() {
     assert_eq!(v, [1, 2, 3]);
 }
 
+mod reemitted_for_in {
+    // `crate::ARR` is the defining crate's: this crate has no `ARR`.
+    ::announce_test_defs::for_in_crate! { [::announce_test_defs::for_in_crate!, reemit!] }
+}
+
+#[test]
+fn crate_after_in_of_a_for_loop_refers_to_the_defining_crate() {
+    // ALGORITHM_FINDINGS #8.
+    assert_eq!(reemitted_for_in::for_in_crate::sum(), 6);
+}
+
 mod transformed {
     use super::summary;
     use announce_test_derive::public_fields;
@@ -258,6 +272,31 @@ mod gathered {
 #[test]
 fn gather_fetches_once_and_orders_entries() {
     assert_eq!(gathered::G, ["Shape", "Greet", "Tuple"]);
+}
+
+mod fetched_raw {
+    use announce_test_derive::fetched_raw;
+    fetched_raw! { [fetched_raw!] (::announce_test_defs::kinds::Shape, ::announce_test_defs::kinds::Greet) F }
+    pub mod with_options {
+        // The options group (a leading `expr`, a namespace) survives the fetch.
+        use super::fetched_raw;
+        fetched_raw! { (expr, mine(1)) [fetched_raw!] (::announce_test_defs::kinds::Shape) F }
+    }
+}
+
+#[test]
+fn raw_fetch_gets_the_definitions_and_records_what_it_fetched() {
+    // ALGORITHM_FINDINGS #13: `Input::fetch` keeps the books `gather` keeps.
+    assert_eq!(fetched_raw::F, ["Shape", "Greet"]);
+    assert_eq!(
+        norm(fetched_raw::F_OPTIONS),
+        "__announce_fetched(::announce_test_defs::kinds::Shape,::announce_test_defs::kinds::Greet)"
+    );
+    assert_eq!(fetched_raw::with_options::F, ["Shape"]);
+    assert_eq!(
+        norm(fetched_raw::with_options::F_OPTIONS),
+        "expr,mine(1),__announce_fetched(::announce_test_defs::kinds::Shape)"
+    );
 }
 
 mod leaked {
@@ -557,9 +596,10 @@ fn derive_announce() {
     is_announced::<announce_test_defs::markers::Derived>();
     is_announced::<announce_test_defs::markers::DerivedEnum>();
     let out = norm(derive_announce_m::OUT);
-    // The helper attribute and the cfg'd-out field are gone; META is kept.
+    // The helper attribute, the cfg'd-out field and the docs are gone; META is kept.
     assert!(
-        out.contains("=>[$crate::info(1)]{#[doc=") && out.ends_with("pubstructDerived{puba:u8,}}"),
+        out.contains("=>[$crate::info(1)]{pubstructDerived{puba:u8,}}")
+            && out.ends_with("pubstructDerived{puba:u8,}}"),
         "{}",
         out
     );

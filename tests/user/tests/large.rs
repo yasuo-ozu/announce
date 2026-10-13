@@ -116,9 +116,11 @@ fn a_chain_of_thirty_definitions_fits_the_default_recursion_limit() {
     assert_eq!(long_chain::ALL[29].0, "Shape");
 }
 
-// The limits in DESIGN.md section 4.1: at the default recursion limit (128) a
-// chain holds up to 127 small definitions (one expansion each), 63 small
-// definitions with `$` (two) and 42 large ones (three).
+// The limits in DESIGN.md section 4.1, measured to the entry: at the default
+// recursion limit (128) a chain holds exactly 127 small definitions (one
+// expansion each, the callback is the 128th), 63 small definitions with `$` (two
+// each) and 42 large ones (three each); one more of any kind is an error
+// ("recursion limit reached", ALGORITHM_FINDINGS #9).
 mod at_the_limit {
     use super::summary;
     pub mod large {
@@ -158,7 +160,8 @@ mod at_the_limit {
          ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!,
          ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!,
          ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!,
-         ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!,
+         ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!,
+         ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!,
          summary!] ALL
         }
     }
@@ -175,7 +178,8 @@ mod at_the_limit {
          ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!,
          ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!,
          ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!,
-         ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!,
+         ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!,
+         ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!,
          summary!] ALL
         }
     }
@@ -184,8 +188,8 @@ mod at_the_limit {
 #[test]
 fn chains_up_to_the_documented_lengths_fit_the_default_limit() {
     assert_eq!(at_the_limit::large::ALL.len(), 42);
-    assert_eq!(at_the_limit::small::ALL.len(), 120);
-    assert_eq!(at_the_limit::dollar::ALL.len(), 60);
+    assert_eq!(at_the_limit::small::ALL.len(), 127);
+    assert_eq!(at_the_limit::dollar::ALL.len(), 63);
 }
 
 mod dollar {

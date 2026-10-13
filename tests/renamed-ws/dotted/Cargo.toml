@@ -1,0 +1,12 @@
+# A rename written with dotted keys (ALGORITHM_FINDINGS #10): the generated code
+# must reach the facade as `::ann_dot`.
+[package]
+name = "announce-test-renamed-dotted"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.64"
+publish = false
+
+[dependencies]
+"ann-dot".path = "../../.."
+"ann-dot".package = "announce"

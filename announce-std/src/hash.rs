@@ -72,18 +72,14 @@ pub use ::core::hash::Hasher;
 /// announce mock of [`::core::hash::BuildHasher`]: invoke `BuildHasher!` to receive its definition.
 ///
 /// The real trait is re-exported under the same path.
+///
+/// `hash_one` is not part of the mock: it is stable only since Rust 1.71 and announce-std
+/// supports older compilers. To hash a value, go through [`::core::hash::Hash::hash`] with
+/// `build_hasher()`: `x.hash(&mut b.build_hasher())`, then `finish()` on the hasher.
 #[announce(mock = ::core::hash::BuildHasher)]
 pub trait BuildHasher {
     type Hasher: ::core::hash::Hasher;
     fn build_hasher(&self) -> Self::Hasher;
-
-    fn hash_one<T: ::core::hash::Hash>(&self, x: T) -> ::core::primitive::u64
-    where
-        Self: ::core::marker::Sized,
-        Self::Hasher: ::core::hash::Hasher,
-    {
-        ::core::unimplemented!()
-    }
 }
 
 #[doc(no_inline)]

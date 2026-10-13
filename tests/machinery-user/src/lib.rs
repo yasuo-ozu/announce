@@ -53,3 +53,36 @@ pub struct OwnedDerived {
 #[derive(Plain)]
 #[announce(crate = ::announce_test_machinery_lib::announce, macro_name = OwnedPlainAnnounce, ::announce_test_machinery_lib::owner)]
 pub struct OwnedPlain(#[field_attr(z)] pub u8);
+
+// Doc attributes: removed from the payload by default, `docs = true`
+// (`announce::machinery::Options::docs`) keeps them. Through the attribute and
+// through both derives.
+/// Doc of Docs.
+#[tracked(macro_name = DocsAnnounce)]
+pub struct Docs {
+    /// Doc of x.
+    pub x: u8,
+}
+
+/// Doc of DocsKept.
+#[tracked(macro_name = DocsKeptAnnounce, docs = true)]
+pub struct DocsKept {
+    /// Doc of x.
+    pub x: u8,
+}
+
+/// Doc of DocsDerived.
+#[derive(Tracked)]
+#[tracked(macro_name = DocsDerivedAnnounce, docs = true)]
+pub struct DocsDerived {
+    /// Doc of x.
+    pub x: u8,
+}
+
+/// Doc of DocsPlain.
+#[derive(Plain)]
+#[announce(crate = ::announce_test_machinery_lib::announce, macro_name = DocsPlainAnnounce)]
+pub struct DocsPlain {
+    /// Doc of x.
+    pub x: u8,
+}

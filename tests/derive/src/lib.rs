@@ -296,6 +296,42 @@ announce_helper::callback! {
 }
 
 announce_helper::callback! {
+    /// `fetched_raw! { [fetched_raw!] (a::A, b::B) NAME }`: like `gathered`, but
+    /// with the raw `Input::fetch` for what is still missing. Emits `NAME: &[&str]`
+    /// with the item idents in the requested order, and `NAME_OPTIONS: &str`, the
+    /// options group the callback was last called with.
+    pub fn fetched_raw(input) {
+        let rest: GatherRest = input.rest_as()?;
+        let needed: Vec<announce_helper::Cont> =
+            rest.paths.iter().cloned().map(announce_helper::Cont::bang).collect();
+        let missing: Vec<announce_helper::Cont> =
+            needed.iter().filter(|c| input.entry_for(c).is_none()).cloned().collect();
+        if !missing.is_empty() {
+            return Ok(input.fetch(missing));
+        }
+        let mut idents = Vec::new();
+        for c in &needed {
+            let e = input.entry_for(c).expect("checked above");
+            let ident = match e.item()? {
+                syn::Item::Struct(s) => s.ident,
+                syn::Item::Enum(s) => s.ident,
+                syn::Item::Trait(s) => s.ident,
+                syn::Item::Type(s) => s.ident,
+                other => return Err(syn::Error::new_spanned(other, "unexpected item")),
+            };
+            idents.push(ident.to_string());
+        }
+        let name = &rest.name;
+        let options = input.options.as_ref().map(|o| o.to_string()).unwrap_or_default();
+        let options_name = syn::Ident::new(&format!("{}_OPTIONS", name), name.span());
+        Ok(quote! {
+            pub const #name: &[&str] = &[ #(#idents),* ];
+            pub const #options_name: &str = #options;
+        })
+    }
+}
+
+announce_helper::callback! {
     /// Records, for every entry in visiting order, `pub const <REST>: &[(&str, usize, usize, String)]`
     /// is not possible in a const, so the rows are strings: `"names|in item|in stripped"`:
     /// the owned attribute names of the entry (`Entry::owned_attrs`, comma separated), the

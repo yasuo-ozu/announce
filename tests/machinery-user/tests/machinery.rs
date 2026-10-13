@@ -102,3 +102,51 @@ fn checks_that_own_attributes_work_through_the_machinery() {
     assert_eq!(lib::OwnedDerived { y: 4 }.y, 4);
     assert_eq!(lib::OwnedPlain(5).0, 5);
 }
+
+mod docs {
+    use super::lib;
+    lib::DocsAnnounce! { [lib::DocsAnnounce!, capture!] }
+    pub mod kept {
+        use super::lib;
+        lib::DocsKeptAnnounce! { [lib::DocsKeptAnnounce!, capture!] }
+    }
+    pub mod derived {
+        use super::lib;
+        lib::DocsDerivedAnnounce! { [lib::DocsDerivedAnnounce!, capture!] }
+    }
+    pub mod plain {
+        use super::lib;
+        lib::DocsPlainAnnounce! { [lib::DocsPlainAnnounce!, capture!] }
+    }
+}
+
+#[test]
+fn docs_are_removed_from_the_payload_unless_asked() {
+    // Default: gone, whatever way the item was announced.
+    let out = norm(docs::OUT);
+    assert!(
+        out.ends_with("{pubstructDocs{pubx:u8,pubtracked:bool}}"),
+        "{}",
+        out
+    );
+    assert!(
+        norm(docs::plain::OUT).ends_with("{pubstructDocsPlain{pubx:u8,}}"),
+        "{}",
+        norm(docs::plain::OUT)
+    );
+    // `docs = true` (a field of `announce::machinery::Options`): kept.
+    let out = norm(docs::kept::OUT);
+    assert!(
+        out.contains("#[doc=\"DocofDocsKept.\"]pubstructDocsKept{#[doc=\"Docofx.\"]pubx:u8,"),
+        "{}",
+        out
+    );
+    let out = norm(docs::derived::OUT);
+    assert!(
+        out.contains(
+            "#[doc=\"DocofDocsDerived.\"]pubstructDocsDerived{#[doc=\"Docofx.\"]pubx:u8,}"
+        ),
+        "{}",
+        out
+    );
+}

@@ -7,7 +7,9 @@
 //! `Leaker::finish()`, with primitives and `crate::` paths allowed. Std items
 //! must be written absolutely (`::std::vec::Vec<u8>`); prelude names such as
 //! `Vec` or `Option` count as relative unless `allow_std_prelude = true`
-//! (type-leak's `allowed_paths`, with the names in [`PRELUDE`]).
+//! (type-leak's `allowed_paths`, with the names in [`PRELUDE`]). The one
+//! exception is `Sized`: `T: ?Sized`, `where Self: Sized` and `trait T: Sized`
+//! are accepted bare, because the language gives it a meaning of its own.
 //!
 //! type-leak sees the item as written. `Self` is not internable
 //! (`allow_self = false`): it has no meaning in an `impl .. for ()`, and it
@@ -140,9 +142,23 @@ fn is_absolute(p: &Path) -> bool {
     p.leading_colon.is_some() || first == "crate" || first == "$crate"
 }
 
+/// `Sized`, as written in `T: ?Sized`, `where Self: Sized` and `T: Sized`: the
+/// single segment `Sized` without arguments or a leading `::`. It is the one
+/// prelude trait that is accepted bare without `allow_std_prelude`: the
+/// language gives `?Sized` (and `Sized`) a meaning of their own, so it cannot
+/// be meaningfully shadowed, and it is written in nearly every generic API
+/// that takes unsized types.
+fn is_bare_sized(p: &Path) -> bool {
+    p.leading_colon.is_none()
+        && p.segments.len() == 1
+        && p.segments[0].ident == "Sized"
+        && p.segments[0].arguments.is_none()
+}
+
 /// Trait paths (supertraits, generic and where-clause bounds, `impl`/`dyn`
 /// bounds) must be absolute: a repeater only carries *types*, so a relative
-/// trait path could never resolve at a caller (decided 2026-10-01). With
+/// trait path could never resolve at a caller (decided 2026-10-01). Bare
+/// `Sized` and `?Sized` are accepted ([`is_bare_sized`]); with
 /// `allow_std_prelude = true`, bare prelude traits are accepted too.
 fn check_trait_paths(item: &Item, allow_prelude: bool) -> Result<()> {
     struct V {
@@ -159,11 +175,11 @@ fn check_trait_paths(item: &Item, allow_prelude: bool) -> Result<()> {
                 .unwrap_or_default();
             let prelude =
                 self.allow_prelude && p.segments.len() == 1 && PRELUDE.contains(&first.as_str());
-            if !(is_absolute(p) || prelude) && self.err.is_none() {
+            if !(is_absolute(p) || prelude || is_bare_sized(p)) && self.err.is_none() {
                 self.err = Some(syn::Error::new_spanned(
                     p,
-                    "announce: trait paths must be absolute (`::core::fmt::Display`, `crate::Base`, \
-                     `?::core::marker::Sized`); a repeater only covers types, not traits",
+                    "announce: trait paths must be absolute (`::core::fmt::Display`, `crate::Base`; \
+                     `Sized` and `?Sized` may be bare); a repeater only covers types, not traits",
                 ));
             }
             syn::visit::visit_trait_bound(self, b);
@@ -466,6 +482,12 @@ pub fn analyze(item: &Item, opts: &crate::options::Options) -> Result<Option<Ana
                 .iter()
                 .map(|n| Path::from(Ident::new(n, Span::call_site()))),
         );
+    } else {
+        // Bare `Sized` (`Self: Sized`, `trait T: Sized`, `T: ?Sized + Sized`) is
+        // accepted without the option, like in `check_trait_paths`.
+        config
+            .allowed_paths
+            .push(Path::from(Ident::new("Sized", Span::call_site())));
     }
     let mut leaker = type_leak::Leaker::from_config(config);
     // `Self` has no meaning in an `impl .. for ()`, and resolves everywhere:
@@ -838,6 +860,72 @@ mod tests {
             }
         )
         .is_ok());
+    }
+
+    #[test]
+    fn bare_sized_needs_no_prelude_option() {
+        // ALGORITHM_FINDINGS #12: `Sized` cannot be meaningfully shadowed.
+        for ok in [
+            quote! { struct S<T: ?Sized>(::std::boxed::Box<T>); },
+            quote! { struct S<T>(T) where T: ?Sized; },
+            quote! { struct S<T: Sized>(T); },
+            quote! { trait T { fn f(&self) where Self: Sized; } },
+            quote! { trait T { fn f<U: ?Sized>(&self, u: &U); } },
+            quote! { trait T: Sized {} },
+            quote! { trait T: crate::Base + Sized {} },
+            quote! { trait T { fn f(&self) -> ::std::boxed::Box<dyn crate::Base + Sized>; } },
+            quote! { trait T { fn f(&self, x: impl Sized); } },
+            quote! { struct S<T: ?Sized + ::core::fmt::Debug>(::std::boxed::Box<T>); },
+            quote! { struct S<T: ?::core::marker::Sized>(::std::boxed::Box<T>); },
+        ] {
+            let a = analyze(&item(ok.clone()), &opts());
+            assert!(a.is_ok(), "{}: {}", ok, a.err().unwrap());
+        }
+        // The relative types next to it are carried as before.
+        let impls = squash(
+            &leaked(quote! {
+                trait T { fn f<U: ?Sized>(&self, u: &U) -> Local<U>; fn g() -> Local2 where Self: Sized; }
+            })
+            .impls,
+        );
+        assert!(
+            impls.contains("impl<U:?Sized>crate::R<(*constU,),42u64,"),
+            "{}",
+            impls
+        );
+        assert!(impls.contains("typeType=Local<U>;"), "{}", impls);
+        assert!(impls.contains("typeType=Local2;"), "{}", impls);
+        // Every other bare prelude trait still needs `allow_std_prelude`, and the
+        // names around `Sized` are not the prelude's.
+        for bad in [
+            quote! { struct S<T: Clone>(T); },
+            quote! { struct S<T: Copy>(T); },
+            quote! { struct S<T: Send>(T); },
+            quote! { trait T: Clone {} },
+            quote! { trait T { fn f(&self) where Self: Unpin; } },
+            quote! { struct S<T: marker::Sized>(T); },
+            quote! { struct S<T: self::Sized>(T); },
+            quote! { struct S<T: Sized2>(T); },
+        ] {
+            let e = analyze(&item(bad.clone()), &opts())
+                .err()
+                .unwrap()
+                .to_string();
+            assert!(e.contains("trait paths must be absolute"), "{}: {}", bad, e);
+        }
+        // With the option, the prelude traits are accepted, `Sized` as well.
+        let prelude = Options {
+            allow_std_prelude: true,
+            ..Options::default()
+        };
+        for ok in [
+            quote! { struct S<T: Clone + ?Sized>(::std::boxed::Box<T>); },
+            quote! { trait T { fn f(&self) where Self: Sized; } },
+            quote! { trait T: Sized {} },
+        ] {
+            let a = analyze(&item(ok.clone()), &prelude);
+            assert!(a.is_ok(), "{}: {}", ok, a.err().unwrap());
+        }
     }
 
     #[test]

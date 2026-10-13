@@ -3,6 +3,7 @@
 
 use announce::announce;
 
+pub mod docs;
 pub mod large;
 pub mod large_leak;
 pub mod owned;
@@ -391,6 +392,23 @@ pub mod crate_paths2 {
             crate::crate_paths2::Foo(9)
         }
     }
+}
+
+/// A constant of this crate, named by `crate::ARR` inside a re-emitted payload.
+pub const ARR: [u8; 3] = [1, 2, 3];
+
+/// ALGORITHM_FINDINGS #8: the `crate` after the `in` of a `for` loop is an
+/// ordinary path; only the `in` of `pub(in ..)` is part of a visibility.
+#[announce]
+pub mod for_in_crate {
+    pub fn sum() -> u32 {
+        let mut s = 0;
+        for x in crate::ARR {
+            s += x as u32;
+        }
+        s
+    }
+    pub(crate) fn _vis() {}
 }
 
 pub mod allow_opts {
@@ -878,4 +896,18 @@ pub mod contexts {
     pub struct HigherRanked {
         pub f: for<'b> fn(Wrap<'b>) -> u8,
     }
+
+    /// ALGORITHM_FINDINGS #12: `Sized` and `?Sized` are accepted bare, in a
+    /// method's generics, a `where` clause and the item's own generics, with
+    /// relative types next to them.
+    #[announce(repeater = crate::contexts::Repeater)]
+    pub trait BareSized {
+        fn len_of<U: ?Sized + ::core::convert::AsRef<[u8]>>(&self, u: &U) -> LocalG<usize>;
+        fn local() -> Local
+        where
+            Self: Sized;
+    }
+
+    #[announce(repeater = crate::contexts::Repeater)]
+    pub struct BareUnsized<T: ?Sized>(pub ::std::boxed::Box<T>, pub Local);
 }

@@ -29,7 +29,9 @@ The generator output is meant to reproduce the checked-in sources byte for byte:
   `announce_std_rust_1_N` cfgs). This script reads that list and fails if GATES or
   GLOB_SINCE, or any generated or checked-in source, uses a version outside it.
 * Hand edits live in the tables below, not in the sources: PROVIDED (provided
-  methods get the placeholder body `{ ::core::unimplemented!() }`), FALLBACK
+  methods get the placeholder body `{ ::core::unimplemented!() }`), REMOVED
+  (methods left out of the mock: `BuildHasher::hash_one`, stable only since 1.71),
+  DOC_NOTES (an extra paragraph in a mock's doc comment), FALLBACK
   (blanket subtraits for rustc < 1.94), EXTRA_CFG, EXTRA_ITEMS (items newer-type
   has no `emit_traits!` for) and HAND_WRITTEN (modules that are not generated).
 * Formatting: the output is run through `rustfmt --edition 2021` with an empty
@@ -91,10 +93,24 @@ PROVIDED = {
     "Write": {"write_char", "write_fmt", "write_all"},
     "Hasher": {"write_u8", "write_u16", "write_u32", "write_u64", "write_u128", "write_usize",
                "write_i8", "write_i16", "write_i32", "write_i64", "write_i128", "write_isize"},
-    "BuildHasher": {"hash_one"}, "Seek": {"rewind", "stream_position", "seek_relative"},
+    "Seek": {"rewind", "stream_position", "seek_relative"},
     "Iterator": {"size_hint", "count", "last", "nth"}, "ExactSizeIterator": {"len"},
     "DoubleEndedIterator": {"nth_back", "rfold", "rfind"}, "GlobalAlloc": {"alloc_zeroed", "realloc"},
     "ToOwned": {"clone_into"}, "Error": {"source"}, "Wake": {"wake_by_ref"},
+}
+
+# Methods that newer-type-std's copy has but the mock leaves out, whatever the
+# compiler. `BuildHasher::hash_one` is stable only since Rust 1.71 while announce-std
+# supports 1.57: a consumer that forwards it (`fn hash_one(..) { .. }` in an impl)
+# breaks on an older compiler. Hash a value with `x.hash(&mut b.build_hasher())`.
+REMOVED = {"BuildHasher": {"hash_one"}}
+# Extra paragraph of a mock's doc comment, by trait name (rustdoc markdown, no `///`).
+DOC_NOTES = {
+    "BuildHasher": (
+        "`hash_one` is not part of the mock: it is stable only since Rust 1.71 and announce-std\n"
+        "supports older compilers. To hash a value, go through [`::core::hash::Hash::hash`] with\n"
+        "`build_hasher()`: `x.hash(&mut b.build_hasher())`, then `finish()` on the hasher."
+    ),
 }
 
 # rustc < GLOB_SINCE: the glob re-export cannot be used, so the type namespace gets a
@@ -290,6 +306,8 @@ def conv_block(body, seen, real):
         attrs = [a for a in attrs if not is_version_attr(a)]
         alt0 = next(re.search(r'alternative\s*=\s*([\w:]+)', a).group(1) for a in attrs if a.startswith("target"))
         for g, alt, content in variants(name, alt0, content):
+            for f in sorted(REMOVED.get(name, ())):
+                content = drop_fn(name, f, content)
             content = add_default_bodies(name, content)
             cfgs = [f"#[{a}]" for a in attrs if a.startswith("cfg")] + ([g] if g else [])
             if alt in EXTRA_CFG:
@@ -298,6 +316,8 @@ def conv_block(body, seen, real):
             doc = f"/// announce mock of [`{alt}`]: invoke `{name}!` to receive its definition.\n"
             if name not in DERIVE_NAMES:
                 doc += "///\n/// The real trait is re-exported under the same path.\n"
+                if name in DOC_NOTES:
+                    doc += "///\n" + "".join("/// " + l + "\n" for l in DOC_NOTES[name].split("\n"))
             else:
                 doc += "///\n/// The real trait is available under the same path in the type namespace\n/// (from rustc 1.94, through a glob re-export, since the macro namespace holds this\n/// trampoline).\n"
             out.append(f"{cfg}\n{doc}#[announce(mock = {alt})]\npub trait {name}{params}{supers}{where} {{{content}}}\n")

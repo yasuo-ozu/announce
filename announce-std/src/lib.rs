@@ -24,6 +24,12 @@
 //! implement the real `Debug`. Write impls against the real path from
 //! `mock(..)`.
 //!
+//! **Not mocked.** `BuildHasher::hash_one` is stable only since Rust 1.71, and
+//! announce-std supports older compilers (MSRV 1.57): a consumer that forwards it
+//! would break there. The `BuildHasher` mock has `build_hasher` only. To hash a
+//! value go through `Hash::hash`: `x.hash(&mut b.build_hasher())`, then
+//! `finish()` on the hasher.
+//!
 //! **Version gates.** Mocks of traits newer than the MSRV (1.57), or changed
 //! after it, are gated with `#[cfg(announce_std_rust_1_N)]`. `build.rs` sets
 //! that cfg on rustc 1.N and later, using `rustversion` attributes
