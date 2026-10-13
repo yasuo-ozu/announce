@@ -100,61 +100,26 @@ Minimum Rust version: 1.57.
 
 ## Performance
 
-Measured with the criterion benchmark in `bench/` (run `cargo bench --offline`
-inside `bench/`; the full tables and the before and after of each change are in
-`bench/RESULTS.md`), on traits, with rustc 1.101 nightly on x86_64 and cargo's
-dev profile. S is the number of methods per trait, K the number of definitions
-passed to one callback, which only consumes its input. Sizes are of the `.rmeta`
-files cargo writes: item definitions and `macro_rules!` bodies live in the
-metadata. The charts show the median rebuild of that crate alone (the smaller
-of two runs of 10 samples, on a shared machine, so rough); the table has
-interleaved paired runs, which are steadier.
-
-Lines: color = S (darker is larger), solid = announced or one chain, dashed =
-plain or K separate calls. Both axes are logarithmic. Made with
-`bench/plot.py --svg bench/plots`.
+Traits with S methods each, K of them passed to one callback; rustc nightly,
+dev profile. Lines: color = S (darker is larger), solid = announced or one
+chain, dashed = plain or K separate calls; both axes logarithmic. Details and
+how to run it: `bench/`.
 
 <img src="https://raw.githubusercontent.com/yasuo-ozu/announce/main/bench/plots/defining-rmeta.svg" alt="Defining crate: .rmeta size against K" width="49%"> <img src="https://raw.githubusercontent.com/yasuo-ozu/announce/main/bench/plots/defining-time.svg" alt="Defining crate: rebuild time against K" width="49%">
 <img src="https://raw.githubusercontent.com/yasuo-ozu/announce/main/bench/plots/calling-rmeta.svg" alt="Calling crate: .rmeta size against K" width="49%"> <img src="https://raw.githubusercontent.com/yasuo-ozu/announce/main/bench/plots/calling-time.svg" alt="Calling crate: rebuild time against K" width="49%">
 
-| S | K | definer, plain | definer, announced | calling crate, one chain | calling crate, K calls | definer build, plain / announced | calling crate build, one chain |
-|---:|---:|---:|---:|---:|---:|---:|---:|
-| 1 | 1 | 2.6 KiB | 10.1 KiB | 4.1 KiB | 4.1 KiB | 72 / 78 ms | 81 ms |
-| 10 | 16 | 42 KiB | 194 KiB | 5.4 KiB | 11.0 KiB | 69 / 92 ms | 76 ms |
-| 200 | 16 | 865 KiB | 1,357 KiB | 7.0 KiB | 12.7 KiB | 114 / 233 ms | 103 ms |
-| 200 | 96 | 5,562 KiB | 8,629 KiB | 22.8 KiB | 59.1 KiB | 427 / 1,117 ms | 453 ms |
+| S | K | defining crate `.rmeta`, plain / announced | defining crate rebuild, plain / announced |
+|---:|---:|---:|---:|
+| 1 | 1 | 2.6 / 10.1 KiB | 72 / 78 ms |
+| 200 | 96 | 5,562 / 8,629 KiB | 427 / 1,117 ms |
 
-- The definer's `.rlib` is 2.4 KiB with or without `#[announce]`, because
-  definitions contain no code. The trampoline is metadata: about 6 KiB per
-  definition (11 KiB before), plus its copies of the item, three of them (six
-  before). An item of more than 300 tokens (about 21 trait methods) is held once
-  in its macro: 7 KiB plus one copy. At S = 200 the definer's metadata is 2.3
-  times the plain crate's with three copies (3.4 times before) and 1.6 times
-  with one, so S = 200, K = 96 is 8,629 KiB, not 19,046 KiB.
-- The price is expansions: one call of such a trampoline nests three macro
-  expansions instead of one (see "Calling a trampoline" for the chain length).
-  A calling crate's `.rlib` stays 2.4 KiB. Its `.rmeta` does not depend on S and
-  grows by about 0.1 KiB per definition in one chain (0.2 for a large one) and
-  about 0.5 KiB per separate call (0.6).
-- The benchmark traits have no documentation. Doc attributes are not recorded, so
-  documented items cost less than their size suggests: a trait of 40 methods with
-  five lines of docs each has a 36.8 KiB `.rmeta` (44.7 KiB with `docs = true`),
-  and one of 5 methods 14.1 KiB (17.4 KiB).
-- An executable that uses both crates has the same size at every point
-  measured (8,658 KiB in the dev profile, 356 KiB stripped; an empty program
-  is 4,495 and 331 KiB): the trampolines do not reach it.
-- The time of the announced definer is mostly the proc macros, which read each
-  item once (3 ms for a trait of 200 methods in the dev profile, 5 ms with the
-  rest); before, S = 200, K = 96 took 2,415 ms. It costs a few milliseconds more
-  than the plain crate for small definitions, and 2.6 times as much at
-  S = 200, K = 96. The calling crate is as before: a chain over 96 large
-  definitions rebuilds 17 % slower than before the single-copy layout, and 96
-  separate calls 40 % faster (`bench/RESULTS.md`). Adding
-  `[profile.dev.build-override] opt-level = 3` to the workspace `Cargo.toml`
-  builds the proc macros (`announce`, `syn`, ...) with optimizations: S = 200,
-  K = 96 then rebuilds in 763 ms instead of 1,117 ms (the plain crate takes
-  427 ms), S = 10, K = 96 in 140 instead of 172 ms. `ANNOUNCE_TIMING=1` prints
-  the time of each step of the macros (`DESIGN.md`, section 4.9).
+- The cost is metadata of the defining crate: about 6 KiB per definition plus
+  copies of the item (one copy for items above about 21 trait methods). Doc
+  comments are not recorded.
+- Executables are unaffected, and calling crates stay small (12–60 KiB of
+  `.rmeta` at K = 96).
+- `[profile.dev.build-override] opt-level = 3` in your workspace builds the
+  proc macros optimized: 1,117 ms becomes 763 ms at S = 200, K = 96.
 
 ## Related crates
 
