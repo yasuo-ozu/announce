@@ -82,12 +82,18 @@ All options of `#[announce(..)]` are in the
 
 | crate | use it to |
 |---|---|
-| [`announce`](https://docs.rs/announce) | define items: `#[announce]`, `#[derive(Announce)]`, trait `Announce` |
-| [`announce::helper`](https://docs.rs/announce/latest/announce/helper/index.html) (a module of `announce`) | write callbacks and checks, start chains, redirect derives |
+| [`announce`](https://docs.rs/announce) | everything below |
 | [`announce-std`](https://docs.rs/announce-std) | announce std/core traits (`announce_std::iter::Iterator!`) |
 
-A proc-macro crate can announce items it builds itself with
-[`announce::machinery`](https://docs.rs/announce/latest/announce/machinery/index.html).
+In `announce`:
+
+- `#[announce]`, `#[derive(Announce)]` and the trait `Announce` define announced items.
+- [`announce::helper`](https://docs.rs/announce/latest/announce/helper/index.html)
+  writes callbacks and checks, starts chains and redirects derives.
+- [`announce::machinery`](https://docs.rs/announce/latest/announce/machinery/index.html)
+  announces items that your own proc macro builds.
+
+`announce-core` and `announce-macros` are internal; depend on `announce`.
 Minimum Rust version: 1.57.
 
 ## Performance
