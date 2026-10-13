@@ -6,7 +6,7 @@ edition = "2021"
 rust-version = "1.56"
 license = "MIT"
 authors = ["Yasuo Ozu <yasuo@ozu.email>"]
-repository = "https://github.com/yasuo-ozu/ozu"
+repository = "https://github.com/yasuo-ozu/announce"
 
 # Feature `type-leak` (the optional dependency below, on by default) enables
 # `TypeLeak` and `Entry::type_leak` (the `type_leak(..)` META of a `repeater = ..`

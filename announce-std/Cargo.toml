@@ -6,7 +6,7 @@ edition = "2021"
 rust-version = "1.57"
 license = "MIT"
 authors = ["Yasuo Ozu <yasuo@ozu.email>"]
-repository = "https://github.com/yasuo-ozu/ozu"
+repository = "https://github.com/yasuo-ozu/announce"
 
 [features]
 default = ["std"]

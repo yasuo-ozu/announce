@@ -1,14 +1,20 @@
-<p align="center"><img src="logo.png" alt="announce logo" width="200"></p>
+# announce crate [![Latest Version]][crates.io] [![Documentation]][docs.rs] [![GitHub Actions]][actions]
 
-# announce
+[Latest Version]: https://img.shields.io/crates/v/announce.svg
+[crates.io]: https://crates.io/crates/announce
+[Documentation]: https://img.shields.io/docsrs/announce
+[docs.rs]: https://docs.rs/announce/latest/announce/
+[GitHub Actions]: https://github.com/yasuo-ozu/announce/actions/workflows/rust.yml/badge.svg
+[actions]: https://github.com/yasuo-ozu/announce/actions/workflows/rust.yml
+
+<p align="center"><img src="https://raw.githubusercontent.com/yasuo-ozu/announce/main/logo.png" alt="announce" width="200"></p>
 
 Make a definition visible to proc macros in any crate.
 
 A proc macro only sees the tokens it is applied to. Put `#[announce]` on a
-definition, and any crate can ask for its tokens. `#[announce]` keeps the item
-and emits a `macro_rules!` with the item's name. Calling that macro passes the
-definition, as tokens, to a callback macro. It works on a struct, enum, union,
-trait, type alias or inline `mod`.
+struct, enum, union, trait, type alias or inline `mod`, and any crate can ask for
+its tokens: `#[announce]` keeps the item and emits a `macro_rules!` with the
+item's name, and calling that macro passes the definition to a callback macro.
 
 ```rust
 #[announce::announce]
@@ -34,140 +40,55 @@ show! {
 }
 ```
 
-`META` lists what the definer attached (checks, `meta` entries). It is empty
-without options. In the item, `#[cfg]` is already evaluated in the defining crate
-and `crate::` reads `$crate::`. Doc attributes (`///`, `//!`, `#[doc = ".."]`) are
-removed from it, and the emitted item keeps them (`docs = true` keeps them in
-the callback's item too). Callers and callbacks need no dependency on announce.
+`META` lists what the definer attached (checks, `meta` entries). Callers and
+callbacks need no dependency on announce.
 
 For a struct, enum or union you write yourself, derive it instead. The derive
 also implements the [`Announce`](https://docs.rs/announce/latest/announce/trait.Announce.html)
-trait. Options go in a helper attribute (not `mock` or `emit_item`):
+trait, and takes the same options in a helper attribute `#[announce(..)]`:
 
 ```rust
 #[derive(announce::Announce)]
-#[announce(meta = my_lib::info(version = 1))]
 pub struct Point { pub x: i32, pub y: i32 }
 ```
+
+## Calling a trampoline
+
+One callback can take many definitions. The list names the trampolines, then
+the callback, which runs once. A long chain may need a higher `recursion_limit`
+([details](https://docs.rs/announce/latest/announce/attr.announce.html#size-and-recursion)).
+
+```text
+path::Item! { [path::Item!, other::Def!, cb!] REST }
+```
+
+## Features
+
+- Works in any position: item, statement, expression, type, pattern.
+- Evaluates `#[cfg]` in the defining crate; `crate::` paths keep pointing there.
+- Leaves docs out of the item the callback receives (`docs = true` keeps them).
+- Checks at the definition, which can own attributes of their own inside the item:
+  [`#[announce(my_lib::check)]`](https://docs.rs/announce/latest/announce/attr.announce.html#checks-and-attributes-of-your-own).
+- Metadata for consumers: `#[announce(meta = my_lib::info(k = v))]`.
+- Types that are relative to the defining crate: [`repeater`](https://docs.rs/announce/latest/announce/attr.announce.html#type-context).
+- Transformers chosen by the caller, such as
+  [`signature_only!`](https://docs.rs/announce/latest/announce/macro.signature_only.html).
+- A derive or attribute may own the name: rename the trampoline with `macro_name`.
+
+All options of `#[announce(..)]` are in the
+[API docs](https://docs.rs/announce/latest/announce/attr.announce.html).
 
 ## Crates
 
 | crate | use it to |
 |---|---|
-| `announce` | define items: `#[announce]`, `#[derive(Announce)]`, trait `Announce` |
-| `announce-helper` | write callbacks and checks, start chains, redirect derives |
-| `announce-std` | announce std/core traits (`announce_std::iter::Iterator!`) |
+| [`announce`](https://docs.rs/announce) | define items: `#[announce]`, `#[derive(Announce)]`, trait `Announce` |
+| [`announce-helper`](https://docs.rs/announce-helper) | write callbacks and checks, start chains, redirect derives |
+| [`announce-std`](https://docs.rs/announce-std) | announce std/core traits (`announce_std::iter::Iterator!`) |
 
-A proc-macro crate that builds or rewrites items itself can make them announced
-by calling `announce::machinery::announce(attr, item)` instead of emitting
-`#[announce(..)]`. The result is
-the same code, as `proc_macro2` tokens. If the crate's users do not depend on
-`announce`, the crate re-exports it and passes `crate = ::my_lib::announce`.
-`announce` also re-exports [`type_leak`](https://docs.rs/type-leak).
-
-Minimum Rust version: 1.57 (1.56 for `announce-helper`). A `repeater` trait needs
-1.59 in the defining crate.
-
-## Calling a trampoline
-
-```text
-path::Item! { [path::Item!, other::Def!, cb!] REST }
-// cb! { [cb!] other::Def! => [META] { DEF } path::Item! => [META] { ITEM } REST }
-```
-
-The list names the trampolines to call, then the callback. Each macro adds its
-entry and calls the next, so `cb!` runs once, with every definition. The newest
-entry comes first and `REST` is never touched. Parsers read entries greedily:
-wrap a `REST` that starts like one. A list element is `path!`,
-`#[derive(path)] Name` or `#[attr] Name`. A leading `(..)` group of global
-options is forwarded unchanged by every hop.
-
-A chain nests the expansions of all its macros, and rustc stops at a
-`recursion_limit` of 128 by default. A small definition takes one expansion, one
-with `$` two, and one of more than 300 tokens (see Performance) three, so a
-chain holds up to 127 small or 42 large definitions. For a longer one, set
-`#![recursion_limit = "256"]` (or more) in the calling crate.
-
-## Features
-
-- Works in any position: item, statement, expression, type, pattern, also for
-  items containing `$`. The derive and attribute route works in item position only.
-- Evaluates `#[cfg]` in the defining crate. `crate::` paths keep pointing there.
-- Leaves docs out of the recorded item (`docs = true` keeps them): a smaller
-  trampoline, and `#[doc(hidden)]`-style `doc(..)` attributes stay.
-- Checks at the definition: `#[announce(my_lib::no_tuple_structs)]`. A check can
-  own attributes of its own inside the item (below).
-- Metadata for consumers: `#[announce(meta = my_lib::info(k = v))]`.
-- Transformers chosen by the caller. A transformer is a list element right after
-  the definition. It rewrites the entry and forwards to the rest, for example
-  `[Partly!, ::announce::signature_only!, cb!]`. Use
-  [`signature_only!`](https://docs.rs/announce/latest/announce/macro.signature_only.html)
-  or write your own with `announce_helper::transformer!`.
-- A derive or attribute may own the name: rename the trampoline with
-  `#[announce(macro_name = ParseAnnounce)]`. That derive then forwards to it with
-  `announce_helper::redirect`.
-
-## Attributes of your own
-
-A check can own attribute names, so the item may carry attributes that no
-derive declares and that rustc would reject:
-
-```text
-#[announce(my_lib::check)]        // the check owns `my_lib`
-pub struct S { #[my_lib(skip)] pub a: u8, pub b: u8 }
-```
-
-`#[announce]` removes the owned attributes from the item it emits and keeps them
-in the payload: callbacks see them, `META` lists `attrs(my_lib)`
-(`Entry::owned_attrs`), and the check gets the item with them, to validate them
-at the definition. They are found anywhere in the item (fields, variants,
-generics, trait items, inline `mod` contents), after `#[cfg_attr]` is evaluated.
-Not in a derive: a derive cannot change its input, so a library declares its
-attributes on its own derive there.
-
-To learn the names, `#[announce]` sends every check a query first
-(`my_lib::check! { @__announce_attrs [ .., finish! ] { STATE } }`), and **every
-check must answer it**, also one that owns nothing. `announce_helper::check!`
-writes a proc-macro check that does; a `macro_rules!` check has one more arm. The
-[`#[announce]` docs](https://docs.rs/announce/latest/announce/attr.announce.html#checks-and-attributes-of-your-own)
-and `announce_helper::attrs` have the protocol.
-
-## Type context
-
-The item's tokens are used again in another crate, so its paths must resolve
-there. `crate::` and absolute paths (`::std::vec::Vec<u8>`) do. A relative type
-such as `Local` needs `repeater = crate::Repeater`, a trait of the defining
-crate that carries the type to the callback (`announce_helper::TypeLeak::apply`).
-Do not write that trait: `announce::define_repeater!(pub Repeater);` emits it
-(from `type_leak::repeater_definition()`; the crate that expands it needs Rust
-1.59). Const generics of every primitive type (`bool`, `char`, any integer) can
-appear in a carried type. Each carried type is written from the context where it
-occurs, so a method generic, a where clause or a bound that only one scope has
-stays in that scope. Trait paths (supertraits, bounds) must be absolute
-(`::core::fmt::Display`). The
-[`#[announce]` docs](https://docs.rs/announce/latest/announce/attr.announce.html#type-context)
-list what resolves, what a repeater is, and what is an error.
-
-```text
-announce::define_repeater!(pub Repeater);
-
-#[announce(repeater = crate::Repeater)]
-pub struct Holder<T> { pub a: Local, pub b: Wrap<T> }
-```
-
-A library with its own type handling announces a copy wrapped in a same-named
-inline `mod`, with `emit_item = false`. Only the trampoline is emitted, not the
-`mod`, so it does not clash with the real item. Modules are not analysed, so the
-library makes every path resolve. The callback unwraps the module. Announcing one
-item twice needs a different `macro_name` each time.
-
-```text
-#[announce(emit_item = false, meta = my_lib::info(..))]
-pub mod MyTrait { pub trait MyTrait: Base { fn f(&self) -> Local; } }
-```
-
-All options are listed in the
-[`#[announce]` docs](https://docs.rs/announce/latest/announce/attr.announce.html).
+A proc-macro crate can announce items it builds itself with
+[`announce::machinery`](https://docs.rs/announce/latest/announce/machinery/index.html).
+Minimum Rust version: 1.57.
 
 ## Performance
 
@@ -184,8 +105,8 @@ Lines: color = S (darker is larger), solid = announced or one chain, dashed =
 plain or K separate calls. Both axes are logarithmic. Made with
 `bench/plot.py --svg bench/plots`.
 
-<img src="bench/plots/defining-rmeta.svg" alt="Defining crate: .rmeta size against K" width="49%"> <img src="bench/plots/defining-time.svg" alt="Defining crate: rebuild time against K" width="49%">
-<img src="bench/plots/calling-rmeta.svg" alt="Calling crate: .rmeta size against K" width="49%"> <img src="bench/plots/calling-time.svg" alt="Calling crate: rebuild time against K" width="49%">
+<img src="https://raw.githubusercontent.com/yasuo-ozu/announce/main/bench/plots/defining-rmeta.svg" alt="Defining crate: .rmeta size against K" width="49%"> <img src="https://raw.githubusercontent.com/yasuo-ozu/announce/main/bench/plots/defining-time.svg" alt="Defining crate: rebuild time against K" width="49%">
+<img src="https://raw.githubusercontent.com/yasuo-ozu/announce/main/bench/plots/calling-rmeta.svg" alt="Calling crate: .rmeta size against K" width="49%"> <img src="https://raw.githubusercontent.com/yasuo-ozu/announce/main/bench/plots/calling-time.svg" alt="Calling crate: rebuild time against K" width="49%">
 
 | S | K | definer, plain | definer, announced | calling crate, one chain | calling crate, K calls | definer build, plain / announced | calling crate build, one chain |
 |---:|---:|---:|---:|---:|---:|---:|---:|
@@ -223,11 +144,8 @@ plain or K separate calls. Both axes are logarithmic. Made with
 
 ## Related crates
 
-- **[macro_magic](https://crates.io/crates/macro_magic)** has the same core idea:
-  record an item in a macro, import its tokens by path. announce adds
-  continuation lists (one callback gets many definitions), definition-side cfg
-  evaluation and checks, type context handling, and a plain protocol with no
-  dependency on announce.
+- **[macro_magic](https://crates.io/crates/macro_magic)** has the same core idea.
+  announce adds continuation lists, definition-side cfg evaluation and checks,
+  and type context handling.
 - **[reify_types](https://crates.io/crates/reify_types)** makes a definition
-  available when compiled code *runs*, not during macro expansion. announce
-  delivers it at *compile time*.
+  available when compiled code *runs*. announce delivers it at *compile time*.

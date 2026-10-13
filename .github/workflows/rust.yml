@@ -1,0 +1,62 @@
+name: Rust
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    # Tests, UI tests, docs, clippy and rustfmt in one job.
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install nightly Rust (for the UI tests)
+      run: rustup toolchain install nightly --profile minimal
+    - name: Build
+      run: cargo build --workspace --verbose
+    - name: Run tests (every workspace member, README doctests included)
+      run: cargo test --workspace --verbose
+    - name: Run the announce-helper tests without its default `type-leak` feature
+      run: cargo test -p announce-helper --no-default-features --verbose
+    - name: Run the renamed-dependency tests (a separate workspace)
+      working-directory: tests/renamed-ws
+      run: cargo test --verbose
+    - name: Run the UI tests
+      # trybuild compares compiler output with the snapshots in tests/ui/tests/ui,
+      # which were recorded with a nightly rustc; other versions word some errors
+      # differently.
+      working-directory: tests/ui
+      run: cargo +nightly test --verbose
+    - name: Build docs
+      run: cargo doc --no-deps -p announce -p announce-core -p announce-helper -p announce-std --verbose
+      env:
+        RUSTDOCFLAGS: -D warnings
+    - name: Run clippy
+      run: cargo clippy --workspace --all-targets -- -D warnings
+    - name: Check formatting
+      run: cargo fmt --all --check
+
+  msrv:
+    # 1.56: announce-helper; 1.57: announce, announce-core, announce-macros,
+    # announce-std; 1.59: the whole workspace (a `repeater` needs 1.59).
+    # tools/msrv.sh builds a scratch copy with an MSRV-compatible lock file.
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install the MSRV toolchains
+      run: |
+        rustup toolchain install stable --profile minimal
+        rustup toolchain install 1.56 --profile minimal
+        rustup toolchain install 1.57.0 --profile minimal
+        rustup toolchain install 1.59.0 --profile minimal
+    - name: Build and test on the minimum Rust versions
+      run: sh tools/msrv.sh

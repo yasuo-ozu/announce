@@ -32,8 +32,9 @@ use proc_macro::TokenStream;
 /// `META` is the list of what the definer attached: checks, `meta` entries and
 /// so on. It is empty without options. In the item, `#[cfg]` is already
 /// evaluated in the defining crate, `crate::` reads `$crate::`, and the doc
-/// attributes are gone (see [Docs](#docs)). The `announce` crate docs show how
-/// to chain several definitions into one callback.
+/// attributes are gone (see [Docs](#docs)). See
+/// [Calling a trampoline](#calling-a-trampoline) for chaining several
+/// definitions into one callback.
 ///
 /// # Options
 ///
@@ -41,10 +42,14 @@ use proc_macro::TokenStream;
 /// `#[announce(macro_name = Name, my_lib::check)]`.
 ///
 /// - `macro_name = Ident`: name of the emitted macro. Default: the item's name.
-///   Use it when a derive or attribute macro owns that name, or to announce an
-///   item twice.
+///   Use it when a derive or attribute macro owns that name: announce the item as
+///   `macro_name = ParseAnnounce`, and the derive forwards to it with
+///   `announce_helper::redirect`. Also needed to announce an item twice.
 /// - `crate = path`: path to the `announce` crate in generated code. Optional:
-///   it is read from the caller's `Cargo.toml`, so a renamed dependency works.
+///   it is read from the `Cargo.toml` of the crate being compiled, so a renamed
+///   dependency works. A proc-macro library whose users do not depend on
+///   `announce` re-exports it and passes `crate = ::my_lib::announce`
+///   (`announce::machinery` has the details).
 /// - `meta = path(args)`: metadata for consumers. It is added to `META` as
 ///   `path(args)` and never called. May repeat. `(args)` is optional.
 /// - `path` or `path(args)`, without `=`: a check. It runs at the definition,
@@ -62,7 +67,7 @@ use proc_macro::TokenStream;
 /// - `allow_std_prelude = bool`: bare std prelude names (`String`, `Vec<u8>`,
 ///   `Option<T>`, `Clone`, ...) need no repeater. Default: `false`.
 /// - `emit_item = bool`: with `false`, only the macro is emitted, not the item.
-///   Default: `true`.
+///   Default: `true`. See [Inline modules](#inline-modules) for its main use.
 /// - `layout = auto | single | direct` (advanced): how the macro holds the item.
 ///   See [Size and recursion](#size-and-recursion). Default: `auto`.
 /// - `docs = bool`: with `true`, the item that callbacks and checks receive keeps
@@ -78,6 +83,34 @@ use proc_macro::TokenStream;
 /// #[announce(my_lib::no_tuple(named))]
 /// pub struct S { pub a: u8 }
 /// ```
+///
+/// # Calling a trampoline
+///
+/// ```text
+/// path::Item! { [path::Item!, other::Def!, cb!] REST }
+/// // cb! { [cb!] other::Def! => [META] { DEF } path::Item! => [META] { ITEM } REST }
+/// ```
+///
+/// The list names the trampolines to call, then the callback. Each macro adds its
+/// entry and calls the next, so `cb!` runs once, with every definition. The
+/// newest entry comes first and `REST` is never touched. Parsers read entries
+/// greedily: wrap a `REST` that starts like one.
+///
+/// - A list element is `path!`, `#[derive(path)] Name` or `#[attr] Name`. The
+///   last two reach a trampoline through a derive or attribute macro that owns
+///   the name (see `macro_name`); that route works in item position only.
+/// - A leading `(..)` group of global options is forwarded unchanged by every
+///   hop.
+/// - A transformer is a list element right after the definition. It rewrites the
+///   entry and forwards to the rest, for example
+///   `[Item!, ::announce::signature_only!, cb!]`
+///   ([`signature_only!`](macro@signature_only), or your own with
+///   `announce_helper::transformer!`). Transformers are chosen by the caller,
+///   never by an option of the definition.
+/// - The call works in any position: item, statement, expression, type and
+///   pattern, also for items containing `$`.
+/// - A long chain can reach rustc's `recursion_limit`: see
+///   [Size and recursion](#size-and-recursion).
 ///
 /// # Checks and attributes of your own
 ///
@@ -433,9 +466,18 @@ use proc_macro::TokenStream;
 /// ## Inline modules
 ///
 /// Inline modules are not analysed, and a `repeater` on one is an error. A library
-/// that handles the paths itself announces a copy wrapped in a `mod` of the same
-/// name, with `emit_item = false`, so that only the trampoline is emitted. The
-/// `announce` crate docs show this pattern.
+/// that handles the paths itself announces a copy wrapped in an inline `mod` of
+/// the same name, with `emit_item = false`:
+///
+/// ```ignore
+/// #[announce(emit_item = false, macro_name = MyTraitCopy, meta = my_lib::info(..))]
+/// pub mod MyTrait { pub trait MyTrait: Base { fn f(&self) -> Local; } }
+/// ```
+///
+/// Only the trampoline is emitted, not the `mod`, so the copy does not clash with
+/// the real `MyTrait`. The library makes every path in the module resolve for its
+/// callbacks, and a callback unwraps the module. Announcing one item twice needs a
+/// different `macro_name` each time.
 ///
 /// # The `Announce` impl
 ///

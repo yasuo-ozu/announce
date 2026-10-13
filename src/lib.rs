@@ -1,4 +1,6 @@
 #![doc = include_str!("../README.md")]
+#![doc(html_logo_url = "https://raw.githubusercontent.com/yasuo-ozu/announce/main/logo.png")]
+#![doc(html_favicon_url = "https://raw.githubusercontent.com/yasuo-ozu/announce/main/logo.png")]
 #![no_std]
 
 pub use announce_macros::announce;

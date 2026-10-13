@@ -6,7 +6,7 @@ edition = "2021"
 rust-version = "1.57"
 license = "MIT"
 authors = ["Yasuo Ozu <yasuo@ozu.email>"]
-repository = "https://github.com/yasuo-ozu/ozu"
+repository = "https://github.com/yasuo-ozu/announce"
 readme = "README.md"
 build = "build.rs"
 # This package is the root of the repository: publish only the crate itself,

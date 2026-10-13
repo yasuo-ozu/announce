@@ -690,7 +690,7 @@ pub mod sig_full {
     }
 }
 
-/// The module-wrapper pattern of the README: `emit_item = false` on a
+/// The module-wrapper pattern of the `#[announce]` docs: `emit_item = false` on a
 /// same-named module next to the real item.
 pub mod wrapper {
     use super::announce;
