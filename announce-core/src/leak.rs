@@ -382,22 +382,60 @@ fn note_text(note: &str) -> Option<String> {
     }
 }
 
+/// The std prelude name that heads the offending type, when it is relative here
+/// (`allow_std_prelude` is off). type-leak then names the whole type, says why it
+/// cannot be leaked (`Self::Out`, `'_`, ..) and shows the absolute path of the
+/// prelude name: "use `::core::option::Option` instead of `Option`". The reason
+/// to act on is the relative name, which this finds.
+fn prelude_name(item: &type_leak::ErrorItem, opts: &crate::options::Options) -> Option<String> {
+    if opts.allow_std_prelude || !item.help_text()?.starts_with("use `") {
+        return None;
+    }
+    let name = item.tokens.clone().into_iter().next()?.to_string();
+    if PRELUDE.contains(&name.as_str()) {
+        Some(name)
+    } else {
+        None
+    }
+}
+
+/// The start of the note of type-leak that names what stops a relative type from being
+/// leaked: "it cannot be leaked as a whole because of `Self::Out`".
+const WHOLE_NOTE: &str = "it cannot be leaked as a whole because of ";
+
+/// The headline of one error, in terms of `#[announce]`. For a prelude name it
+/// says that the name is relative, which is what the user can change.
+fn headline(item: &type_leak::ErrorItem, opts: &crate::options::Options) -> String {
+    match prelude_name(item, opts) {
+        Some(name) => format!(
+            "announce: the prelude name `{}` is relative here, so `{}` does not resolve outside \
+             the defining crate",
+            name,
+            tidy(&item.tokens.to_string())
+        ),
+        None => format!("announce: {}", tidy(&item.message)),
+    }
+}
+
 /// The help of one error, in terms of `#[announce]`.
 fn help_text(item: &type_leak::ErrorItem, opts: &crate::options::Options) -> String {
     let mut help = without_api_options(item.help_text().unwrap_or_default());
     if item.message.contains("has no meaning here") {
         // `Self` in a type alias; type-leak: "or enter a scope that declares `Self`".
         help = "write the type instead of `Self`".to_string();
-    } else if help.starts_with("use `") {
-        // A prelude name: type-leak says which absolute path it is.
-        let name = item
-            .tokens
-            .clone()
-            .into_iter()
-            .next()
-            .map(|t| t.to_string());
-        if name.map_or(false, |n| PRELUDE.contains(&n.as_str())) && !opts.allow_std_prelude {
-            help.push_str(" (or set `allow_std_prelude = true` to accept prelude names)");
+    } else if let Some(name) = prelude_name(item, opts) {
+        // type-leak: "use `::core::option::Option` instead of `Option`".
+        if let Some(absolute) = help.split('`').nth(1) {
+            let mut tokens = item.tokens.clone().into_iter().skip(1);
+            let args = match tokens.next() {
+                Some(proc_macro2::TokenTree::Punct(p)) if p.as_char() == '<' => "<..>",
+                _ => "",
+            };
+            return format!(
+                "write `{}{}` instead of `{}{}`, or set `allow_std_prelude = true` to accept \
+                 prelude names",
+                absolute, args, name, args
+            );
         }
     }
     let help = tidy(&crate_example(&help));
@@ -414,13 +452,23 @@ fn help_text(item: &type_leak::ErrorItem, opts: &crate::options::Options) -> Str
 /// The errors of type-leak, one `syn::Error` per offending path or type: the
 /// headline, the notes that say why, and what to write instead. Their wording
 /// is type-leak's, minus its API and its example crate name (see
-/// [`help_text`], [`note_text`] and [`tidy`]).
+/// [`help_text`], [`note_text`] and [`tidy`]). A relative prelude name is
+/// explained as that ([`headline`], [`prelude_name`]).
 fn report(e: type_leak::NotInternableError, opts: &crate::options::Options) -> syn::Error {
     let mut out: Option<syn::Error> = None;
     for item in e.items() {
-        let mut message = format!("announce: {}", tidy(&item.message));
+        let mut message = headline(&item, opts);
         let mut seen: Vec<String> = Vec::new();
+        let relative_prelude = prelude_name(&item, opts).is_some();
         for note in item.notes.iter().filter_map(|(_, n)| note_text(n)) {
+            // The headline says that the name is relative: say what that costs, not
+            // that the type "cannot be leaked".
+            let note = match note.strip_prefix(WHOLE_NOTE) {
+                Some(cause) if relative_prelude => {
+                    format!("a relative type cannot be carried with {} in it", cause)
+                }
+                _ => note,
+            };
             if !seen.contains(&note) {
                 message.push_str(&format!("\n  = note: {}", note));
                 seen.push(note);
@@ -1474,10 +1522,38 @@ mod tests {
     fn a_prelude_name_gets_the_prelude_option() {
         let e = first_error(quote! { struct S { a: Vec<&'_ u8> } });
         assert!(
-            e.ends_with("= help: use `::std::vec::Vec` instead of `Vec` (or set `allow_std_prelude = true` to accept prelude names)"),
+            e.starts_with("announce: the prelude name `Vec` is relative here, so `Vec<&'_ u8>` does not resolve outside the defining crate"),
             "{}",
             e
         );
+        assert!(
+            e.ends_with("= help: write `::std::vec::Vec<..>` instead of `Vec<..>`, or set `allow_std_prelude = true` to accept prelude names"),
+            "{}",
+            e
+        );
+        // A relative `Option` around `Self::Out`: the error is about the name, not
+        // about "leaking" the whole type.
+        let e = first_error(quote! { trait Tr { type Out; fn f(&self) -> Option<Self::Out>; } });
+        assert_eq!(
+            e,
+            "announce: the prelude name `Option` is relative here, so `Option<Self::Out>` does not \
+             resolve outside the defining crate\n  \
+             = note: a relative type cannot be carried with `Self::Out` in it\n  \
+             = help: write `::core::option::Option<..>` instead of `Option<..>`, or set \
+             `allow_std_prelude = true` to accept prelude names"
+        );
+        assert!(!e.contains("leaked"), "{}", e);
+        // Both ways out work.
+        let prelude = Options {
+            allow_std_prelude: true,
+            ..Options::default()
+        };
+        let it = item(quote! { trait Tr { type Out; fn f(&self) -> Option<Self::Out>; } });
+        assert!(analyze(&it, &prelude).is_ok());
+        let it = item(
+            quote! { trait Tr { type Out; fn f(&self) -> ::core::option::Option<Self::Out>; } },
+        );
+        assert!(analyze(&it, &opts()).is_ok());
         // The option does what the help says.
         let prelude = Options {
             allow_std_prelude: true,
@@ -1511,7 +1587,8 @@ mod tests {
             &opts(),
         );
         assert_eq!(n.len(), 3);
-        assert!(n[2].contains("`::std::vec::Vec`"), "{}", n[2]);
+        assert!(n[2].contains("`::std::vec::Vec<..>`"), "{}", n[2]);
+        assert_announce_wording(&n[2]);
     }
 
     #[test]

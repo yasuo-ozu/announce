@@ -33,7 +33,11 @@ use proc_macro::TokenStream;
 /// empty without options. In the item, `#[cfg]` is already evaluated in the defining
 /// crate, `crate::` reads `$crate::`, and doc attributes are gone (see
 /// [Docs](#docs)). The [wire format] is the same for every item. Write callbacks
-/// with [`announce::helper`].
+/// with [`announce::helper`] (and announce items your own macro builds with
+/// [`announce::machinery`]); both need the feature `proc-macro-api` of `announce`,
+/// which is on by default. A `#![no_std]` crate that only defines items turns it off
+/// (`default-features = false`) and still has `#[announce]` and
+/// `#[derive(Announce)]`.
 ///
 /// # Options
 ///

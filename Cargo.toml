@@ -1,7 +1,7 @@
 [package]
 name = "announce"
 description = "Definition-side trampolines: make a definition known to proc macros in any crate"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 rust-version = "1.57"
 license = "MIT"
@@ -11,16 +11,28 @@ readme = "README.md"
 build = "build.rs"
 # This package is the root of the repository: publish only the crate itself,
 # not the other workspace members, tests/, bench/, tools/ or the logo.
-include = ["src/**/*", "build.rs", "README.md", "LICENSE", "Cargo.toml"]
+include = ["src/**/*", "build.rs", "README.md", "CHANGELOG.md", "LICENSE", "Cargo.toml"]
+
+[features]
+# On by default. It gives `announce::helper`, `announce::machinery` and
+# `announce::type_leak`, which are built on proc-macro2 and syn and so need the
+# standard library. A `#![no_std]` crate (or one built for a target without std)
+# that only defines items with `#[announce]` / `#[derive(Announce)]` turns it off
+# with `default-features = false`: the generated code needs only `announce::Announce`
+# and the hidden `announce::__private`. The names `announce-core` and `type-leak`
+# are the features that cargo 1.57 makes of the optional dependencies (no `dep:`).
+default = ["proc-macro-api"]
+proc-macro-api = ["announce-core", "type-leak"]
 
 [dependencies]
-announce-macros = { path = "announce-macros", version = "0.1.0" }
+announce-macros = { path = "announce-macros", version = "0.1.1" }
 # Re-exported as `announce::machinery` (the generation code behind `#[announce]`
 # and `#[derive(Announce)]`, callable from other proc-macro crates) and as
-# `announce::helper` (the helpers for callbacks and checks).
-announce-core = { path = "announce-core", version = "0.1.0" }
-# Re-exported as `announce::type_leak`.
-type-leak = "0.8.2"
+# `announce::helper` (the helpers for callbacks and checks). Optional:
+# `announce-macros` depends on it anyway, but only for the host.
+announce-core = { path = "announce-core", version = "0.1.1", optional = true }
+# Re-exported as `announce::type_leak`. Optional, like announce-core.
+type-leak = { version = "0.8.2", optional = true }
 
 [dev-dependencies]
 # The `announce::machinery` doc test, and tests/helper_api.rs (`announce::helper`).
@@ -35,6 +47,7 @@ members = [
     "announce-macros",
     "announce-std",
     "tests/defs",
+    "tests/nostd",
     "tests/user",
     "tests/derive",
     "tests/renamed",
@@ -51,6 +64,7 @@ default-members = [
     "announce-macros",
     "announce-std",
     "tests/defs",
+    "tests/nostd",
     "tests/user",
     "tests/derive",
     "tests/renamed",

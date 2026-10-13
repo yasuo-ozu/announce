@@ -1,0 +1,13 @@
+[package]
+name = "announce-test-nostd"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.59"
+publish = false
+
+# A `#![no_std]` definer crate. `announce` without its default feature
+# `proc-macro-api` has no proc-macro2/syn in the graph of the target, so this
+# crate builds for `x86_64-unknown-none` (the CI job does that); the tests in
+# `tests/` call its trampolines from an ordinary std test crate.
+[dependencies]
+announce = { path = "../..", default-features = false }

@@ -8,6 +8,9 @@
 //! [`derive_announce`] or [`derive_announce_with`] instead. The options are those
 //! of the [`#[announce]`](macro@crate::announce#options) attribute.
 //!
+//! This module needs the feature `proc-macro-api` of `announce`, which is on by
+//! default (`default-features = false` leaves it out, for `no_std` definitions).
+//!
 //! ```toml
 //! # Cargo.toml of the library's proc-macro crate
 //! announce = "0.1"

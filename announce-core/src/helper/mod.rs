@@ -21,6 +21,10 @@
 //!   in any crate.
 //!
 //! The shape of the tokens that a callback receives is described at [`Input`].
+//!
+//! As `announce::helper`, this module needs the feature `proc-macro-api` of
+//! `announce`, which is on by default (`default-features = false` leaves it out, for
+//! `no_std` definitions).
 
 pub mod attrs;
 mod kv;
@@ -574,6 +578,44 @@ impl ToTokens for Entry {
 /// - The doc comments of `Point` are gone from the item, because the payload has
 ///   no docs unless `docs = true`. `#[my_lib(skip)]` is still there: the definer
 ///   removed it from the item it emitted, but the callback can read it.
+///
+/// # `self` and hygiene
+///
+/// `self` is hygienic. The `self` in the receiver of a method that the callback
+/// receives (`&self`) belongs to the trampoline's expansion; a `self` that the
+/// callback writes itself, in its own `quote!`, is another one to rustc. A callback
+/// that mixes the received tokens with its own output, for example the received
+/// signature with a body it writes, must use the `self` token of the payload in that
+/// body. Otherwise rustc reports `E0424` ("cannot find value `self` in this
+/// scope"). Take the token from the receiver of the parsed signature:
+///
+/// ```
+/// # use announce_core as announce;
+/// use announce::helper::Input;
+/// use template_quote::quote;
+///
+/// // For `trait Get { fn get(&self) -> u8; }`: an impl that forwards `get` to a field.
+/// fn forward(input: &Input) -> syn::Result<proc_macro2::TokenStream> {
+///     let item = match input.entries[0].item()? {
+///         syn::Item::Trait(t) => t,
+///         _ => return Err(syn::Error::new(proc_macro2::Span::call_site(), "expected a trait")),
+///     };
+///     let sig = match &item.items[0] {
+///         syn::TraitItem::Fn(f) => &f.sig,
+///         _ => return Err(syn::Error::new(proc_macro2::Span::call_site(), "expected a method")),
+///     };
+///     let (trait_name, name) = (&item.ident, &sig.ident);
+///     // The `self` of the payload: a `quote! { self.inner }` here would not match `#sig`.
+///     let this = &sig.receiver().expect("a method with a receiver").self_token;
+///     Ok(quote! {
+///         impl #trait_name for Wrapper { #sig { #this.inner.#name() } }
+///     })
+/// }
+///
+/// let input: Input = syn::parse_quote! { [cb!] a::Get! => [] { trait Get { fn get(&self) -> u8; } } };
+/// let out = forward(&input).unwrap().to_string();
+/// assert!(out.contains("fn get (& self) -> u8 { self . inner . get () }"), "{}", out);
+/// ```
 #[derive(Clone, Debug)]
 pub struct Input {
     /// The global options group `(..)`. [`forward`](Self::forward) passes it on

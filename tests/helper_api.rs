@@ -5,6 +5,7 @@
 //! The macros `callback!` and `transformer!` define `#[proc_macro]` functions, so
 //! they can only be expanded in a proc-macro crate. `tests/derive` does that, also
 //! with `announce` as its only link to the code. Here their paths are resolved.
+#![cfg(feature = "proc-macro-api")]
 
 use announce::helper::{
     // Functions.

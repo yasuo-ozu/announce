@@ -18,7 +18,14 @@ pub use announce_macros::signature_only;
 ///
 /// A consumer can require `T: Announce` next to a trampoline call. That gives a
 /// clear error when the callee was not announced.
-/// [`helper::check_type`] and [`helper::check_trait`] write that bound.
+#[cfg_attr(
+    feature = "proc-macro-api",
+    doc = "[`helper::check_type`] and [`helper::check_trait`] write that bound."
+)]
+#[cfg_attr(
+    not(feature = "proc-macro-api"),
+    doc = "`helper::check_type` and `helper::check_trait` write that bound (they need the feature `proc-macro-api`)."
+)]
 #[cfg_attr(
     announce_diagnostic,
     diagnostic::on_unimplemented(
@@ -37,15 +44,20 @@ pub trait Announce {}
 /// [`helper::leak::StableReferrer`]) can name it through `announce`, and so
 /// cannot end up with a second, incompatible copy.
 ///
+/// Needs the feature `proc-macro-api`, which is on by default.
+///
 /// ```
 /// let _leaker = announce::type_leak::Leaker::new();
 /// ```
+#[cfg(feature = "proc-macro-api")]
 pub use type_leak;
 
 // The docs of the module are those of `announce_core::helper`, inlined here.
+#[cfg(feature = "proc-macro-api")]
 #[doc(inline)]
 pub use announce_core::helper;
 
+#[cfg(feature = "proc-macro-api")]
 pub mod machinery;
 
 #[doc(hidden)]

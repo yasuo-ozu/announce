@@ -22,9 +22,9 @@ error: announce: use absolute path: 'Other<'_>'
 28 |     fn f(&self, a: Wrap<'_>, b: Other<'_>);
    |                                 ^^^^^^^^^
 
-error: announce: use absolute path: 'Vec<&'_ u8>'
-         = note: it cannot be leaked as a whole because of `'_`
-         = help: use `::std::vec::Vec` instead of `Vec` (or set `allow_std_prelude = true` to accept prelude names)
+error: announce: the prelude name `Vec` is relative here, so `Vec<&'_ u8>` does not resolve outside the defining crate
+         = note: a relative type cannot be carried with `'_` in it
+         = help: write `::std::vec::Vec<..>` instead of `Vec<..>`, or set `allow_std_prelude = true` to accept prelude names
   --> tests/ui/leak_not_carried.rs:34:20
    |
 34 |     fn f(&self, a: Vec<&'_ u8>);

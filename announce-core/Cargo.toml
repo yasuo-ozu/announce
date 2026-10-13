@@ -1,7 +1,7 @@
 [package]
 name = "announce-core"
 description = "Definition-side machinery and callback/check helpers of announce (use `announce::machinery` and `announce::helper` instead)"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 rust-version = "1.57"
 license = "MIT"
@@ -13,3 +13,13 @@ syn = { version = "2.0.25", features = ["full", "extra-traits", "visit", "visit-
 proc-macro2 = "1"
 template-quote = "0.4"
 type-leak = "0.8.2"
+
+# Not used by this crate. It caps `unicode-width`, which type-leak needs through
+# safegraph with the requirement "0.1": unicode-width 0.1.13 and 0.1.14 need
+# Rust 1.62 and 1.66 but declare no `rust-version`, so a lock file made without an
+# MSRV-aware resolver picks 0.1.14, and a build on Rust 1.57 to 1.65 fails.
+# 0.1.12 is the last version that builds on 1.56. announce-macros depends on this
+# crate, so the cap holds in every build graph of announce, also with the
+# `proc-macro-api` feature of announce off. Relax it when the MSRV rises (0.1.13
+# needs Rust 1.62, 0.1.14 needs 1.66).
+unicode-width = ">=0.1.5, <0.1.13"

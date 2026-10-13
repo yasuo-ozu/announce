@@ -94,6 +94,8 @@ In `announce`:
   writes callbacks and checks, starts chains and redirects derives.
 - [`announce::machinery`](https://docs.rs/announce/latest/announce/machinery/index.html)
   announces items that your own proc macro builds.
+- `helper`, `machinery` and `type_leak` need the feature `proc-macro-api`, on by default; a
+  `#![no_std]` crate that only defines items uses `default-features = false`.
 
 `announce-core` and `announce-macros` are internal; depend on `announce`.
 Minimum Rust version: 1.57.
