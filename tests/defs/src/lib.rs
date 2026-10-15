@@ -4,6 +4,7 @@
 use announce::announce;
 
 pub mod docs;
+pub mod flag;
 pub mod large;
 pub mod large_leak;
 pub mod merge;

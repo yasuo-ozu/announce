@@ -23,7 +23,7 @@
 //! read by `finish`. The `attrs(..)` groups are what the checks add.
 
 use crate::helper::{OwnedAttrs, Query};
-use crate::options::Options;
+use crate::options::{Check, Options};
 use proc_macro2::{Ident, Span, TokenStream};
 use syn::parse::{Parse, ParseStream};
 use syn::{Result, Token};
@@ -52,7 +52,9 @@ const STATE_ERROR: &str = "announce: the state of the attribute query was change
      `announce::helper::attrs` docs";
 
 /// The call of the first check, with the query: the expansion of
-/// `#[announce(a, b, ..)]` when there are checks. `opts.checks` is not empty.
+/// `#[announce(a, b, ..)]` when there are checks. `ask`, the checks to ask, is not
+/// empty: it is `opts.checks` unless some of them were asked before, and `seed` is what
+/// they answered (it goes in the state as `attrs(..)`, like the answer of a check).
 ///
 /// The list is headed by the macro that is called, like a continuation list:
 /// `a! { @__announce_attrs [ a!, b!, KRATE::__private::finish! ] { STATE } }`.
@@ -62,17 +64,19 @@ pub(crate) fn query(
     attr: &TokenStream,
     item: &TokenStream,
     random: u64,
+    ask: &[Check],
+    seed: &OwnedAttrs,
 ) -> TokenStream {
     let krate = opts.krate();
     let lit = syn::LitInt::new(&format!("{}u64", random), Span::call_site());
     let mode = Ident::new(mode.word(), Span::call_site());
-    let paths: Vec<&syn::Path> = opts.checks.iter().map(|c| &c.path).collect();
+    let paths: Vec<&syn::Path> = ask.iter().map(|c| &c.path).collect();
     let first = paths.first().expect("a query needs a check");
     quote! {
         #first ! {
             @__announce_attrs
             [ #(#paths ! ,)* #krate::__private::finish! ]
-            { [ #lit ; #mode ( #attr ) { #item } ] }
+            { [ #lit ; #mode ( #attr ) { #item } ] #seed }
         }
     }
 }
@@ -196,7 +200,7 @@ pub fn try_finish(input: TokenStream) -> Result<TokenStream> {
             crate::scan::head(&state.item)?;
             t.step("scan");
             // The query is answered, so what the checks own is known: this is where
-            // the attribute can still wait for the macros below it.
+            // the attribute moves below the macros of the item (if it has not moved).
             Ok(crate::emit_or_defer(
                 &opts,
                 &state.attr,

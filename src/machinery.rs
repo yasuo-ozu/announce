@@ -67,11 +67,13 @@
 //! # Several announcements
 //!
 //! [`announce`] goes the way of the attribute in this as well. If the item it
-//! gets has another announcement (`#[announce]`, `#[x::announce]`,
-//! `#[derive(Announce)]`), the output is the item with that announcement holding the
-//! options of both, and no trampoline; if it has attributes of macros that have not
-//! expanded yet, the output can be the item with `#[<crate path>::announce(..)]` moved
-//! below them. See [Several announcements on one
+//! gets has an outer attribute, the output is the item with
+//! `#[<crate path>::announce(.., __announce_deferred)]` moved below the other attributes,
+//! and nothing else; that attribute, when it expands, makes the trampoline, or merges
+//! into another announcement that has moved. Only an announcement that has the mark is
+//! seen as one, never an attribute by its path. The output of a macro that calls
+//! [`announce`] must be an item that the compiler expands, so that the attribute is
+//! expanded. See [Several announcements on one
 //! item](macro@crate::announce#several-announcements-on-one-item). The derives
 //! ([`derive_announce`] and [`derive_announce_with`]) never do that.
 //!

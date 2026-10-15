@@ -1,4 +1,5 @@
-use proc_macro2::{Ident, TokenStream};
+use crate::helper::OwnedAttrs;
+use proc_macro2::{Ident, Span, TokenStream};
 use syn::parse::{Parse, ParseStream};
 use syn::{Error, LitBool, Path, Result, Token};
 use template_quote::{quote, ToTokens};
@@ -87,10 +88,14 @@ pub struct Options {
     /// `false`: they are removed there, which makes the trampoline smaller.
     /// The item that is compiled keeps its docs either way.
     pub docs: bool,
-    /// `__deferred = true`: internal. Set by `#[announce]` when it has moved itself
-    /// below the other attributes of the item (see `fold`): it never moves again.
-    /// Accepted when written, but not meant to be.
+    /// The internal flag `__announce_deferred` (see [`FLAG`]): `#[announce]` writes it
+    /// when it has moved itself below the other attributes of the item (see `fold`),
+    /// and reads it to know that it has. Accepted when written, but not meant to be.
     pub(crate) deferred: bool,
+    /// With the flag, `__announce_deferred(attrs(a, b))`: the query of the checks is
+    /// answered, and these are the attribute names that they own. `None`: not asked
+    /// yet (see [`Options::answer`]).
+    pub(crate) owned: Option<OwnedAttrs>,
     /// Set by `#[derive(Announce)]`: the item is emitted by the user and always
     /// gets the `Announce` impl. Not an option.
     pub(crate) derived: bool,
@@ -115,6 +120,7 @@ impl Default for Options {
             layout: Layout::Auto,
             docs: false,
             deferred: false,
+            owned: None,
             derived: false,
             given: Vec::new(),
             checks: Vec::new(),
@@ -123,7 +129,37 @@ impl Default for Options {
     }
 }
 
+/// The name of the internal flag that `#[announce]` writes in the arguments of the
+/// announcement it has moved to the end of the attributes of the item, bare or with the
+/// answer of the query (`__announce_deferred(attrs(a, b))`). Whether an attribute is
+/// an announcement that has moved is told by this word only, never by its path.
+pub(crate) const FLAG: &str = "__announce_deferred";
+
+/// The flag as it is written: `__announce_deferred`, or, with the answer of the query
+/// (`owned`), `__announce_deferred(attrs(a, b))`. An empty answer is left out when
+/// there are no checks (`checks`): there was nothing to ask.
+pub(crate) fn flag_tokens(owned: Option<&OwnedAttrs>, checks: bool) -> TokenStream {
+    let flag = Ident::new(FLAG, Span::call_site());
+    match owned {
+        Some(o) if !o.is_empty() || checks => {
+            let names = o.names();
+            quote! { #flag(attrs(#(#names),*)) }
+        }
+        _ => quote! { #flag },
+    }
+}
+
 impl Options {
+    /// The attribute names that the checks own, if they are known: the query is
+    /// answered (the flag carries the names), or there are no checks to ask.
+    pub(crate) fn answer(&self) -> Option<OwnedAttrs> {
+        match &self.owned {
+            Some(o) => Some(o.clone()),
+            None if self.checks.is_empty() => Some(OwnedAttrs::new()),
+            None => None,
+        }
+    }
+
     /// The path to the `announce` crate that the generated code uses.
     ///
     /// `crate = ..` (the `krate` field) wins. Otherwise it is
@@ -240,7 +276,7 @@ impl Options {
     /// | `mock`, `repeater` | the one that is set; both set and different is a conflict |
     /// | `layout` | the one that is not `auto`; both and different is a conflict |
     /// | `emit_item` | the one that is set (written, or `false`); both and different is a conflict |
-    /// | `__deferred` | set if either is set |
+    /// | `__announce_deferred` | set if either is set; the answer to the query is kept if both announcements have one (or have no checks to ask): the names are united |
     ///
     /// `derived` is not written by anyone: the target's stays. The written keys
     /// (`given`) are united. The attributes that checks own are not an option: they
@@ -292,6 +328,13 @@ impl Options {
         out.allow_std_prelude = self.allow_std_prelude || folder.allow_std_prelude;
         out.docs = self.docs || folder.docs;
         out.deferred = self.deferred || folder.deferred;
+        out.owned = match (out.deferred, self.answer(), folder.answer()) {
+            (true, Some(mut a), Some(b)) => {
+                a.extend(b.names().iter().cloned());
+                Some(a)
+            }
+            _ => None,
+        };
         out.checks = union(&self.checks, &folder.checks);
         out.metas = union(&self.metas, &folder.metas);
         for key in &folder.given {
@@ -336,7 +379,7 @@ impl ToTokens for Options {
             parts.push(quote! { docs = true });
         }
         if self.deferred {
-            parts.push(quote! { __deferred = true });
+            parts.push(flag_tokens(self.owned.as_ref(), !self.checks.is_empty()));
         }
         for m in &self.metas {
             parts.push(quote! { meta = #m });
@@ -352,7 +395,13 @@ impl Parse for Options {
     fn parse(input: ParseStream) -> Result<Self> {
         let mut opts = Options::default();
         while !input.is_empty() {
-            if input.peek(Token![crate]) && input.peek2(Token![=]) {
+            if is_flag(input) {
+                input.parse::<Ident>()?;
+                opts.deferred = true;
+                if input.peek(syn::token::Paren) {
+                    opts.owned = Some(parse_flag_answer(input)?);
+                }
+            } else if input.peek(Token![crate]) && input.peek2(Token![=]) {
                 input.parse::<Token![crate]>()?;
                 input.parse::<Token![=]>()?;
                 opts.krate = Some(Path::parse_mod_style(input)?);
@@ -407,7 +456,6 @@ impl Parse for Options {
                         };
                     }
                     "docs" => opts.docs = input.parse::<LitBool>()?.value,
-                    "__deferred" => opts.deferred = input.parse::<LitBool>()?.value,
                     "allow_primitive" => opts.allow_primitive = input.parse::<LitBool>()?.value,
                     "allow_std_prelude" => opts.allow_std_prelude = input.parse::<LitBool>()?.value,
                     "meta" => {
@@ -447,6 +495,35 @@ impl Parse for Options {
         }
         Ok(opts)
     }
+}
+
+/// Whether the flag [`FLAG`] comes next: the word alone, or with its answer.
+fn is_flag(input: ParseStream) -> bool {
+    let fork = input.fork();
+    match fork.parse::<Ident>() {
+        Ok(i) if i == FLAG => {
+            fork.is_empty() || fork.peek(Token![,]) || fork.peek(syn::token::Paren)
+        }
+        _ => false,
+    }
+}
+
+/// The `(attrs(a, b))` of the flag.
+fn parse_flag_answer(input: ParseStream) -> Result<OwnedAttrs> {
+    const FORM: &str = "the answer of the flag is `(attrs(name, ..))`";
+    let outer;
+    syn::parenthesized!(outer in input);
+    let key: Ident = outer.parse()?;
+    if key != "attrs" || !outer.peek(syn::token::Paren) {
+        return Err(Error::new(key.span(), FORM));
+    }
+    let names;
+    syn::parenthesized!(names in outer);
+    let owned = OwnedAttrs::parse_names(names.parse()?)?;
+    if !outer.is_empty() {
+        return Err(outer.error(FORM));
+    }
+    Ok(owned)
 }
 
 /// Arguments of the hidden `#[__announce(RANDOM; [OWNED;] OPTIONS)]` helper
@@ -697,14 +774,102 @@ mod tests {
     }
 
     #[test]
-    fn the_deferred_marker_is_kept_if_either_has_it() {
-        assert_eq!(merged("__deferred = true", ""), "__deferred=true");
-        assert_eq!(merged("", "__deferred = true"), "__deferred=true");
+    fn the_flag_is_kept_if_either_has_it() {
+        let flag = "__announce_deferred";
+        assert_eq!(merged(flag, ""), flag);
+        assert_eq!(merged("", flag), flag);
         assert_eq!(merged("", ""), "");
         // It is an ordinary option of the parser, and prints back.
-        let o = opts("macro_name = N, __deferred = true");
-        assert!(o.deferred);
+        let o = opts(&format!("macro_name = N, {}", flag));
+        assert!(o.deferred && o.owned.is_none());
         assert_eq!(text(&opts(&text(&o))), text(&o));
+        // The old spelling is not an option any more.
+        assert!(syn::parse2::<Options>("__deferred = true".parse().unwrap()).is_err());
+        // It is one entry: a path that has its name, or a value of it, is not the flag.
+        assert!(!opts("meta = a::__announce_deferred").deferred);
+        assert!(!opts("a::__announce_deferred").deferred);
+        assert_eq!(opts("a::__announce_deferred").checks.len(), 1);
+        assert!(syn::parse2::<Options>("__announce_deferred = true".parse().unwrap()).is_err());
+    }
+
+    #[test]
+    fn the_answer_of_the_query_travels_in_the_flag() {
+        let names = |o: &Options| -> Option<Vec<String>> {
+            o.owned
+                .as_ref()
+                .map(|o| o.names().iter().map(|n| n.to_string()).collect())
+        };
+        // Bare: not asked yet (or nothing to ask).
+        let o = opts("a::check, __announce_deferred");
+        assert!(o.deferred && o.owned.is_none() && o.answer().is_none());
+        let o = opts("__announce_deferred");
+        assert!(o.owned.is_none() && o.answer().unwrap().is_empty());
+        // With the answer, which can be empty, and prints back as it was.
+        for src in [
+            "__announce_deferred(attrs(my_lib,other)),a::check",
+            "__announce_deferred(attrs()),a::check",
+            "__announce_deferred(attrs(my_lib))",
+            "crate=::l::announce,__announce_deferred(attrs(x)),meta=m::x,a::check",
+        ] {
+            let o = opts(src);
+            assert_eq!(text(&o), src);
+            assert!(o.answer().is_some(), "{}", src);
+        }
+        assert_eq!(
+            names(&opts("c::check, __announce_deferred(attrs(a, b))")),
+            Some(vec!["a".to_string(), "b".to_string()])
+        );
+        // Not a form of the answer.
+        for bad in [
+            "__announce_deferred(a, b)",
+            "__announce_deferred(attrs)",
+            "__announce_deferred(attrs(a) x)",
+            "__announce_deferred(attrs(1))",
+        ] {
+            assert!(
+                syn::parse2::<Options>(bad.parse().unwrap()).is_err(),
+                "{}",
+                bad
+            );
+        }
+    }
+
+    #[test]
+    fn the_answers_are_united_when_both_are_known() {
+        let a = "a::check, __announce_deferred(attrs(x, y))";
+        let b = "b::check, __announce_deferred(attrs(y, z))";
+        assert_eq!(
+            merged(a, b),
+            "__announce_deferred(attrs(x,y,z)),a::check,b::check"
+        );
+        // No checks: nothing to ask, the answer is empty.
+        assert_eq!(
+            merged(a, "__announce_deferred"),
+            "__announce_deferred(attrs(x,y)),a::check"
+        );
+        assert_eq!(
+            merged("__announce_deferred", a),
+            "__announce_deferred(attrs(x,y)),a::check"
+        );
+        // Checks that were not asked: the merged announcement has not been asked.
+        assert_eq!(
+            merged(a, "b::check, __announce_deferred"),
+            "__announce_deferred,a::check,b::check"
+        );
+        assert_eq!(
+            merged(a, "b::check"),
+            "__announce_deferred,a::check,b::check"
+        );
+        assert_eq!(
+            merged("b::check", a),
+            "__announce_deferred,b::check,a::check"
+        );
+        // Without the flag on either side there is no answer to carry.
+        assert!(opts("a::check")
+            .merge(&opts("b::check"), &ident("S"))
+            .unwrap()
+            .owned
+            .is_none());
     }
 
     #[test]

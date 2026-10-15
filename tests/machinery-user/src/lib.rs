@@ -87,18 +87,19 @@ pub struct DocsPlain {
     pub x: u8,
 }
 
-// `tracked` calls `announce::machinery::announce`, which takes the same way as
-// `#[announce]` when the item has another announcement: the two are merged. This
-// crate has no `announce` dependency, so the attribute names the library's
-// re-export and the crate in `crate = ..`.
+// `tracked` calls `announce::machinery::announce`, which does what `#[announce]` does:
+// the item comes back with the announcement moved to the end and flagged. The other
+// announcement moves behind it, and the one that moved first folds into it: the two
+// are merged. This crate has no `announce` dependency, so the attribute names the
+// library's re-export and the crate in `crate = ..`.
 #[tracked(meta = test_lib::tracked)]
 #[announce_test_machinery_lib::announce::announce(crate = ::announce_test_machinery_lib::announce, meta = test_lib::attr)]
 pub struct MergedBelow {
     pub a: u8,
 }
 
-// Here the attribute expands first, finds a macro it does not know below it, and
-// moves below it; `tracked` then announces into it.
+// Here the attribute expands first and moves below `tracked`; `tracked` then announces
+// as well, and the attribute folds into that announcement.
 #[announce_test_machinery_lib::announce::announce(crate = ::announce_test_machinery_lib::announce, meta = test_lib::attr)]
 #[tracked(meta = test_lib::tracked)]
 pub struct MergedAbove {

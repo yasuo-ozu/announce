@@ -4,7 +4,7 @@ error: announce: this item is announced twice with different trampoline names (`
 4 | #[announce::announce(macro_name = A)]
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
   |
-  = note: this error originates in the attribute macro `announce::announce` (in Nightly builds, run with -Z macro-backtrace for more info)
+  = note: this error originates in the attribute macro `::announce::announce` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 error: announce: this item is announced twice with different trampoline names (`Parse` and `ParseAlt`). One item has one trampoline, so use the same `macro_name` (or none) in every announcement
   --> tests/ui/merge_conflict.rs:11:1
@@ -12,7 +12,7 @@ error: announce: this item is announced twice with different trampoline names (`
 11 | #[announce::announce]
    | ^^^^^^^^^^^^^^^^^^^^^
    |
-   = note: this error originates in the attribute macro `announce::announce` (in Nightly builds, run with -Z macro-backtrace for more info)
+   = note: this error originates in the attribute macro `::announce::announce` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 error: announce: this announcement sets `layout = single`, but another announcement of the same item sets `layout = direct`. The announcements of one item are merged into one trampoline, so they must agree: remove one of them or make them equal
   --> tests/ui/merge_conflict.rs:16:1
@@ -20,7 +20,7 @@ error: announce: this announcement sets `layout = single`, but another announcem
 16 | #[announce::announce(layout = single)]
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    |
-   = note: this error originates in the attribute macro `announce::announce` (in Nightly builds, run with -Z macro-backtrace for more info)
+   = note: this error originates in the attribute macro `::announce::announce` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 error: announce: this item is announced twice with different trampoline names (`B` and `A`). One item has one trampoline, so use the same `macro_name` (or none) in every announcement
   --> tests/ui/merge_conflict.rs:25:1
@@ -33,19 +33,3 @@ error: announce: this item is announced twice with different trampoline names (`
    |
 30 | #[announce(macro_name = HelperAlt)]
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-error: announce: `mock` does not apply to an item that has `#[derive(Announce)]`: the derive cannot change the item, so it cannot be merged with this announcement
-  --> tests/ui/merge_conflict.rs:34:1
-   |
-34 | #[announce::announce(mock = my_lib::Real)]
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   |
-   = note: this error originates in the attribute macro `announce::announce` (in Nightly builds, run with -Z macro-backtrace for more info)
-
-error: announce: `emit_item` does not apply to an item that has `#[derive(Announce)]`: the derive cannot change the item, so it cannot be merged with this announcement
-  --> tests/ui/merge_conflict.rs:38:1
-   |
-38 | #[announce::announce(emit_item = false)]
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   |
-   = note: this error originates in the attribute macro `announce::announce` (in Nightly builds, run with -Z macro-backtrace for more info)

@@ -158,13 +158,16 @@ mod merged {
 
 #[test]
 fn machinery_announcements_merge_with_attributes() {
-    // One trampoline each (a second would not compile), with both metas: the
-    // attribute's first, as the target.
+    // One trampoline each (a second would not compile), with both metas: the entries
+    // of the announcement that moved last (the target) come first.
     let rows = merged::ALL;
     assert_eq!(rows.len(), 2);
-    for (row, name) in rows.iter().zip(["MergedBelow", "MergedAbove"]) {
+    for (row, name, metas) in [
+        (&rows[0], "MergedBelow", "test_lib::attr,test_lib::tracked"),
+        (&rows[1], "MergedAbove", "test_lib::tracked,test_lib::attr"),
+    ] {
         assert_eq!(row.2, format!("struct {}", name), "{:?}", row);
-        assert_eq!(norm(row.1), "test_lib::attr,test_lib::tracked", "{:?}", row);
+        assert_eq!(norm(row.1), metas, "{:?}", row);
     }
     fn assert_announced<T: ?Sized + announce_test_machinery_lib::announce::Announce>() {}
     assert_announced::<lib::MergedBelow>();

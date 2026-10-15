@@ -108,13 +108,13 @@ pub struct EmitIntoDerive(pub u8);
 #[announce(meta = merge::b)]
 pub struct EmitDeriveIntoAttr(pub u8);
 
-/// `emit_announce` expands first, and its announcement waits for the second
-/// `emit_announce` (which will announce as well) by moving below it.
+/// `emit_announce` expands first, and its announcement moves below the second
+/// `emit_announce` (which announces as well, and moves behind it): they fold.
 #[emit_announce(meta = merge::a)]
 #[emit_announce(meta = merge::b)]
 pub struct BothDefer(pub u8);
 
-/// An announcement that waits for a macro that does not announce.
+/// An announcement that moves below a macro that does not announce.
 #[emit_announce(meta = merge::a)]
 #[derive(Debug)]
 #[passthrough]
@@ -130,8 +130,8 @@ pub struct Between(pub u8);
 #[chain(5)]
 pub struct ChainFive(pub u8);
 
-/// With the marker set, an announcement never waits, whatever is left below.
-#[announce(meta = merge::a, __deferred = true)]
+/// With the flag set by hand, an announcement does not move, whatever is left below.
+#[announce(meta = merge::a, __announce_deferred)]
 #[passthrough]
 pub struct MarkedNeverWaits(pub u8);
 
@@ -148,7 +148,7 @@ pub struct ChainThenAttr(pub u8);
 #[::announce::announce(tick(shared), tick(right), meta = merge::b)]
 pub struct Ticked(pub u8);
 
-/// The query for the owned attributes comes before the announcement can wait.
+/// The query for the owned attributes comes before the announcement can move.
 #[emit_announce(tick(waiting))]
 #[passthrough]
 pub struct TickedWaiting(pub u8);
@@ -162,8 +162,8 @@ pub struct TickedBothDefer(pub u8);
 #[::announce::announce(tick(attr))]
 pub struct TickedDerive(pub u8);
 
-/// An attribute that a check owns stays below `#[announce]`, which removes it, so
-/// the announcement does not wait for `passthrough`.
+/// An attribute that a check owns stays below `#[announce]`, which removes it: the
+/// announcement moves below `passthrough` and the owned attribute follows it.
 #[emit_announce(record_attrs)]
 #[my_lib(on_the_item)]
 #[passthrough]

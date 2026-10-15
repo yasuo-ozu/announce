@@ -155,7 +155,7 @@ fn the_payload_keeps_the_attributes_and_meta_lists_them() {
     let out = norm(fields::OUT);
     assert!(
         out.starts_with(
-            "d::Fields!=>[announce_test_derive::record_attrs,attrs(my_lib)]{#[derive(Clone,Debug,PartialEq)]"
+            "d::Fields!=>[announce_test_derive::record_attrs,attrs(my_lib)]{pubstructFields{"
         ),
         "{}",
         out
@@ -166,11 +166,8 @@ fn the_payload_keeps_the_attributes_and_meta_lists_them() {
         "{}",
         out
     );
-    assert!(
-        out.contains("#[derive(Clone,Debug,PartialEq)]pubstructFields{"),
-        "{}",
-        out
-    );
+    // `#[derive]` has run before the announcement: it is not in the payload.
+    assert!(!out.contains("#[derive"), "{}", out);
     assert!(out.contains("#[my_lib(skip)]puba:u8"), "{}", out);
     assert!(out.contains("#[my_lib::tag=\"x\"]"), "{}", out);
     // `cfg_attr` and `cfg` are evaluated and gone.

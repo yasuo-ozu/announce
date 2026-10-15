@@ -66,11 +66,15 @@ fn random_u64() -> u64 {
 /// The generated code names the `announce` crate. See [`Options::krate()`] and
 /// the `crate = ..` option.
 ///
-/// If `item` has another announcement (`#[announce]`, `#[x::announce]` or
-/// `#[derive(Announce)]`), the result is the item with that announcement holding
-/// the options of both, and no trampoline. If it has attributes that are not known
-/// to be inert, the result can be the item with `#[announce(..)]` moved below them.
-/// See [Several announcements on one
+/// Called as `#[announce]` expands for the first time (the options have no
+/// `__announce_deferred`), the result is the item with `#[<crate path>::announce(..)]`
+/// moved to be its last attribute and marked, and nothing else; the trampoline is made
+/// when that attribute expands, unless the item has no outer attribute, in which case
+/// it is made at once. A marked announcement merges into the marked announcement
+/// below it, if there is one, and takes the bare `#[announce(..)]` attributes over
+/// (the helper attributes of a derive). It is the attribute that does it, not the path
+/// of any other: an attribute named `announce` that is not marked is left alone. See
+/// [Several announcements on one
 /// item](https://docs.rs/announce/latest/announce/attr.announce.html#several-announcements-on-one-item).
 pub fn announce(attr: TokenStream, item: TokenStream) -> TokenStream {
     try_announce(attr, item).unwrap_or_else(|e| e.to_compile_error())
@@ -82,49 +86,77 @@ pub fn announce(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// refuse what is not supported at once. Its syntax is validated by the parse of
 /// the `Capture` derive that the result contains.
 ///
-/// When the item has another pending announcement (`#[announce]`, or
-/// `#[derive(Announce)]`), the result is the item with that announcement updated
-/// to hold these options, and nothing else; when it has attributes of macros that
-/// are still to expand, it can be the item with this attribute moved below them.
-/// Several announcements of one item make one trampoline. See the docs of
-/// `announce::announce` ("Several announcements on one item").
+/// The first time `#[announce]` expands, the result is the item with the attribute moved
+/// below its other attributes and flagged, and nothing else; the attribute that has
+/// moved takes the helper attributes of a derive over, merges into another announcement
+/// that has moved, or makes the trampoline. Several announcements of one item make one
+/// trampoline. See the docs of `announce::announce` ("Several announcements on one
+/// item").
 pub fn try_announce(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> {
     let mut t = timing::Timer::new("attribute");
-    let mut opts: Options = syn::parse2(attr.clone())?;
+    let opts: Options = syn::parse2(attr.clone())?;
     t.step("options");
     let head = scan::head(&item)?;
     t.subject(|| format!("{:?} {}", head.kind, head.ident));
     t.step("scan");
-    let (mut attr, mut item, mut errors) = (attr, item, TokenStream::new());
-    match fold::fold(&opts, &head.ident, &item) {
-        fold::Folded::No => {}
+    let random = random_u64();
+    if !opts.deferred {
+        // The first expansion: the query of the checks, which ends with the attribute
+        // moving (`finish`), or the move.
+        let out = if opts.checks.is_empty() {
+            emit_or_defer(&opts, &attr, item, random, &OwnedAttrs::new())
+        } else {
+            finish::query(
+                &opts,
+                finish::Mode::Attribute,
+                &attr,
+                &item,
+                random,
+                &opts.checks,
+                &OwnedAttrs::new(),
+            )
+        };
+        t.step("emit");
+        return Ok(out);
+    }
+    // The attribute has moved: it is the last to expand.
+    let before = opts;
+    let (opts, item) = match fold::fold(&before, &head.ident, item) {
         fold::Folded::Emit(out) => return Ok(out),
-        fold::Folded::Absorbed {
+        fold::Folded::Go {
             opts: merged,
             item: stripped,
-            errors: e,
-        } => {
-            attr = merged.to_token_stream();
-            opts = *merged;
-            item = stripped;
-            errors = e;
-        }
-    }
+        } => (*merged, stripped),
+    };
     t.step("fold");
-    let random = random_u64();
-    let out = if opts.checks.is_empty() {
-        emit_or_defer(&opts, &attr, item, random, &OwnedAttrs::new())
-    } else {
-        finish::query(&opts, finish::Mode::Attribute, &attr, &item, random)
+    // The flagged attribute has the answer of its checks, so it does not ask again.
+    // Only the checks that came with the helper attributes it took over are asked.
+    let attr = opts.to_token_stream();
+    let out = match fold::pending_query(&before, &opts) {
+        None => capture_output(
+            &opts,
+            &attr,
+            item,
+            random,
+            &opts.answer().unwrap_or_default(),
+        ),
+        Some((ask, seed)) => finish::query(
+            &opts,
+            finish::Mode::Attribute,
+            &attr,
+            &item,
+            random,
+            &ask,
+            &seed,
+        ),
     };
     t.step("emit");
-    errors.extend(out);
-    Ok(errors)
+    Ok(out)
 }
 
-/// The announcement itself, or, if it should wait for the macros below it, the item
-/// with the attribute moved below them (`fold::defer`). `owned` is what the checks
-/// own: empty without checks.
+/// The announcement itself, or, the first time, the item with the attribute moved below
+/// the macros of the item (`fold::defer`). `owned` is what the checks own: empty without
+/// checks.
 pub(crate) fn emit_or_defer(
     opts: &Options,
     attr: &TokenStream,
@@ -153,6 +185,15 @@ pub(crate) fn capture_output(
     owned: &OwnedAttrs,
 ) -> TokenStream {
     let krate = opts.krate();
+    // The flag is of no use to the capture derive.
+    let attr = &if opts.deferred {
+        let mut plain = opts.clone();
+        plain.deferred = false;
+        plain.owned = None;
+        plain.to_token_stream()
+    } else {
+        attr.clone()
+    };
     let cap = Ident::new(
         &format!("__AnnounceCap_{}", generate::hex(random)),
         Span::call_site(),
@@ -222,10 +263,13 @@ pub fn try_define_repeater(input: TokenStream) -> syn::Result<TokenStream> {
 /// is what the derive emits: the trampoline and the `Announce` impl. The item itself
 /// is not part of it, because a derive does not emit its input.
 ///
-/// If the input has an `#[x::announce]` attribute, or another `#[derive(Announce)]`,
-/// the result is empty: a derive expands before the attribute macros below it, and
-/// the one below announces the item, with the options of the helper attribute that
-/// is left.
+/// If the input has an announcement left to expand below the derive, the result is
+/// empty: a derive expands before the attribute macros below it, and the one below
+/// announces the item, with the options of the helper attribute that is left. An
+/// announcement is an attribute with the mark `__announce_deferred` in its arguments (an
+/// `#[announce]` that has moved), or, because one that has not moved yet has no mark,
+/// an `#[x::announce]` attribute, or another `#[derive(Announce)]`. This is the one place
+/// where a path tells an announcement.
 ///
 /// A library whose own derive macro calls this must list `announce` among the
 /// derive's helper attributes (`#[proc_macro_derive(Mine, attributes(announce))]`)
@@ -325,6 +369,9 @@ fn finish_derive(
     // The derive input is already cfg-evaluated by rustc.
     opts.emit_item = false;
     opts.derived = true;
+    // A derive does not move: the flag of a helper attribute means nothing.
+    opts.deferred = false;
+    opts.owned = None;
     if opts.checks.is_empty() {
         t.subject(|| {
             generate::ident_vis(&item).map_or_else(|_| String::new(), |(i, _)| i.to_string())
@@ -342,6 +389,8 @@ fn finish_derive(
         &attr,
         &item,
         random,
+        &opts.checks,
+        &OwnedAttrs::new(),
     ))
 }
 
@@ -921,30 +970,82 @@ mod tests {
     // ---- several announcements of one item (see `fold`) ------------------------
 
     #[test]
-    fn announce_folds_into_a_pending_announcement() {
+    fn announce_moves_below_the_other_attributes() {
+        // The first expansion emits the item and the announcement, moved to the end and
+        // flagged, whatever the other attributes are: it does not look at them. An
+        // attribute that is named `announce` is one of them.
+        for (item, moved) in [
+            (
+                "#[x::announce(meta = b::x)] pub struct S(pub u8);",
+                "#[x::announce(meta=b::x)]#[::l::announce::announce(crate=::l::announce,meta=a::x,__announce_deferred)]pubstructS(pubu8);",
+            ),
+            (
+                "#[announce(level = 2)] #[doc = \"d\"] pub struct S;",
+                "#[announce(level=2)]#[doc=\"d\"]#[::l::announce::announce(crate=::l::announce,meta=a::x,__announce_deferred)]pubstructS;",
+            ),
+            (
+                "#[other] #[derive(Debug)] pub struct S;",
+                "#[other]#[derive(Debug)]#[::l::announce::announce(crate=::l::announce,meta=a::x,__announce_deferred)]pubstructS;",
+            ),
+            (
+                "#[doc = \"d\"] pub struct S;",
+                "#[doc=\"d\"]#[::l::announce::announce(crate=::l::announce,meta=a::x,__announce_deferred)]pubstructS;",
+            ),
+        ] {
+            let out = norm(&announce(ts("crate = ::l::announce, meta = a::x"), ts(item)));
+            assert_eq!(out, moved, "{}", item);
+            assert!(
+                !out.contains("Capture") && !out.contains("macro_rules"),
+                "{}",
+                out
+            );
+        }
+        // Nothing to wait for: the trampoline at once.
         let out = norm(&announce(
             ts("crate = ::l::announce, meta = a::x"),
-            ts("#[x::announce(meta = b::x)] pub struct S(pub u8);"),
+            ts("pub struct S;"),
+        ));
+        assert!(out.starts_with("pubstructS;#[derive("), "{}", out);
+    }
+
+    #[test]
+    fn announce_with_the_flag_folds_into_the_flagged_announcement_below() {
+        let out = norm(&announce(
+            ts("crate = ::l::announce, meta = a::x, __announce_deferred"),
+            ts("#[x::announce(meta = b::x, __announce_deferred)] pub struct S(pub u8);"),
         ));
         // Only the item, with the other attribute holding both: no trampoline.
         assert_eq!(
             out,
-            "#[x::announce(crate=::l::announce,meta=b::x,meta=a::x)]pubstructS(pubu8);"
+            "#[x::announce(crate=::l::announce,__announce_deferred,meta=b::x,meta=a::x)]pubstructS(pubu8);"
         );
         assert!(
             !out.contains("Capture") && !out.contains("macro_rules"),
             "{}",
             out
         );
+        // An attribute of another crate that is named `announce` has no flag: it is
+        // left alone and the trampoline is made.
+        let out = norm(&announce(
+            ts("crate = ::l::announce, __announce_deferred"),
+            ts("#[metrics::announce(level = 2, meta = b::x)] pub struct S;"),
+        ));
+        assert!(
+            out.starts_with("#[metrics::announce(level=2,meta=b::x)]pubstructS;#[derive("),
+            "{}",
+            out
+        );
+        assert_eq!(out.matches("Capture").count(), 1, "{}", out);
     }
 
     #[test]
-    fn announce_takes_over_a_bare_attribute() {
+    fn announce_with_the_flag_takes_over_a_bare_attribute() {
         let out = norm(&announce(
-            ts("crate = ::l::announce, meta = a::x"),
+            ts("crate = ::l::announce, meta = a::x, __announce_deferred"),
             ts("#[announce(meta = b::x)] #[doc = \"d\"] pub struct S;"),
         ));
-        // The bare attribute is gone and its options are those of the trampoline.
+        // The bare attribute is gone and its options are those of the trampoline. The
+        // flag is not part of what the capture derive reads.
         assert!(
             out.starts_with("#[doc=\"d\"]pubstructS;#[derive("),
             "{}",
@@ -958,100 +1059,291 @@ mod tests {
             out
         );
         assert_eq!(out.matches("Capture").count(), 1, "{}", out);
-    }
-
-    #[test]
-    fn announce_with_checks_asks_the_query_after_it_has_folded() {
-        // The folder's checks go to the target, which sends the query for all of them.
+        // One that is not ours stays, and there is no error for it.
         let out = norm(&announce(
-            ts("crate = ::l::announce, b::check"),
-            ts("#[x::announce(a::check)] pub struct S;"),
+            ts("crate = ::l::announce, __announce_deferred"),
+            ts("#[announce(level = 2)] pub struct S;"),
         ));
-        assert!(!out.contains("__announce_attrs"), "{}", out);
         assert!(
-            out.contains("#[x::announce(crate=::l::announce,a::check,b::check)]"),
+            out.starts_with("#[announce(level=2)]pubstructS;#[derive(")
+                && !out.contains("compile_error"),
             "{}",
             out
         );
-        // A bare attribute is taken over, and the query is sent with both checks.
+        // Without the flag nothing is taken over: the first expansion only moves.
         let out = norm(&announce(
-            ts("crate = ::l::announce, b::check"),
-            ts("#[announce(a::check)] pub struct S;"),
+            ts("crate = ::l::announce"),
+            ts("#[announce(meta = b::x)] pub struct S;"),
         ));
         assert!(
-            out.starts_with("a::check!{@__announce_attrs[a::check!,b::check!,::l::announce::__private::finish!]"),
+            out.starts_with("#[announce(meta=b::x)]#[::l::announce::announce(crate=::l::announce,__announce_deferred)]"),
             "{}",
             out
         );
     }
 
-    #[test]
-    fn announce_waits_for_a_macro_below_it() {
-        let out = norm(&announce(
-            ts("crate = ::l::announce, meta = a::x"),
-            ts("#[other] #[derive(Debug)] pub struct S;"),
-        ));
-        assert_eq!(
-            out,
-            "#[other]#[derive(Debug)]#[::l::announce::announce(crate=::l::announce,meta=a::x,__deferred=true)]pubstructS;"
-        );
-        // Marked, it emits.
-        let out = norm(&announce(
-            ts("crate = ::l::announce, __deferred = true"),
-            ts("#[other] pub struct S;"),
-        ));
-        assert!(out.starts_with("#[other]pubstructS;#[derive("), "{}", out);
+    /// Follows `#[announce(..)]` on the item the way rustc does, with checks that own
+    /// attributes (`owned`: the check and the names it owns), until the trampoline: the
+    /// first attribute whose path ends in `announce` is expanded, the rest of the
+    /// attributes are inert here. Returns the terminal output and how many times the
+    /// query was sent.
+    fn drive(attr: &str, item: &str, owned: &[(&str, &[&str])]) -> (String, usize) {
+        let (mut attr, mut item) = (ts(attr), ts(item));
+        let mut queries = 0;
+        let mut moves = 0;
+        loop {
+            moves += 1;
+            assert!(moves < 20, "no end");
+            let mut out = announce(attr.clone(), item.clone());
+            if norm(&out).contains("@__announce_attrs") {
+                // The call of the first check. The checks forward the query, each adds
+                // its `attrs(..)`, `finish!` ends it.
+                queries += 1;
+                let group = match out.clone().into_iter().last() {
+                    Some(proc_macro2::TokenTree::Group(g)) => g,
+                    _ => panic!("{}", out),
+                };
+                let q: helper::Query = syn::parse2(group.stream()).unwrap();
+                let mut names = OwnedAttrs::new();
+                for c in &q.list.0 {
+                    let text: String = norm(&c.to_token_stream()).replace('!', "");
+                    for (check, own) in owned {
+                        if *check == text {
+                            names.extend(OwnedAttrs::from_strs(own).names().iter().cloned());
+                        }
+                    }
+                }
+                let (state, last) = (&q.state, q.list.0.last().unwrap());
+                out = finish(quote! { @__announce_attrs [ #last ] { #state #names } });
+            }
+            if norm(&out).contains("Capture") {
+                return (norm(&out), queries);
+            }
+            // The next announcement is the first attribute from the top: its arguments,
+            // and the item without it.
+            let o = scan::outer(&out);
+            let at = o
+                .attrs
+                .iter()
+                .position(|a| a.segments.last().map_or(false, |l| l == "announce"))
+                .unwrap_or_else(|| panic!("no announcement left: {}", norm(&out)));
+            attr = o.attrs[at].args.clone().unwrap().stream();
+            item = o
+                .tts
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| *i != o.attrs[at].at && *i != o.attrs[at].at + 1)
+                .map(|(_, t)| t.clone())
+                .collect();
+        }
     }
 
     #[test]
-    fn announce_with_checks_waits_when_the_query_is_answered() {
-        // Before the query nothing is known about what the checks own: the query comes
-        // first, and `finish` moves the announcement.
-        let attr = "crate = ::l::announce, a::check";
-        let out = norm(&announce(ts(attr), ts("#[other] pub struct S;")));
-        assert!(out.starts_with("a::check!{@__announce_attrs"), "{}", out);
-        let end = norm(&finish(finish_input(
-            "attr",
-            "crate=::l::announce,a::check",
-            "#[other] pub struct S;",
-            "",
-        )));
-        assert_eq!(
-            end,
-            "#[other]#[::l::announce::announce(crate=::l::announce,a::check,__deferred=true)]pubstructS;"
+    fn the_query_is_sent_once_for_an_announcement() {
+        let owned: &[(&str, &[&str])] = &[("a::check", &["my_lib"]), ("b::check", &["other"])];
+        // The first expansion sends the query, `finish` moves the announcement and puts the
+        // answer in the flag, and the moved announcement makes the trampoline without
+        // asking again.
+        let first = norm(&announce(
+            ts("crate = ::l::announce, a::check"),
+            ts("#[other] #[my_lib(x)] pub struct S;"),
+        ));
+        assert!(
+            first.starts_with("a::check!{@__announce_attrs"),
+            "{}",
+            first
         );
-        // An attribute that a check owns stays below `#[announce]`: no waiting.
-        let end = norm(&finish(finish_input(
+        let moved = norm(&finish(finish_input(
             "attr",
             "crate=::l::announce,a::check",
             "#[other] #[my_lib(x)] pub struct S;",
             "attrs(my_lib)",
         )));
+        assert_eq!(
+            moved,
+            "#[other]#[::l::announce::announce(crate=::l::announce,a::check,__announce_deferred(attrs(my_lib)))]#[my_lib(x)]pubstructS;"
+        );
+        let last = norm(&announce(
+            ts("crate = ::l::announce, a::check, __announce_deferred(attrs(my_lib))"),
+            ts("#[other] #[my_lib(x)] pub struct S;"),
+        ));
         assert!(
-            end.starts_with("#[derive(::l::announce::__private::Capture)]"),
+            !last.contains("__announce_attrs") && last.matches("Capture").count() == 1,
+            "{}",
+            last
+        );
+        // The owned names go to the capture derive, which emits the item without them.
+        assert!(
+            last.contains("#[__announce(")
+                && last.contains("[my_lib];crate=::l::announce,a::check)]"),
+            "{}",
+            last
+        );
+        // The same, driven all the way.
+        let (end, queries) = drive(
+            "crate = ::l::announce, a::check",
+            "#[other] #[my_lib(x)] pub struct S;",
+            owned,
+        );
+        assert_eq!(queries, 1, "{}", end);
+        assert!(
+            end.contains("[my_lib];crate=::l::announce,a::check)]"),
             "{}",
             end
         );
-        // Marked: no waiting either.
+        // An answer without names is carried as well, and is no reason to ask again.
+        let (end, queries) = drive("crate = ::l::announce, b::check", "#[x] pub struct S;", &[]);
+        assert_eq!(queries, 1, "{}", end);
+        // No attributes, no move: one query, and the trampoline.
+        let (_, queries) = drive("crate = ::l::announce, a::check", "pub struct S;", owned);
+        assert_eq!(queries, 1);
+    }
+
+    #[test]
+    fn a_fold_does_not_ask_the_checks_again() {
+        // Two announcements with checks, folded into one: the query is sent for each of
+        // them once, and the answers are united. The attribute of `a` that stands above
+        // the target moves below it.
+        let owned: &[(&str, &[&str])] = &[("a::check", &["my_lib"]), ("b::check", &["other"])];
+        let item = "#[::l::announce::announce(b::check)] #[my_lib(x)] #[other(y)] pub struct S;";
+        let (end, queries) = drive("crate = ::l::announce, a::check", item, owned);
+        assert_eq!(queries, 2, "{}", end);
+        assert_eq!(end.matches("Capture").count(), 1, "{}", end);
+        // The target's names first, the checks of both.
+        assert!(
+            end.contains("[other,my_lib];crate=::l::announce,a::check,b::check)]")
+                || end.contains("[my_lib,other];crate=::l::announce,b::check,a::check)]")
+                || end.contains("[other,my_lib];crate=::l::announce,b::check,a::check)]")
+                || end.contains("[my_lib,other];crate=::l::announce,a::check,b::check)]"),
+            "{}",
+            end
+        );
+        // The same checks twice: one query for each announcement, the check once in META.
+        let item = "#[::l::announce::announce(a::check)] #[my_lib(x)] pub struct S;";
+        let (end, queries) = drive("crate = ::l::announce, a::check", item, owned);
+        assert_eq!(queries, 2, "{}", end);
+        assert_eq!(end.matches("a::check").count(), 1, "{}", end);
+        // Merging two flagged announcements does not send a query at all.
+        let out = norm(&announce(
+            ts("crate = ::l::announce, b::check, __announce_deferred(attrs(other))"),
+            ts("#[x::announce(a::check, __announce_deferred(attrs(my_lib)))] #[my_lib(1)] #[other(2)] pub struct S;"),
+        ));
+        assert_eq!(
+            out,
+            "#[x::announce(crate=::l::announce,__announce_deferred(attrs(my_lib,other)),a::check,b::check)]#[my_lib(1)]#[other(2)]pubstructS;"
+        );
+    }
+
+    #[test]
+    fn a_helper_with_checks_asks_only_its_own_checks() {
+        // The flagged announcement has asked `a::check` and knows `my_lib`. The helper
+        // attribute of a derive has a check of its own that nobody has asked: only that
+        // one gets the query, and the answer of `a::check` is in the state already.
+        let out = norm(&announce(
+            ts("crate = ::l::announce, a::check, __announce_deferred(attrs(my_lib))"),
+            ts("#[announce(b::check)] pub struct S;"),
+        ));
+        assert!(
+            out.starts_with(
+                "b::check!{@__announce_attrs[b::check!,::l::announce::__private::finish!]{["
+            ),
+            "{}",
+            out
+        );
+        assert_eq!(out.matches("@__announce_attrs").count(), 1, "{}", out);
+        assert!(out.ends_with("}]attrs(my_lib)}}"), "{}", out);
+        // The flag stays in the state: the end of the query makes the trampoline.
+        assert!(
+            out.contains(
+                ";attr(crate=::l::announce,__announce_deferred,b::check,a::check){pubstructS;}]"
+            ),
+            "{}",
+            out
+        );
         let end = norm(&finish(finish_input(
             "attr",
-            "crate=::l::announce,a::check,__deferred=true",
-            "#[other] pub struct S;",
-            "",
+            "crate=::l::announce,__announce_deferred,b::check,a::check",
+            "pub struct S;",
+            "attrs(my_lib) attrs(other)",
         )));
-        assert!(end.starts_with("#[other]pubstructS;#[derive("), "{}", end);
+        assert!(
+            end.starts_with("#[derive(")
+                && end.contains("[my_lib,other];crate=::l::announce,b::check,a::check)]"),
+            "{}",
+            end
+        );
+    }
+
+    #[test]
+    fn the_flagged_announcement_with_unasked_checks_asks_them() {
+        // A flag without an answer (written by hand, or kept in place before the
+        // query): the checks are asked, once, and the trampoline follows `finish`.
+        let (end, queries) = drive(
+            "crate = ::l::announce, a::check, __announce_deferred",
+            "#[b] #[my_lib(x)] pub struct S;",
+            &[("a::check", &["my_lib"])],
+        );
+        assert_eq!(queries, 1, "{}", end);
+        assert!(
+            end.contains("[my_lib];crate=::l::announce,a::check)]"),
+            "{}",
+            end
+        );
+    }
+
+    #[test]
+    fn an_item_that_is_not_emitted_stays_in_place() {
+        for attr in ["emit_item = false", "mock = a::B"] {
+            let attr = format!("crate = ::l::announce, {}", attr);
+            let out = norm(&announce(ts(&attr), ts("#[derive(Debug)] pub struct S;")));
+            assert!(
+                out.starts_with("#[::l::announce::announce(")
+                    && out.ends_with("__announce_deferred)]#[derive(Debug)]pubstructS;"),
+                "{}",
+                out
+            );
+            // The flagged announcement makes the trampoline.
+            let out = norm(&announce(
+                ts(&format!("{}, __announce_deferred", attr)),
+                ts("#[derive(Debug)] pub struct S;"),
+            ));
+            assert_eq!(out.matches("Capture").count(), 1, "{}", out);
+            // With a check, the query comes first, then the move in place.
+            let out = norm(&announce(
+                ts(&format!("{}, a::check", attr)),
+                ts("#[derive(Debug)] pub struct S;"),
+            ));
+            assert!(out.starts_with("a::check!{@__announce_attrs"), "{}", out);
+            let end = norm(&finish(finish_input(
+                "attr",
+                &format!(
+                    "crate=::l::announce,{},a::check",
+                    attr.split(", ").nth(1).unwrap().replace(' ', "")
+                ),
+                "#[derive(Debug)] pub struct S;",
+                "attrs(my_lib)",
+            )));
+            assert!(
+                end.starts_with("#[::l::announce::announce(")
+                    && end.ends_with(
+                        "__announce_deferred(attrs(my_lib)))]#[derive(Debug)]pubstructS;"
+                    ),
+                "{}",
+                end
+            );
+        }
     }
 
     #[test]
     fn a_conflict_is_one_error_and_the_item() {
         let out = norm(&announce(
-            ts("crate = ::l::announce, macro_name = A"),
-            ts("#[x::announce(macro_name = B)] pub struct S;"),
+            ts("crate = ::l::announce, macro_name = A, __announce_deferred"),
+            ts("#[x::announce(macro_name = B, __announce_deferred)] pub struct S;"),
         ));
         assert!(out.starts_with("::core::compile_error!"), "{}", out);
         assert_eq!(out.matches("compile_error").count(), 1, "{}", out);
         assert!(
-            out.ends_with("#[x::announce(macro_name=B)]pubstructS;"),
+            out.ends_with("#[x::announce(macro_name=B,__announce_deferred)]pubstructS;"),
             "{}",
             out
         );
@@ -1066,7 +1358,7 @@ mod tests {
     fn announcements_merge_only_under_one_trampoline_name() {
         // Unset is the name of the item: `Parse!` and `ParseAlt!` are two names.
         let out = norm(&announce(
-            ts("crate = ::l::announce"),
+            ts("crate = ::l::announce, __announce_deferred"),
             ts("#[announce(macro_name = ParseAlt)] pub trait Parse {}"),
         ));
         assert!(out.starts_with("::core::compile_error!"), "{}", out);
@@ -1087,7 +1379,10 @@ mod tests {
                 "#[announce(macro_name = ParseAlt)] pub trait Parse {}",
             ),
         ] {
-            let src = format!("crate = ::l::announce, {}", attr);
+            let mut src = "crate = ::l::announce, __announce_deferred".to_string();
+            if !attr.is_empty() {
+                src = format!("{}, {}", src, attr);
+            }
             let out = norm(&announce(ts(&src), ts(item)));
             assert!(!out.contains("compile_error"), "{}: {}", item, out);
             assert_eq!(out.matches("Capture").count(), 1, "{}", out);
@@ -1158,6 +1453,10 @@ mod tests {
     #[test]
     fn derive_leaves_the_announcement_to_the_attribute_below() {
         for below in [
+            // An attribute that has moved, whatever its path.
+            "#[::announce::announce(meta = b::x, __announce_deferred)]",
+            "#[x::y(__announce_deferred)]",
+            // One that has not moved yet is seen by its path.
             "#[x::announce(meta = b::x)]",
             "#[::announce::announce]",
             "#[derive(Debug, Announce)]",
@@ -1167,6 +1466,9 @@ mod tests {
         }
         // Its own helper alone does not make it wait.
         assert!(!derive_announce(ts("#[announce(meta = a::x)] struct S;")).is_empty());
+        // An attribute of another crate that is named like it, but has no flag and is
+        // not qualified, is the helper of the derive, as before.
+        assert!(!derive_announce(ts("#[announce(meta = a::x)] #[announced] struct S;")).is_empty());
         // A derive of the library API does not wait: the options are its own.
         let opts = Options {
             krate: Some(syn::parse_quote!(::l::announce)),

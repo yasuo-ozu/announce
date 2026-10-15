@@ -495,7 +495,7 @@ announce::helper::callback! {
 // ---- several announcements of one item (tests/defs/src/merge.rs) ----
 
 /// An attribute macro that returns its input as it is. `#[announce]` cannot know
-/// that, so it waits for it (see the module `merge` of the definitions).
+/// that, so it moves below it (see the module `merge` of the definitions).
 #[proc_macro_attribute]
 pub fn passthrough(_: TokenStream, item: TokenStream) -> TokenStream {
     item
@@ -569,4 +569,114 @@ pub fn tick(input: TokenStream) -> TokenStream {
         Ok(quote! { pub const #id: u8 = 0; })
     })
     .into()
+}
+
+// ---- announcements are told by their flag, not by their path (tests/defs/src/flag.rs) ----
+
+/// An attribute macro of another crate that happens to be called `announce`, like
+/// `#[metrics::announce(level = 2)]`. `#[announce(level = N)]` returns the item and a
+/// constant `FOREIGN_LEVEL_<ITEM>: u32 = N` next to it. `#[announce]` must never take it
+/// for an announcement: not by the path `announce_test_derive::announce`, nor when it
+/// is imported and written as the bare `#[announce(level = 2)]`.
+#[proc_macro_attribute]
+pub fn announce(attr: TokenStream, item: TokenStream) -> TokenStream {
+    struct Level(syn::LitInt);
+    impl syn::parse::Parse for Level {
+        fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+            let key: syn::Ident = input.parse()?;
+            if key != "level" {
+                return Err(syn::Error::new(
+                    key.span(),
+                    "this is not the announce attribute of the `announce` crate: expected \
+                     `level = N`",
+                ));
+            }
+            input.parse::<syn::Token![=]>()?;
+            Ok(Level(input.parse()?))
+        }
+    }
+    let level: Level = match syn::parse(attr) {
+        Ok(l) => l,
+        Err(e) => return e.to_compile_error().into(),
+    };
+    let item: TokenStream2 = item.into();
+    let parsed: syn::DeriveInput = match syn::parse2(item.clone()) {
+        Ok(i) => i,
+        Err(e) => return e.to_compile_error().into(),
+    };
+    let level = level.0;
+    let id = syn::Ident::new(
+        &format!(
+            "FOREIGN_{}_{}",
+            parsed.ident.to_string().to_uppercase(),
+            level.base10_digits()
+        ),
+        proc_macro2::Span::call_site(),
+    );
+    TokenStream::from(quote! {
+        #item
+        pub const #id: u32 = #level;
+    })
+}
+
+thread_local! {
+    /// How many times `count_query` answered the query for each item (by name).
+    static QUERIES: std::cell::RefCell<std::collections::HashMap<String, usize>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// The name of the item in the state of an attribute query
+/// (`[RANDOM; MODE (OPTIONS) { ITEM }] attrs(..)*`): the identifier after the first
+/// `struct`, `enum`, `union` or `trait` in it.
+fn queried_item(state: &TokenStream2) -> String {
+    use proc_macro2::TokenTree;
+    fn find(ts: TokenStream2) -> Option<String> {
+        let mut prev_kw = false;
+        for t in ts {
+            match t {
+                TokenTree::Ident(i) if prev_kw => return Some(i.to_string()),
+                TokenTree::Ident(i) => {
+                    prev_kw = matches!(
+                        i.to_string().as_str(),
+                        "struct" | "enum" | "union" | "trait"
+                    )
+                }
+                TokenTree::Group(g) => {
+                    if let Some(found) = find(g.stream()) {
+                        return Some(found);
+                    }
+                    prev_kw = false;
+                }
+                _ => prev_kw = false,
+            }
+        }
+        None
+    }
+    find(state.clone()).unwrap_or_default()
+}
+
+/// A check that counts the queries it is asked. It answers the query of an item with
+/// an attribute name that owns the number of the answer, `queried_0` for the first
+/// query that it answers for that item, `queried_1` for the second, ..., so META lists
+/// `attrs(queried_0)` if the query was sent once. A query that is sent again
+/// for the same item shows in the names. (A thread-local counter: the compiler
+/// expands macros on one thread.)
+#[proc_macro]
+pub fn count_query(input: TokenStream) -> TokenStream {
+    use announce::helper::{CheckCall, OwnedAttrs};
+    match syn::parse::<CheckCall>(input) {
+        Ok(CheckCall::Query(q)) => {
+            let item = queried_item(&q.state);
+            let n = QUERIES.with(|c| {
+                let mut c = c.borrow_mut();
+                let n = c.entry(item).or_insert(0);
+                *n += 1;
+                *n - 1
+            });
+            q.answer(&OwnedAttrs::from_strs(&[&format!("queried_{}", n)]))
+                .into()
+        }
+        Ok(CheckCall::Run(_)) => TokenStream::new(),
+        Err(e) => e.to_compile_error().into(),
+    }
 }

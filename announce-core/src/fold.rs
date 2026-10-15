@@ -3,91 +3,132 @@
 //! Downstream attribute and derive macros emit `#[announce(..)]` or
 //! `#[derive(Announce)]` on the items they produce. When two announcements apply to
 //! one item they must make one trampoline and one `Announce` impl, not two (the second
-//! would be E0252 and E0119). The announcements are merged, in two steps.
+//! would be E0252 and E0119). The announcements are merged, and an announcement tells
+//! another one by a **flag**, never by its path.
 //!
-//! **Folding** ([`fold`]). When `#[announce]` expands and the item it receives has
-//! another *pending* announcement, it emits no trampoline. It merges its options into
-//! the other announcement ([`Options::merge`]) and re-emits the item with the other
-//! attribute updated. A pending announcement is, the first in the order of the
-//! attributes:
+//! # The flag
 //!
-//! - a qualified attribute `#[x::announce(..)]`;
-//! - a `#[derive(.. Announce ..)]`, with its helper attribute, the bare
-//!   `#[announce(..)]` (made if there is none, right after the derive).
+//! The internal option `__announce_deferred` marks an announcement that has *moved*:
+//! it stands last among the outer attributes of the item (below every other macro), so
+//! that everything above it has expanded or is inert, and every announcement that
+//! those macros could add has been added. It is written bare, or with the answer of the
+//! query of the checks, `__announce_deferred(attrs(my_lib, ..))` (see Checks). Nothing
+//! else tells an announcement from another attribute, so other crates' attributes that
+//! are named `announce` (`#[metrics::announce(level = 2)]`) are never touched, and a
+//! renamed import (`use announce::announce as ann; #[ann]`) is an announcement like
+//! any other.
 //!
-//! A bare `#[announce(..)]` is the helper of a derive, or an attribute macro that was
-//! imported. With a derive in the item it is the derive's helper. Without a derive it is
-//! one of the two, and rustc has taken the derive away when the helper is left over
-//! (a derive expands before the attribute macros *below* it, and its attribute is gone
-//! from what they receive). In both cases the options are the same, so they are read
-//! and the attribute is removed ([`Folded::Absorbed`]): the announcement that is
-//! expanding takes them over.
+//! # Moving ([`defer`])
+//!
+//! An announcement *without* the flag, which is expanding for the first time, re-emits
+//! the item and nothing else, with itself moved to be the last outer attribute and
+//! flagged: `#[a] #[announce] #[b] item` becomes `#[a] #[b] #[announce(.., flag)]
+//! item`. `#[b]` expands before it, and if `#[b]` emits an announcement of its own, that
+//! one moves behind `#[b]`'s output too, and then folds. This happens always (the
+//! macros below are not known), except:
+//!
+//! - when the item has no outer attribute: there is nothing to wait for, and the
+//!   announcement is made at once;
+//! - with `emit_item = false` or `mock`: the item is not emitted, so the macros below
+//!   must not see it (a derive below would implement a trait for an item that the
+//!   announcement then removes). The flag is set but the announcement stays *in place*:
+//!   it is re-emitted as the first attribute, and the attributes above it were inert
+//!   already. The announcements below it are not seen then: they would make a second
+//!   trampoline, so put the other announcements of such an item above it (they move
+//!   below it and fold).
+//!
+//! # Folding ([`fold`])
+//!
+//! An announcement *with* the flag is the last macro to expand. It makes the trampoline,
+//! unless it merges into another one:
+//!
+//! 1. every bare `#[announce(..)]` among the other attributes is taken over: its
+//!    options come first and the attribute is removed. Everything above a flagged
+//!    announcement has expanded already or is inert, so a bare `#[announce(..)]` that
+//!    is left can only be a helper attribute of a `#[derive(Announce)]`, which stood
+//!    aside ([`derive_defers`]). An attribute whose arguments do not parse as options is
+//!    left alone, as it is not ours;
+//! 2. if another attribute below it carries the flag (any path), the options are merged
+//!    into it, and this attribute is gone ([`Options::merge`], the target's entries
+//!    first). It expands next, and folds or makes the trampoline.
+//! 3. otherwise the trampoline is made.
 //!
 //! One item has one trampoline, so the announcements must agree on its name: the
 //! `macro_name`, else the name of the item. Different names are one error at the
 //! announcement that is expanding, with the item as it was ([`Options::merge`]).
 //!
-//! A derive that has an `#[x::announce]` attribute below it has already expanded when
-//! the attribute does. It cannot change the item, so it emits nothing and leaves the
-//! announcement to the attribute ([`derive_defers`]), which finds the helper.
+//! # Checks
 //!
-//! **Deferring** ([`defer`]). `#[a] #[b] item`: `a` emits `#[announce] #[b] item`. The
-//! new `#[announce]` is outermost and sees `#[b]`, which may emit an announcement of
-//! its own later. So when no announcement is pending and the item has an attribute that
-//! is not known to be inert, `#[announce]` re-emits the item with itself moved to be the
-//! last outer attribute, marked with the internal option `__deferred`. `#[b]` expands,
-//! and if it emits an announcement, that one folds into the marked one. A check can own
-//! attributes of the item (`#[announce(check)] #[my_lib] struct S`), and an attribute
-//! above `#[announce]` is rejected by rustc before `#[announce]` can remove it: such an
-//! item is never deferred.
+//! A check can own attributes of the item (`#[announce(check)] #[my_lib] struct S`).
+//! Rustc rejects such an attribute above `#[announce]`, so after the move it must be
+//! *below* the announcement. The names are known only after the query, so an
+//! announcement with checks sends the query first, as it has always done, and moves in
+//! `finish` ([`defer`]), with the owned attributes after it, in their order. The answer
+//! travels in the flag, `__announce_deferred(attrs(my_lib))`: the flagged announcement
+//! does not send the query again, **the query runs once for an announcement**. A fold
+//! unites the answers of both sides, and moves the owned attributes that were above the
+//! target below it. Only an announcement that is merged with checks that were not asked
+//! (a helper attribute with checks of its own, [`pending_query`]) asks again, and asks
+//! those checks only.
+//!
+//! # The derive
+//!
+//! A derive expands before the attribute macros below it, and cannot change the item.
+//! `#[derive(Announce)]` emits nothing when an announcement stands below it, and
+//! leaves the trampoline to that attribute, which takes its helper over
+//! ([`derive_defers`]). It is the only place where an announcement is told by its path
+//! (`x::announce`, or another derive that lists `Announce`) as well as by the flag,
+//! because `#[derive(Announce)] #[x::announce]` shows the derive the attribute before it
+//! has moved. The risk is a derive that stands aside for an `#[x::announce]` of
+//! another crate below it: nothing announces the item then. A derive above `#[announce]`
+//! works because `#[announce]` moves below the derive and the derive sees the flag.
 //!
 //! # Termination
 //!
-//! Every expansion of an announce attribute is one of:
-//!
-//! 1. **terminal**: it emits the trampoline, and no announce attribute;
-//! 2. **a fold**: it emits the item with *one announce attribute fewer* (itself, which
-//!    rustc has consumed; the other one is only updated in place);
-//! 3. **a deferral**: it emits itself once more, but only when `__deferred` is not set,
-//!    and with `__deferred` set.
-//!
 //! Let `P` be the number of announce attribute invocations on the item, and `U` the
-//! number of them without the marker. A terminal expansion lowers `P`; a fold lowers
-//! `P` and does not raise `U` (the target keeps its marker, or gets one); a deferral
-//! keeps `P` and lowers `U`. So `(P, U)` falls in the lexicographic order at every
-//! expansion of an announce attribute, and there can be no endless run of them. An
-//! announcement defers at most once, and an announcement with the marker never defers,
-//! even when attributes that are not inert are left: it emits the trampoline. Macros of
+//! number of them without the flag. Every expansion of an announce attribute is one of:
+//!
+//! 1. an unflagged one that moves (or stays in place): it emits itself once more, with
+//!    the flag. `P` is the same, `U` is lower by one;
+//! 2. an unflagged one that has nothing to wait for: it emits the trampoline and no
+//!    announce attribute. `P` is lower by one;
+//! 3. a flagged one that folds: it emits the item with *one announce attribute fewer*
+//!    (itself; the target keeps its flag). `P` is lower by one, `U` is the same;
+//! 4. a flagged one that emits the trampoline. `P` is lower by one.
+//!
+//! The query of the checks is part of the expansion that sends it: a chain of calls of
+//! the checks, each handing over to the next element of a list that gets shorter, that
+//! ends in `finish`, which does one of the above (1 or 2 for an unflagged
+//! announcement, 4 for a flagged one that asks for the checks it has not asked yet).
+//! So `(P, U)` falls in the lexicographic order at every expansion of an announce
+//! attribute, and there can be no endless run of them. An announcement never
+//! re-emits itself without the flag, and one with the flag never moves again. Macros of
 //! others can still add announcements (each of them is one more `P`); they do so by
 //! their own expansions, which the argument does not cover.
 //!
 //! A derive never folds and never re-emits anything: it emits the trampoline or nothing.
 
 use crate::helper::OwnedAttrs;
-use crate::options::{MergeConflict, Options};
-use crate::scan::{self, Outer};
+use crate::options::{Check, MergeConflict, Options};
+use crate::scan::{self, Outer, OuterAttr};
 use proc_macro2::{Delimiter, Group, Ident, Span, TokenStream, TokenTree};
 use template_quote::{quote, ToTokens};
 
 /// What [`fold`] found.
 pub(crate) enum Folded {
-    /// No other announcement: go on with this one as given.
-    No,
     /// This announcement is done: the tokens replace the item (the other announcement
     /// has the options of this one, or an error comes with the item as it was).
     Emit(TokenStream),
     /// This announcement goes on, with the options of the bare `#[announce(..)]`
     /// attributes merged in and those attributes taken off the item.
-    Absorbed {
+    Go {
         opts: Box<Options>,
         item: TokenStream,
-        /// Errors of the attributes that were taken off: to come before the output.
-        errors: TokenStream,
     },
 }
 
 /// The options of an announcement attribute: `None` for the form `path = ..`.
-fn options_of(a: &scan::OuterAttr) -> Option<syn::Result<Options>> {
+fn options_of(a: &OuterAttr) -> Option<syn::Result<Options>> {
     if a.eq {
         return None;
     }
@@ -108,24 +149,28 @@ fn conflict(c: &MergeConflict, item: &TokenStream) -> Folded {
     Folded::Emit(error_with_item(c.message(), item))
 }
 
-/// How [`rebuild`] changes the attributes.
-enum Edit {
-    None,
-    /// New tokens inside the brackets of attribute `.0`.
-    Replace(usize, TokenStream),
-    /// A whole new attribute after attribute `.0`.
-    InsertAfter(usize, TokenStream),
-}
-
-/// The item with the attributes `removed` gone and `edit` done.
-fn rebuild(outer: &Outer, removed: &[usize], edit: Edit) -> TokenStream {
+/// The item with the attributes `removed` gone. With `replace` (the index of the
+/// target of a fold and the tokens inside its brackets), the target gets them, and the
+/// attributes that `owned` names move right after it, in their order: they must stand
+/// below the announcement that is left.
+fn rebuild(
+    outer: &Outer,
+    removed: &[usize],
+    replace: Option<(usize, TokenStream)>,
+    owned: &OwnedAttrs,
+) -> TokenStream {
+    let target = replace.as_ref().map(|r| r.0);
+    let pair = |a: &OuterAttr| [outer.tts[a.at].clone(), outer.tts[a.at + 1].clone()];
+    // Moves below the target.
+    let moves =
+        |k: usize, a: &OuterAttr| target.is_some() && Some(k) != target && a.is_owned_by(owned);
     let mut out = TokenStream::new();
     for (k, a) in outer.attrs.iter().enumerate() {
-        if removed.contains(&k) {
+        if removed.contains(&k) || moves(k, a) {
             continue;
         }
-        match &edit {
-            Edit::Replace(r, inner) if *r == k => {
+        match &replace {
+            Some((r, inner)) if *r == k => {
                 let old = match &outer.tts[a.at + 1] {
                     TokenTree::Group(g) => g.span(),
                     _ => Span::call_site(),
@@ -133,159 +178,125 @@ fn rebuild(outer: &Outer, removed: &[usize], edit: Edit) -> TokenStream {
                 let mut group = Group::new(Delimiter::Bracket, inner.clone());
                 group.set_span(old);
                 out.extend([outer.tts[a.at].clone(), TokenTree::Group(group)]);
+                for (j, b) in outer.attrs.iter().enumerate() {
+                    if !removed.contains(&j) && moves(j, b) {
+                        out.extend(pair(b));
+                    }
+                }
             }
-            _ => out.extend([outer.tts[a.at].clone(), outer.tts[a.at + 1].clone()]),
-        }
-        if let Edit::InsertAfter(i, attr) = &edit {
-            if *i == k {
-                out.extend(attr.clone());
-            }
+            _ => out.extend(pair(a)),
         }
     }
     out.extend(outer.tts[outer.attrs_end()..].iter().cloned());
     out
 }
 
-/// Rule 1: merges the announcement that is expanding (`me`) into another announcement
-/// of `item` (named `name`), if there is one. See the module docs.
+/// The announcement that is expanding has the flag (`me`, on the item `item` named
+/// `name`): merges it into another announcement of the item, if there is one, and takes
+/// over the bare `#[announce(..)]` attributes that are left. See the module docs.
 ///
 /// The announcements must agree on the trampoline name: `macro_name`, else `name`
 /// ([`Options::merge`]).
-pub(crate) fn fold(me: &Options, name: &Ident, item: &TokenStream) -> Folded {
-    if !scan::starts_with_attr(item) {
-        return Folded::No;
+pub(crate) fn fold(me: &Options, name: &Ident, item: TokenStream) -> Folded {
+    let go = |opts: Options, item: TokenStream| Folded::Go {
+        opts: Box::new(opts),
+        item,
+    };
+    if !scan::starts_with_attr(&item) {
+        return go(me.clone(), item);
     }
-    let outer = scan::outer(item);
-    let derive_at = outer.attrs.iter().position(|a| a.derives_announce());
+    let outer = scan::outer(&item);
     let mut current = me.clone();
     let mut removed: Vec<usize> = Vec::new();
-    let mut errors = TokenStream::new();
 
-    // Bare `#[announce(..)]` without a derive: take the options over.
-    if derive_at.is_none() {
-        for (k, a) in outer
-            .attrs
-            .iter()
-            .enumerate()
-            .filter(|(_, a)| a.is_bare("announce"))
-        {
-            match options_of(a) {
-                None => {}
-                Some(Err(e)) => {
-                    // Nobody else would report it (the derive it belonged to is gone).
-                    errors.extend(e.to_compile_error());
+    // 1. A bare `#[announce(..)]` is the helper attribute of a derive: take it over.
+    // Its entries come first.
+    for (k, a) in outer
+        .attrs
+        .iter()
+        .enumerate()
+        .filter(|(_, a)| a.is_bare("announce"))
+    {
+        if let Some(Ok(helper)) = options_of(a) {
+            match helper.merge(&current, name) {
+                Ok(merged) => {
+                    current = merged;
                     removed.push(k);
                 }
-                // The attribute is the target: its entries come first.
-                Some(Ok(theirs)) => match theirs.merge(&current, name) {
-                    Ok(merged) => {
-                        current = merged;
-                        removed.push(k);
-                    }
-                    Err(c) => return conflict(&c, item),
-                },
+                Err(c) => return conflict(&c, &item),
             }
         }
     }
 
-    // The first pending announcement that is another attribute or a derive.
+    // 2. The first attribute below that has the flag (any path) is the target.
     for (k, a) in outer.attrs.iter().enumerate() {
-        if removed.contains(&k) {
+        if removed.contains(&k) || !a.carries_flag() {
             continue;
         }
-        if a.is_qualified("announce") {
-            let target = match options_of(a) {
-                Some(Ok(t)) => t,
-                // Its own expansion reports it.
-                _ => continue,
-            };
-            return match target.merge(&current, name) {
-                Ok(merged) => {
-                    let inner = a.with_args(merged.to_token_stream());
-                    let mut out = errors;
-                    out.extend(rebuild(&outer, &removed, Edit::Replace(k, inner)));
-                    Folded::Emit(out)
-                }
-                Err(c) => conflict(&c, item),
-            };
-        }
-        if Some(k) == derive_at {
-            let helper = outer.attrs.iter().position(|b| b.is_bare("announce"));
-            let target = match helper.map(|h| options_of(&outer.attrs[h])) {
-                None => Options::default(),
-                Some(Some(Ok(t))) => t,
-                // The derive reports the bad helper.
-                Some(_) => continue,
-            };
-            // The derive emits the item as written and has no mock.
-            for (bad, name) in [
-                (current.mock.is_some(), "mock"),
-                (!current.emit_item, "emit_item"),
-            ] {
-                if bad {
-                    let msg = format!(
-                        "announce: `{}` does not apply to an item that has `#[derive(Announce)]`: \
-                         the derive cannot change the item, so it cannot be merged with this \
-                         announcement",
-                        name
-                    );
-                    return Folded::Emit(error_with_item(msg, item));
-                }
+        let target = match options_of(a) {
+            Some(Ok(t)) => t,
+            // Not an announcement of ours, or its own expansion reports it.
+            _ => continue,
+        };
+        return match target.merge(&current, name) {
+            Ok(merged) => {
+                let inner = a.with_args(merged.to_token_stream());
+                // Both sides' owned attributes stand below the target.
+                let mut owned = me.owned.clone().unwrap_or_default();
+                owned.extend(target.owned.iter().flat_map(|o| o.names().iter().cloned()));
+                Folded::Emit(rebuild(&outer, &removed, Some((k, inner)), &owned))
             }
-            let mut merged = match target.merge(&current, name) {
-                Ok(m) => m,
-                Err(c) => return conflict(&c, item),
-            };
-            // A derive never defers.
-            merged.deferred = false;
-            let args = merged.to_token_stream();
-            let edit = match helper {
-                Some(h) if !args.is_empty() => Edit::Replace(h, outer.attrs[h].with_args(args)),
-                None if !args.is_empty() => Edit::InsertAfter(k, quote! { #[announce(#args)] }),
-                _ => Edit::None,
-            };
-            let mut out = errors;
-            out.extend(rebuild(&outer, &removed, edit));
-            return Folded::Emit(out);
-        }
+            Err(c) => conflict(&c, &item),
+        };
     }
 
+    // 3. The trampoline.
     if removed.is_empty() {
-        Folded::No
-    } else {
-        Folded::Absorbed {
-            opts: Box::new(current),
-            item: rebuild(&outer, &removed, Edit::None),
-            errors,
+        return go(current, item);
+    }
+    let rest = rebuild(&outer, &removed, None, &OwnedAttrs::new());
+    go(current, rest)
+}
+
+/// The checks that a flagged announcement still has to ask after [`fold`] has taken
+/// helper attributes over: the checks of `after` that `before` (the announcement as it
+/// was expanded) had not asked, with the names that `before` knew. `None`: nothing is
+/// left to ask, and `after.answer()` is the names the checks own.
+pub(crate) fn pending_query(before: &Options, after: &Options) -> Option<(Vec<Check>, OwnedAttrs)> {
+    if after.answer().is_some() {
+        return None;
+    }
+    let text = |c: &Check| c.to_token_stream().to_string();
+    match before.answer() {
+        // `before` was asked about its checks: only the new ones are left.
+        Some(seed) => {
+            let asked: Vec<String> = before.checks.iter().map(text).collect();
+            let ask = after
+                .checks
+                .iter()
+                .filter(|c| !asked.contains(&text(c)))
+                .cloned()
+                .collect();
+            Some((ask, seed))
         }
+        None => Some((after.checks.clone(), OwnedAttrs::new())),
     }
 }
 
-/// Rule 2: the item with the announcement moved to be the last outer attribute, if it
-/// should be. `None`: emit the announcement now. `attr` is the arguments of the
-/// attribute.
+/// An announcement without the flag, which is expanding for the first time, with the
+/// checks answered (`owned` is what they own: empty without checks): the item with the
+/// announcement moved to be the last outer attribute, flagged, and the attributes that
+/// the checks own after it. `None`: the announcement can be made now (the item has no
+/// outer attribute, or it is the flagged announcement itself). See the module docs.
+///
+/// `attr` is the arguments of the attribute as it was written.
 pub(crate) fn defer(
     opts: &Options,
     attr: &TokenStream,
     item: &TokenStream,
     owned: &OwnedAttrs,
 ) -> Option<TokenStream> {
-    // The marker makes this the last time. An item that is not emitted (`emit_item =
-    // false`, `mock`) is not seen by the macros below, so there is nothing to wait for;
-    // and an attribute of a derive that is not there would be rejected above the
-    // announcement.
-    if opts.deferred || !opts.emit_item || opts.mock.is_some() || !scan::starts_with_attr(item) {
-        return None;
-    }
-    let outer = scan::outer(item);
-    let mut unknown = false;
-    for a in &outer.attrs {
-        if a.is_owned_by(owned) {
-            return None;
-        }
-        unknown |= !a.is_inert();
-    }
-    if !unknown {
+    if opts.deferred || !scan::starts_with_attr(item) {
         return None;
     }
     let krate = opts.krate();
@@ -295,23 +306,54 @@ pub(crate) fn defer(
     if !args.is_empty() && !comma {
         args.extend(quote! { , });
     }
-    let end = outer.attrs_end();
-    let mut out: TokenStream = outer.tts[..end].iter().cloned().collect();
-    out.extend(quote! { #[#krate::announce(#args __deferred = true)] });
-    out.extend(outer.tts[end..].iter().cloned());
+    args.extend(crate::options::flag_tokens(
+        Some(owned),
+        !opts.checks.is_empty(),
+    ));
+    let announcement = quote! { #[#krate::announce(#args)] };
+    // Not emitted: the macros below must not see the item. Stay in place, which is the
+    // front: what stands above was inert already.
+    if !opts.emit_item || opts.mock.is_some() {
+        let mut out = announcement;
+        out.extend(item.clone());
+        return Some(out);
+    }
+    let outer = scan::outer(item);
+    let mut out = TokenStream::new();
+    let mut owned_attrs = TokenStream::new();
+    for a in &outer.attrs {
+        let tokens = [outer.tts[a.at].clone(), outer.tts[a.at + 1].clone()];
+        if a.is_owned_by(owned) {
+            owned_attrs.extend(tokens);
+        } else {
+            out.extend(tokens);
+        }
+    }
+    out.extend(announcement);
+    out.extend(owned_attrs);
+    out.extend(outer.tts[outer.attrs_end()..].iter().cloned());
     Some(out)
 }
 
-/// For `#[derive(Announce)]`: whether another announcement is left to expand below it.
+/// For `#[derive(Announce)]`: whether an announcement is left to expand below it.
 ///
 /// A derive expands before the attribute macros below it, which then do not see its
-/// attribute. It cannot change the item, so when the item has an `#[x::announce]`
-/// attribute, or another `#[derive(Announce)]`, below it, the derive emits nothing: the
-/// announcement below makes the trampoline, with the options of the helper attribute
-/// that is left in the item.
+/// attribute. It cannot change the item, so when the item has an announcement below it,
+/// the derive emits nothing: that announcement makes the trampoline, with the options of
+/// the helper attribute that is left in the item. An announcement is an attribute that
+/// carries the flag (an `#[announce]` that has moved), or, because
+/// `#[derive(Announce)] #[x::announce]` shows the derive the attribute before it has
+/// moved, an attribute whose path is `x::announce` or `::announce`, or another derive that
+/// lists `Announce`. The path is not matched anywhere else. So a derive stands aside for
+/// an `#[x::announce]` of another crate below it (and then nothing announces the item).
 pub(crate) fn derive_defers(attrs: &[syn::Attribute]) -> bool {
     use syn::punctuated::Punctuated;
     attrs.iter().any(|a| {
+        if let syn::Meta::List(l) = &a.meta {
+            if scan::tokens_carry_flag(l.tokens.clone()) {
+                return true;
+            }
+        }
         let path = a.path();
         let last = match path.segments.last() {
             Some(l) => &l.ident,
@@ -347,183 +389,226 @@ mod tests {
         syn::parse2(ts(s)).unwrap()
     }
 
-    /// `fold` for `me` on `item`, printed: `No`, `Emit(..)` or `Absorbed(options; item)`.
+    /// `fold` for `me` on `item`, printed: `Emit(..)` or `Go(options;item)`.
     fn folded(me: &str, item: &str) -> String {
         let name = scan::head(&ts(item)).unwrap().ident;
-        match fold(&opts(me), &name, &ts(item)) {
-            Folded::No => "No".to_string(),
+        match fold(&opts(me), &name, ts(item)) {
             Folded::Emit(t) => format!("Emit({})", norm(&t)),
-            Folded::Absorbed { opts, item, errors } => format!(
-                "Absorbed({};{};{})",
-                norm(&opts.to_token_stream()),
-                norm(&item),
-                norm(&errors)
-            ),
+            Folded::Go { opts, item } => {
+                format!("Go({};{})", norm(&opts.to_token_stream()), norm(&item))
+            }
         }
     }
 
+    const FLAG: &str = "__announce_deferred";
+
     #[test]
-    fn nothing_pending_is_nothing_to_fold() {
+    fn nothing_to_merge_into_is_nothing_to_fold() {
         for item in [
             "pub struct S;",
             "#[derive(Debug)] #[doc = \"x\"] #[repr(C)] pub struct S;",
             // Not an announcement: another path, or a name that only contains it.
             "#[x::announced] #[announce_not] #[derive(Announced)] pub struct S;",
             "#[cfg_attr(a, announce(meta = m::x))] pub struct S;",
-            // Not a form we merge into, or it does not parse: its own expansion says so.
+            // An attribute that is called `announce`, and has no flag, is not ours: it
+            // is not touched, whatever its path.
+            "#[metrics::announce(level = 2)] pub struct S;",
+            "#[::x::y::announce] #[x::announce(meta = b::x)] pub struct S;",
+            "#[announce(level = 2)] pub struct S;",
+            // The flag is a whole entry of the arguments, and nothing else.
+            "#[x::y(not_a_flag)] pub struct S;",
+            "#[x::y(meta = __announce_deferred)] pub struct S;",
+            "#[x::y(__announce_deferred = 1)] pub struct S;",
+            "#[x::y(a::__announce_deferred)] pub struct S;",
+            // The form `path = ..` has no arguments to merge into.
             "#[x::announce = 1] pub struct S;",
-            "#[x::announce(nope = 1)] pub struct S;",
         ] {
-            assert_eq!(folded("meta = a::x", item), "No", "{}", item);
+            let want = format!("Go(__announce_deferred,meta=a::x;{})", norm(&ts(item)));
+            assert_eq!(
+                folded(&format!("meta = a::x, {}", FLAG), item),
+                want,
+                "{}",
+                item
+            );
         }
     }
 
     #[test]
-    fn a_qualified_attribute_receives_the_options() {
-        assert_eq!(
-            folded("meta = a::x", "#[x::announce(meta = b::x)] pub struct S;"),
-            "Emit(#[x::announce(meta=b::x,meta=a::x)]pubstructS;)"
-        );
+    fn a_flagged_attribute_receives_the_options_whatever_its_path() {
+        let me = format!("meta = a::x, {}", FLAG);
+        for path in ["x::announce", "::x::y::announce", "other", "a::b"] {
+            let item = format!("#[{}(meta = b::x, {})] pub struct S;", path, FLAG);
+            let out = folded(&me, &item);
+            assert_eq!(
+                out,
+                format!(
+                    "Emit(#[{}(__announce_deferred,meta=b::x,meta=a::x)]pubstructS;)",
+                    path
+                ),
+                "{}",
+                path
+            );
+        }
+        // The flag alone, and next to other entries.
         assert_eq!(
             folded(
-                "meta = a::x",
-                "#[::x::y::announce] #[doc = \"d\"] pub struct S;"
+                &me,
+                "#[x::announce(__announce_deferred)] #[doc = \"d\"] pub struct S;"
             ),
-            "Emit(#[::x::y::announce(meta=a::x)]#[doc=\"d\"]pubstructS;)"
+            "Emit(#[x::announce(__announce_deferred,meta=a::x)]#[doc=\"d\"]pubstructS;)"
         );
         // Nothing to add: the attribute stays as it is.
         assert_eq!(
-            folded("", "#[x::announce(meta = b::x)] struct S;"),
-            "Emit(#[x::announce(meta=b::x)]structS;)"
-        );
-        assert_eq!(
-            folded("", "#[x::announce] struct S;"),
-            "Emit(#[x::announce]structS;)"
+            folded(
+                FLAG,
+                "#[x::announce(meta = b::x, __announce_deferred)] struct S;"
+            ),
+            "Emit(#[x::announce(__announce_deferred,meta=b::x)]structS;)"
         );
     }
 
     #[test]
-    fn the_first_pending_announcement_is_the_one() {
+    fn the_first_flagged_attribute_is_the_one() {
+        let me = format!("meta = a::x, {}", FLAG);
         assert_eq!(
             folded(
-                "meta = a::x",
-                "#[derive(Debug)] #[y::announce(meta = y::x)] #[z::announce(meta = z::x)] struct S;"
+                &me,
+                "#[derive(Debug)] #[y::announce(meta = y::x)] #[y2(meta = y::x, __announce_deferred)] #[z::announce(meta = z::x, __announce_deferred)] struct S;"
             ),
-            "Emit(#[derive(Debug)]#[y::announce(meta=y::x,meta=a::x)]#[z::announce(meta=z::x)]structS;)"
+            "Emit(#[derive(Debug)]#[y::announce(meta=y::x)]#[y2(__announce_deferred,meta=y::x,meta=a::x)]#[z::announce(meta=z::x,__announce_deferred)]structS;)"
         );
+    }
+
+    #[test]
+    fn an_attribute_that_does_not_parse_is_not_a_target() {
+        let me = format!("meta = a::x, {}", FLAG);
+        // The flag is there but the attribute is not ours: the next one is the target.
+        assert_eq!(
+            folded(
+                &me,
+                "#[x::y(nope = 1, __announce_deferred)] #[z::announce(__announce_deferred)] struct S;"
+            ),
+            "Emit(#[x::y(nope=1,__announce_deferred)]#[z::announce(__announce_deferred,meta=a::x)]structS;)"
+        );
+        assert!(folded(&me, "#[x::y(nope = 1, __announce_deferred)] struct S;").starts_with("Go("));
     }
 
     #[test]
     fn the_merged_attribute_keeps_the_crate_of_the_target() {
         assert_eq!(
             folded(
-                "crate = ::me::announce",
-                "#[x::announce(crate = ::other::announce)] struct S;"
+                "crate = ::me::announce, __announce_deferred",
+                "#[x::announce(crate = ::other::announce, __announce_deferred)] struct S;"
             ),
-            "Emit(#[x::announce(crate=::other::announce)]structS;)"
+            "Emit(#[x::announce(crate=::other::announce,__announce_deferred)]structS;)"
         );
         assert_eq!(
-            folded("crate = ::me::announce", "#[x::announce] struct S;"),
-            "Emit(#[x::announce(crate=::me::announce)]structS;)"
+            folded(
+                "crate = ::me::announce, __announce_deferred",
+                "#[x::announce(__announce_deferred)] struct S;"
+            ),
+            "Emit(#[x::announce(crate=::me::announce,__announce_deferred)]structS;)"
         );
     }
 
     #[test]
-    fn the_marker_of_either_stays() {
-        assert!(folded("__deferred = true", "#[x::announce] struct S;").contains("__deferred=true"));
-        assert!(
-            folded("", "#[x::announce(__deferred = true)] struct S;").contains("__deferred=true")
+    fn the_answers_of_both_sides_are_united() {
+        // Neither has checks: the flag stays bare.
+        assert_eq!(
+            folded(FLAG, "#[x::announce(__announce_deferred)] struct S;"),
+            "Emit(#[x::announce(__announce_deferred)]structS;)"
         );
-        assert!(!folded("", "#[x::announce] struct S;").contains("__deferred"));
+        // Both asked their checks: the names are united, the target's first.
+        assert_eq!(
+            folded(
+                "b::check, __announce_deferred(attrs(mine, shared))",
+                "#[x::announce(a::check, __announce_deferred(attrs(theirs, shared)))] struct S;"
+            ),
+            "Emit(#[x::announce(__announce_deferred(attrs(theirs,shared,mine)),a::check,b::check)]structS;)"
+        );
+        // One side has no checks to ask: its answer is empty.
+        assert_eq!(
+            folded(
+                "b::check, __announce_deferred(attrs(mine))",
+                "#[x::announce(__announce_deferred)] struct S;"
+            ),
+            "Emit(#[x::announce(__announce_deferred(attrs(mine)),b::check)]structS;)"
+        );
+        assert_eq!(
+            folded(
+                FLAG,
+                "#[x::announce(a::check, __announce_deferred(attrs()))] struct S;"
+            ),
+            "Emit(#[x::announce(__announce_deferred(attrs()),a::check)]structS;)"
+        );
+        // One side has checks that were not asked: the merged one is not answered.
+        assert_eq!(
+            folded(
+                "b::check, __announce_deferred",
+                "#[x::announce(a::check, __announce_deferred(attrs(theirs)))] struct S;"
+            ),
+            "Emit(#[x::announce(__announce_deferred,a::check,b::check)]structS;)"
+        );
+    }
+
+    #[test]
+    fn the_attributes_that_checks_own_move_below_the_target() {
+        // Rustc rejects an attribute that nothing knows above the announcement, so the
+        // ones of the announcement that goes (`mine`) and of the target (`theirs`) all
+        // stand right after the target.
+        let me = "c::check, __announce_deferred(attrs(mine))";
+        let target = "#[x::announce(d::check, __announce_deferred(attrs(theirs)))]";
+        assert_eq!(
+            folded(
+                me,
+                &format!(
+                    "#[mine(1)] #[doc = \"a\"] #[theirs] {} #[doc = \"b\"] #[mine(2)] #[theirs(3)] struct S;",
+                    target
+                )
+            ),
+            "Emit(#[doc=\"a\"]#[x::announce(__announce_deferred(attrs(theirs,mine)),d::check,c::check)]\
+             #[mine(1)]#[theirs]#[mine(2)]#[theirs(3)]#[doc=\"b\"]structS;)"
+        );
+        // Without owned names nothing moves.
+        assert_eq!(
+            folded(
+                FLAG,
+                "#[mine(1)] #[x::announce(__announce_deferred)] #[mine(2)] struct S;"
+            ),
+            "Emit(#[mine(1)]#[x::announce(__announce_deferred)]#[mine(2)]structS;)"
+        );
     }
 
     #[test]
     fn a_bare_attribute_is_taken_over() {
-        // Without a derive, the bare `#[announce(..)]` is a macro that was imported
-        // (or the helper of a derive that has expanded): its options come first.
+        let me = format!("meta = a::x, {}", FLAG);
+        // The bare `#[announce(..)]` is the helper of a derive: its entries come first.
+        assert_eq!(
+            folded(&me, "#[announce(meta = b::x)] #[doc = \"d\"] struct S;"),
+            "Go(__announce_deferred,meta=b::x,meta=a::x;#[doc=\"d\"]structS;)"
+        );
+        assert_eq!(
+            folded(&me, "#[announce] #[announce(meta = c::x)] struct S;"),
+            "Go(__announce_deferred,meta=c::x,meta=a::x;structS;)"
+        );
+        // And then merged into a flagged attribute below, helpers' entries and all.
         assert_eq!(
             folded(
-                "meta = a::x",
-                "#[announce(meta = b::x)] #[doc = \"d\"] struct S;"
+                &me,
+                "#[announce(meta = b::x)] #[x::announce(__announce_deferred)] struct S;"
             ),
-            "Absorbed(meta=b::x,meta=a::x;#[doc=\"d\"]structS;;)"
+            "Emit(#[x::announce(__announce_deferred,meta=b::x,meta=a::x)]structS;)"
         );
+        // An attribute that does not parse as options is not ours: it stays, with no
+        // error.
         assert_eq!(
-            folded(
-                "meta = a::x",
-                "#[announce] #[announce(meta = c::x)] struct S;"
-            ),
-            "Absorbed(meta=c::x,meta=a::x;structS;;)"
+            folded(&me, "#[announce(nope = 1)] struct S;"),
+            "Go(__announce_deferred,meta=a::x;#[announce(nope=1)]structS;)"
         );
-        // A qualified one wins over the bare one: the bare one is read first.
+        // Only the bare path: not `x::announce`, not `::announce`, not `announced`.
         assert_eq!(
-            folded(
-                "meta = a::x",
-                "#[announce(meta = b::x)] #[x::announce] struct S;"
-            ),
-            "Emit(#[x::announce(meta=b::x,meta=a::x)]structS;)"
-        );
-        // A bare attribute that does not parse is reported once, and dropped.
-        let out = folded("", "#[announce(nope = 1)] struct S;");
-        assert!(
-            out.starts_with("Absorbed(;structS;;::core::compile_error!"),
-            "{}",
-            out
-        );
-        assert_eq!(out.matches("compile_error").count(), 1, "{}", out);
-    }
-
-    #[test]
-    fn a_derive_receives_the_options_in_its_helper() {
-        assert_eq!(
-            folded(
-                "meta = a::x",
-                "#[derive(Debug, ::announce::Announce)] #[announce(meta = b::x)] #[doc = \"d\"] struct S;"
-            ),
-            "Emit(#[derive(Debug,::announce::Announce)]#[announce(meta=b::x,meta=a::x)]#[doc=\"d\"]structS;)"
-        );
-        // A helper is made right after the derive (before it, rustc rejects it).
-        assert_eq!(
-            folded(
-                "meta = a::x",
-                "#[derive(Announce)] #[doc = \"d\"] struct S;"
-            ),
-            "Emit(#[derive(Announce)]#[announce(meta=a::x)]#[doc=\"d\"]structS;)"
-        );
-        assert_eq!(
-            folded(
-                "meta = a::x",
-                "#[doc = \"d\"] #[derive(a::Announce,)] struct S;"
-            ),
-            "Emit(#[doc=\"d\"]#[derive(a::Announce,)]#[announce(meta=a::x)]structS;)"
-        );
-        // Nothing to add: the item as it is.
-        assert_eq!(
-            folded("", "#[derive(Announce)] struct S;"),
-            "Emit(#[derive(Announce)]structS;)"
-        );
-        // The marker does not go to a derive, which never waits.
-        assert_eq!(
-            folded("__deferred = true", "#[derive(Announce)] struct S;"),
-            "Emit(#[derive(Announce)]structS;)"
-        );
-        // Only the derive named `Announce`.
-        assert_eq!(
-            folded("meta = a::x", "#[derive(Announced, Announce2)] struct S;"),
-            "No"
-        );
-    }
-
-    #[test]
-    fn a_derive_comes_before_a_bare_attribute() {
-        // With a derive in the item the bare attribute is its helper: it is not taken over.
-        let out = folded(
-            "meta = a::x",
-            "#[announce(meta = b::x)] #[derive(Announce)] struct S;",
-        );
-        assert_eq!(
-            out,
-            "Emit(#[announce(meta=b::x,meta=a::x)]#[derive(Announce)]structS;)"
+            folded(&me, "#[x::announce(meta = b::x)] #[::announce] #[announced] struct S;"),
+            "Go(__announce_deferred,meta=a::x;#[x::announce(meta=b::x)]#[::announce]#[announced]structS;)"
         );
     }
 
@@ -533,12 +618,12 @@ mod tests {
         for (me, item, needle) in [
             (
                 "macro_name = A",
-                "#[x::announce(macro_name = B)] struct S;",
+                "#[x::announce(macro_name = B, __announce_deferred)] struct S;",
                 format!("{}(`A`and`B`)", NAMES),
             ),
             (
                 "layout = single",
-                "#[x::announce(layout = direct)] struct S;",
+                "#[x::announce(layout = direct, __announce_deferred)] struct S;",
                 "`layout=".to_string(),
             ),
             (
@@ -546,20 +631,15 @@ mod tests {
                 "#[announce(macro_name = B)] struct S;",
                 format!("{}(`A`and`B`)", NAMES),
             ),
-            (
-                "macro_name = A",
-                "#[derive(Announce)] #[announce(macro_name = B)] struct S;",
-                format!("{}(`A`and`B`)", NAMES),
-            ),
             // A name that is set and one that is not: the item's name is the other.
             (
                 "",
-                "#[x::announce(macro_name = ParseAlt)] pub trait Parse {}",
+                "#[x::announce(macro_name = ParseAlt, __announce_deferred)] pub trait Parse {}",
                 format!("{}(`Parse`and`ParseAlt`)", NAMES),
             ),
             (
                 "macro_name = ParseAlt",
-                "#[x::announce] pub trait Parse {}",
+                "#[x::announce(__announce_deferred)] pub trait Parse {}",
                 format!("{}(`ParseAlt`and`Parse`)", NAMES),
             ),
             (
@@ -572,18 +652,13 @@ mod tests {
                 "#[announce] pub trait Parse {}",
                 format!("{}(`ParseAlt`and`Parse`)", NAMES),
             ),
-            (
-                "",
-                "#[derive(Announce)] #[announce(macro_name = ParseAlt)] pub trait Parse {}",
-                format!("{}(`Parse`and`ParseAlt`)", NAMES),
-            ),
-            (
-                "macro_name = ParseAlt",
-                "#[derive(Announce)] struct Parse;",
-                format!("{}(`ParseAlt`and`Parse`)", NAMES),
-            ),
         ] {
-            let out = folded(me, item);
+            let me = if me.is_empty() {
+                FLAG.to_string()
+            } else {
+                format!("{}, {}", me, FLAG)
+            };
+            let out = folded(&me, item);
             assert!(out.starts_with("Emit(::core::compile_error!"), "{}", out);
             assert!(out.contains(&needle), "{}\n{}", needle, out);
             assert_eq!(out.matches("compile_error").count(), 1, "{}", out);
@@ -595,54 +670,39 @@ mod tests {
     #[test]
     fn equal_trampoline_names_merge() {
         // The item's name is the default name: `macro_name = S` on `S` is the same.
+        let me = |o: &str| {
+            if o.is_empty() {
+                FLAG.to_string()
+            } else {
+                format!("{}, {}", o, FLAG)
+            }
+        };
         assert_eq!(
-            folded("macro_name = S", "#[x::announce] struct S;"),
-            "Emit(#[x::announce(macro_name=S)]structS;)"
-        );
-        assert_eq!(
-            folded("", "#[x::announce(macro_name = S)] struct S;"),
-            "Emit(#[x::announce(macro_name=S)]structS;)"
-        );
-        assert_eq!(
-            folded("macro_name = A", "#[x::announce(macro_name = A)] struct S;"),
-            "Emit(#[x::announce(macro_name=A)]structS;)"
-        );
-        // The explicit name stays in whichever announcement it was.
-        assert_eq!(
-            folded("macro_name = S", "#[announce] struct S;"),
-            "Absorbed(macro_name=S;structS;;)"
-        );
-        assert_eq!(
-            folded("", "#[announce(macro_name = S)] #[doc = \"d\"] struct S;"),
-            "Absorbed(macro_name=S;#[doc=\"d\"]structS;;)"
+            folded(
+                &me("macro_name = S"),
+                "#[x::announce(__announce_deferred)] struct S;"
+            ),
+            "Emit(#[x::announce(macro_name=S,__announce_deferred)]structS;)"
         );
         assert_eq!(
             folded(
-                "macro_name = S",
-                "#[derive(Announce)] #[announce(meta = b::x)] struct S;"
+                &me(""),
+                "#[x::announce(macro_name = S, __announce_deferred)] struct S;"
             ),
-            "Emit(#[derive(Announce)]#[announce(macro_name=S,meta=b::x)]structS;)"
+            "Emit(#[x::announce(macro_name=S,__announce_deferred)]structS;)"
         );
-        // A derive without a helper attribute is named after the item.
+        // The explicit name stays in whichever announcement it was.
         assert_eq!(
-            folded("macro_name = S", "#[derive(Announce)] struct S;"),
-            "Emit(#[derive(Announce)]#[announce(macro_name=S)]structS;)"
+            folded(&me("macro_name = S"), "#[announce] struct S;"),
+            "Go(macro_name=S,__announce_deferred;structS;)"
         );
-    }
-
-    #[test]
-    fn options_that_a_derive_cannot_have() {
-        for me in ["mock = a::B", "emit_item = false"] {
-            let out = folded(me, "#[derive(Announce)] struct S;");
-            assert!(out.starts_with("Emit(::core::compile_error!"), "{}", out);
-            assert!(
-                out.contains("doesnotapplytoanitemthathas`#[derive(Announce)]`"),
-                "{}",
-                out
-            );
-        }
-        assert!(folded("emit_item = true", "#[derive(Announce)] struct S;")
-            .starts_with("Emit(#[derive"));
+        assert_eq!(
+            folded(
+                &me(""),
+                "#[announce(macro_name = S)] #[doc = \"d\"] struct S;"
+            ),
+            "Go(macro_name=S,__announce_deferred;#[doc=\"d\"]structS;)"
+        );
     }
 
     #[test]
@@ -650,68 +710,66 @@ mod tests {
         use proc_macro2::{Delimiter, Group};
         let item: TokenStream = [TokenTree::Group(Group::new(
             Delimiter::None,
-            ts("#[x::announce(meta = b::x)] pub struct S;"),
+            ts("#[x::announce(meta = b::x, __announce_deferred)] pub struct S;"),
         ))]
         .into_iter()
         .collect();
         let name = scan::head(&item).unwrap().ident;
-        match fold(&opts("meta = a::x"), &name, &item) {
-            Folded::Emit(out) => {
-                assert_eq!(norm(&out), "#[x::announce(meta=b::x,meta=a::x)]pubstructS;")
-            }
+        match fold(&opts("meta = a::x, __announce_deferred"), &name, item) {
+            Folded::Emit(out) => assert_eq!(
+                norm(&out),
+                "#[x::announce(__announce_deferred,meta=b::x,meta=a::x)]pubstructS;"
+            ),
             _ => panic!("not folded"),
         }
     }
 
     #[test]
-    fn what_is_inert() {
-        let inert = |attr: &str| {
-            let item = ts(&format!("#[{}] struct S;", attr));
-            outer(&item).attrs[0].is_inert()
+    fn what_is_left_to_ask() {
+        let ask = |before: &str, after: &str| {
+            pending_query(&opts(before), &opts(after)).map(|(c, seed)| {
+                (
+                    c.iter()
+                        .map(|c| norm(&c.to_token_stream()))
+                        .collect::<Vec<_>>(),
+                    seed.names()
+                        .iter()
+                        .map(|n| n.to_string())
+                        .collect::<Vec<_>>(),
+                )
+            })
         };
-        for a in [
-            "doc = \"x\"",
-            "doc(hidden)",
-            "cfg(a)",
-            "cfg_attr(a, b)",
-            "repr(C)",
-            "allow(a)",
-            "warn(a)",
-            "deny(a)",
-            "forbid(a)",
-            "expect(a)",
-            "must_use",
-            "non_exhaustive",
-            "deprecated",
-            "inline",
-            "cold",
-            "automatically_derived",
-            "derive(Debug)",
-            "announce(meta = a::b)",
-            "rustfmt::skip",
-            "clippy::all",
-            "diagnostic::on_unimplemented",
-            "rustc_copy_clone_marker",
-            "macro_use",
-        ] {
-            assert!(inert(a), "{}", a);
-        }
-        for a in [
-            "serde(skip)",
-            "b",
-            "x::announce",
-            "::doc",
-            "rustfmt",
-            "other::skip",
-            "my_lib",
-            "a::b::c",
-            "doc::x",
-        ] {
-            assert!(!inert(a), "{}", a);
-        }
-        // A path that is not one of the forms read is not inert either.
-        assert!(!outer(&ts("#[a::] struct S;")).attrs[0].is_inert());
-        assert!(!outer(&ts("#[a b] struct S;")).attrs[0].is_inert());
+        // Everything is known: nothing to ask.
+        assert_eq!(ask(FLAG, FLAG), None);
+        assert_eq!(
+            ask(
+                "a::check, __announce_deferred(attrs(x))",
+                "a::check, __announce_deferred(attrs(x))"
+            ),
+            None
+        );
+        // A helper brought a check that nobody asked: only that one is asked, and the
+        // names already known go in the state.
+        assert_eq!(
+            ask(
+                "a::check, __announce_deferred(attrs(x))",
+                "a::check, b::check(1), __announce_deferred"
+            ),
+            Some((vec!["b::check(1)".to_string()], vec!["x".to_string()]))
+        );
+        // The announcement had no checks (nothing to ask): all of them are new.
+        assert_eq!(
+            ask(FLAG, "b::check, __announce_deferred"),
+            Some((vec!["b::check".to_string()], vec![]))
+        );
+        // It was not asked (a flag written by hand): all of them are asked.
+        assert_eq!(
+            ask(
+                "a::check, __announce_deferred",
+                "a::check, b::check, __announce_deferred"
+            ),
+            Some((vec!["a::check".to_string(), "b::check".to_string()], vec![]))
+        );
     }
 
     fn deferred(me: &str, item: &str) -> Option<String> {
@@ -720,24 +778,38 @@ mod tests {
     }
 
     #[test]
-    fn the_announcement_moves_below_what_it_does_not_know() {
+    fn the_announcement_moves_below_the_other_attributes() {
         assert_eq!(
             deferred("crate = ::l::announce, meta = a::x", "#[b] #[derive(Debug)] #[c(1)] #[doc = \"d\"] struct S;"),
-            Some("#[b]#[derive(Debug)]#[c(1)]#[doc=\"d\"]#[::l::announce::announce(crate=::l::announce,meta=a::x,__deferred=true)]structS;".to_string())
+            Some("#[b]#[derive(Debug)]#[c(1)]#[doc=\"d\"]#[::l::announce::announce(crate=::l::announce,meta=a::x,__announce_deferred)]structS;".to_string())
+        );
+        // Whatever the attributes are, also the ones that are known to be inert: the
+        // macros are not told by their names.
+        for item in [
+            "#[b] struct S;",
+            "#[doc = \"d\"] struct S;",
+            "#[derive(Debug)] struct S;",
+            "#[derive(Announce)] #[announce(meta = a::x)] struct S;",
+        ] {
+            assert!(
+                deferred("crate = ::l::announce", item).is_some(),
+                "{}",
+                item
+            );
+        }
+        // A trailing comma is not doubled.
+        assert_eq!(
+            deferred("crate = ::l::announce, meta = a::x,", "#[b] struct S;"),
+            Some("#[b]#[::l::announce::announce(crate=::l::announce,meta=a::x,__announce_deferred)]structS;".to_string())
         );
         assert_eq!(
             deferred("crate = ::l::announce", "#[b] struct S;"),
             Some(
-                "#[b]#[::l::announce::announce(crate=::l::announce,__deferred=true)]structS;"
+                "#[b]#[::l::announce::announce(crate=::l::announce,__announce_deferred)]structS;"
                     .to_string()
             )
         );
-        // A trailing comma is not doubled.
-        assert_eq!(
-            deferred("crate = ::l::announce, meta = a::x,", "#[b] struct S;"),
-            Some("#[b]#[::l::announce::announce(crate=::l::announce,meta=a::x,__deferred=true)]structS;".to_string())
-        );
-        // What comes out is an announcement that parses, with the marker.
+        // What comes out is an announcement that parses, with the flag.
         let out = defer(
             &opts("crate = ::l::announce"),
             &ts("crate = ::l::announce"),
@@ -746,61 +818,93 @@ mod tests {
         )
         .unwrap();
         let attr = &outer(&out).attrs[1];
+        assert!(attr.carries_flag());
         let again: Options = syn::parse2(attr.args.clone().unwrap().stream()).unwrap();
         assert!(again.deferred);
     }
 
     #[test]
-    fn the_announcement_waits_once() {
+    fn the_announcement_moves_once() {
         let me = "crate = ::l::announce";
         let owned = OwnedAttrs::new();
         let first = defer(&opts(me), &ts(me), &ts("#[b] struct S;"), &owned).unwrap();
-        // What comes back is the announcement, marked, as the last attribute.
+        // What comes back is the announcement, flagged, as the last attribute.
         let o = outer(&first);
         assert_eq!(o.attrs.len(), 2);
         let args = o.attrs[1].args.clone().unwrap().stream();
-        let marked = opts(&args.to_string());
-        assert!(marked.deferred);
-        // Asked again with the marker, with unknown attributes still there: it stays.
+        let flagged = opts(&args.to_string());
+        assert!(flagged.deferred);
+        // Asked again with the flag, whatever is left in the item, it does not move.
         let rest = ts("#[b] struct S;");
-        assert!(defer(&marked, &args, &rest, &owned).is_none());
-        assert!(defer(&marked, &args, &ts("#[b] #[c] #[d(1)] struct S;"), &owned).is_none());
+        assert!(defer(&flagged, &args, &rest, &owned).is_none());
+        assert!(defer(&flagged, &args, &ts("#[b] #[c] #[d(1)] struct S;"), &owned).is_none());
     }
 
     #[test]
-    fn the_announcement_does_not_wait_when_it_need_not() {
-        let me = "crate = ::l::announce";
-        for item in [
-            "struct S;",
-            "#[derive(Debug)] #[doc = \"d\"] #[repr(C)] #[allow(dead_code)] struct S;",
-            "#[derive(Announce)] #[announce(meta = a::x)] struct S;",
+    fn the_announcement_is_made_at_once_if_there_is_nothing_to_wait_for() {
+        for me in [
+            "crate = ::l::announce",
+            "crate = ::l::announce, emit_item = false",
+            "crate = ::l::announce, mock = a::B",
         ] {
-            assert_eq!(deferred(me, item), None, "{}", item);
+            assert_eq!(deferred(me, "struct S;"), None);
+            assert_eq!(deferred(me, "pub(crate) trait T {}"), None);
         }
-        // An item that is not emitted is not seen by the macros below.
+    }
+
+    #[test]
+    fn an_item_that_is_not_emitted_stays_where_it_is() {
+        // The macros below must not see an item that the announcement removes: it is
+        // re-emitted as the first attribute, flagged.
         assert_eq!(
-            deferred("crate = ::l::announce, emit_item = false", "#[b] struct S;"),
-            None
+            deferred(
+                "crate = ::l::announce, emit_item = false",
+                "#[derive(Debug)] #[b] struct S;"
+            ),
+            Some("#[::l::announce::announce(crate=::l::announce,emit_item=false,__announce_deferred)]#[derive(Debug)]#[b]structS;".to_string())
         );
         assert_eq!(
             deferred("crate = ::l::announce, mock = a::B", "#[b] struct S;"),
-            None
+            Some("#[::l::announce::announce(crate=::l::announce,mock=a::B,__announce_deferred)]#[b]structS;".to_string())
         );
     }
 
     #[test]
-    fn the_announcement_does_not_go_below_an_attribute_that_a_check_owns() {
-        let me = opts("crate = ::l::announce, c::check");
+    fn the_attributes_that_a_check_owns_come_after_the_announcement() {
         let attr = ts("crate = ::l::announce, c::check");
-        let item = ts("#[b] #[my_lib(x)] struct S;");
-        let owned = OwnedAttrs::from_strs(&["my_lib"]);
-        assert!(defer(&me, &attr, &item, &owned).is_none());
-        // Owned attributes alone do not make it wait.
-        let item = ts("#[my_lib(x)] #[doc = \"d\"] struct S;");
-        assert!(defer(&me, &attr, &item, &owned).is_none());
-        // Without them the item waits.
-        let item = ts("#[b] #[my_lib(x)] struct S;");
-        assert!(defer(&me, &attr, &item, &OwnedAttrs::new()).is_some());
+        let me = opts("crate = ::l::announce, c::check");
+        let owned = OwnedAttrs::from_strs(&["my_lib", "other"]);
+        let item = ts("#[my_lib(x)] #[b] #[other] #[my_lib::y = 1] #[doc = \"d\"] struct S;");
+        // In their order, and the answer travels in the flag.
+        assert_eq!(
+            norm(&defer(&me, &attr, &item, &owned).unwrap()),
+            "#[b]#[doc=\"d\"]#[::l::announce::announce(crate=::l::announce,c::check,__announce_deferred(attrs(my_lib,other)))]\
+             #[my_lib(x)]#[other]#[my_lib::y=1]structS;"
+        );
+        // An answer without names is still an answer.
+        assert_eq!(
+            norm(&defer(&me, &attr, &ts("#[b] struct S;"), &OwnedAttrs::new()).unwrap()),
+            "#[b]#[::l::announce::announce(crate=::l::announce,c::check,__announce_deferred(attrs()))]structS;"
+        );
+        // Only the attributes of the item, not a path that merely contains the name.
+        assert_eq!(
+            norm(&defer(&me, &attr, &ts("#[::my_lib] #[x::my_lib] struct S;"), &owned).unwrap()),
+            "#[::my_lib]#[x::my_lib]#[::l::announce::announce(crate=::l::announce,c::check,__announce_deferred(attrs(my_lib,other)))]structS;"
+        );
+        // The answer that comes back from the flag is the one that was given.
+        let out = defer(&me, &attr, &item, &owned).unwrap();
+        let moved = &outer(&out).attrs[2];
+        let again: Options = syn::parse2(moved.args.clone().unwrap().stream()).unwrap();
+        assert_eq!(
+            again
+                .answer()
+                .unwrap()
+                .names()
+                .iter()
+                .map(|n| n.to_string())
+                .collect::<Vec<_>>(),
+            ["my_lib", "other"]
+        );
     }
 
     #[test]
@@ -809,6 +913,13 @@ mod tests {
             let item: syn::ItemStruct = syn::parse_str(src).unwrap();
             derive_defers(&item.attrs)
         };
+        // By the flag, whatever the path.
+        assert!(attrs(
+            "#[announce(meta = a::x, __announce_deferred)] struct S;"
+        ));
+        assert!(attrs("#[x::y(__announce_deferred(attrs(a)))] struct S;"));
+        assert!(attrs("#[y(__announce_deferred)] struct S;"));
+        // By the path: an attribute that has not moved yet.
         assert!(attrs(
             "#[announce(meta = a::x)] #[x::announce(meta = b::x)] struct S;"
         ));
@@ -820,6 +931,8 @@ mod tests {
             "#[derive(Debug)] #[x::announced] #[doc = \"d\"] struct S;"
         ));
         assert!(!attrs("#[derive(AnnounceNot)] struct S;"));
+        assert!(!attrs("#[x::y(meta = __announce_deferred)] struct S;"));
+        assert!(!attrs("#[x::y(a::__announce_deferred)] struct S;"));
         assert!(!attrs("struct S;"));
     }
 
@@ -830,8 +943,9 @@ mod tests {
     /// Macros: `announce` (the real function; the output is the item again, or the
     /// terminal output that holds the capture derive), `emit(x)` (announces what it
     /// produces: `#[x::announce(meta = m::x)]` in front of the item), `pass` (returns
-    /// its input) and `dup` (re-emits the item with an `#[x::announce(meta = m::dup)]`
-    /// and a copy of itself, until a limit).
+    /// its input), `dup` (re-emits the item with an `#[x::announce(meta = m::dup)]`
+    /// and a copy of itself, until a limit) and `late(x)` (adds the announcement
+    /// *below* itself, among the remaining attributes).
     ///
     /// Returns the final tokens, the number of expansions and how many of them were
     /// announcements.
@@ -842,7 +956,7 @@ mod tests {
             let o = outer(&item);
             let next = o.attrs.iter().position(|a| {
                 let last = a.segments.last().map(|l| l.to_string()).unwrap_or_default();
-                matches!(last.as_str(), "announce" | "emit" | "pass" | "dup")
+                matches!(last.as_str(), "announce" | "emit" | "pass" | "dup" | "late")
             });
             let k = match next {
                 Some(k) => k,
@@ -872,6 +986,15 @@ mod tests {
                 }
                 "emit" => {
                     let mut out = ts(&format!("#[::l::announce::announce(meta = m::{})]", args));
+                    out.extend(rest);
+                    out
+                }
+                "late" => {
+                    let mut out = TokenStream::new();
+                    out.extend(ts(&format!(
+                        "#[::l::announce::announce(meta = m::{})]",
+                        args
+                    )));
                     out.extend(rest);
                     out
                 }
@@ -906,7 +1029,8 @@ mod tests {
     #[test]
     fn expansion_ends_with_one_trampoline() {
         let cases: &[(&str, &str)] = &[
-            // attribute and attribute, three attributes
+            // attribute and attribute, three attributes: the second to expand moves
+            // behind the first, which folds into it
             (
                 "#[::l::announce::announce(crate = ::l::announce, meta = m::a)] #[::l::announce::announce(meta = m::b)] struct S;",
                 "crate=::l::announce,meta=m::b,meta=m::a",
@@ -916,33 +1040,29 @@ mod tests {
                 "crate=::l::announce,meta=m::c,meta=m::b,meta=m::a",
             ),
             // a macro that announces, with one that does not announce below it
-            (
-                "#[emit(a)] #[pass] struct S;",
-                "meta=m::a,__deferred=true",
-            ),
+            ("#[emit(a)] #[pass] struct S;", "meta=m::a"),
             // both wait for each other's macro
-            (
-                "#[emit(a)] #[emit(b)] struct S;",
-                "__deferred=true,meta=m::a,meta=m::b",
-            ),
+            ("#[emit(a)] #[emit(b)] struct S;", "meta=m::b,meta=m::a"),
             // an unknown macro between two announcements, that announces too
             (
                 "#[::l::announce::announce(crate = ::l::announce, meta = m::one)] #[emit(two)] #[::l::announce::announce(meta = m::three)] struct S;",
-                "crate=::l::announce,meta=m::three,meta=m::one,meta=m::two",
+                "crate=::l::announce,meta=m::three,meta=m::two,meta=m::one",
             ),
             // a macro that leaves a copy of itself with a smaller number, announcing at
             // each step
             (
                 "#[dup(4)] struct S;",
-                "__deferred=true,meta=m::dup4,meta=m::dup3,meta=m::dup2,meta=m::dup1",
+                "meta=m::dup1,meta=m::dup2,meta=m::dup3,meta=m::dup4",
             ),
+            // a macro that announces below itself
+            ("#[late(a)] #[pass] struct S;", "meta=m::a"),
         ];
         for (item, want) in cases {
             let (out, steps, announcements) = run(item);
             // One trampoline: the capture dummy is in the output once.
             assert_eq!(out.matches("Capture").count(), 1, "{}", out);
             assert_eq!(terminal_options(&out), *want, "{}\n{}", item, out);
-            // Every announcement attribute ends in a trampoline, a fold or a wait (once).
+            // Every announcement attribute ends in a trampoline, a fold or a move (once).
             assert!(
                 announcements <= 2 * steps,
                 "{} {} {}",
@@ -954,10 +1074,30 @@ mod tests {
     }
 
     #[test]
-    fn a_marked_announcement_with_unknown_attributes_left_emits() {
+    fn a_flagged_announcement_with_attributes_left_emits() {
         // Nothing moves again: the next expansion is the last.
-        let (out, steps, _) = run("#[::l::announce::announce(crate = ::l::announce, __deferred = true)] #[pass] #[other] struct S;");
+        let (out, steps, _) = run("#[::l::announce::announce(crate = ::l::announce, __announce_deferred)] #[pass] #[other] struct S;");
         assert_eq!(steps, 1, "{}", out);
         assert!(out.contains("Capture"), "{}", out);
+    }
+
+    #[test]
+    fn the_number_of_expansions_is_bounded_by_the_announcements() {
+        // `(P, U)` of the module docs: an announcement is expanded twice at most, once
+        // to move and once to fold or emit.
+        for n in 1..=6u32 {
+            let item = format!("#[dup({})] struct S;", n);
+            let (out, steps, announcements) = run(&item);
+            assert!(out.contains("Capture"), "{}", out);
+            // `n` dup expansions and `n` announcements, each moves once and one more
+            // expansion for each fold and for the trampoline.
+            assert!(
+                announcements <= 2 * n as usize,
+                "{} {}",
+                announcements,
+                steps
+            );
+            assert!(steps <= 4 * n as usize + 1, "{} {}", n, steps);
+        }
     }
 }

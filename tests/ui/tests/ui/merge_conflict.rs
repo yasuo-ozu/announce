@@ -30,22 +30,11 @@ pub struct Helpers(pub u8);
 #[announce(macro_name = HelperAlt)]
 pub struct UnsetHelper(pub u8);
 
-// A derive cannot take `mock` or `emit_item = false`: it does not change the item.
-#[announce::announce(mock = my_lib::Real)]
-#[derive(announce::Announce)]
-pub struct NoMock(pub u8);
-
-#[announce::announce(emit_item = false)]
-#[derive(announce::Announce)]
-pub struct NoEmitItem(pub u8);
-
 fn main() {
     let _ = (
         Attrs(0),
         WithDerive(0),
         Helpers(0),
         UnsetHelper(0),
-        NoMock(0),
-        NoEmitItem(0),
     );
 }
