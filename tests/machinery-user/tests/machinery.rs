@@ -150,3 +150,28 @@ fn docs_are_removed_from_the_payload_unless_asked() {
         out
     );
 }
+
+mod merged {
+    use super::{lib, summary};
+    lib::MergedBelow! { [lib::MergedBelow!, lib::MergedAbove!, summary!] ALL }
+}
+
+#[test]
+fn machinery_announcements_merge_with_attributes() {
+    // One trampoline each (a second would not compile), with both metas: the
+    // attribute's first, as the target.
+    let rows = merged::ALL;
+    assert_eq!(rows.len(), 2);
+    for (row, name) in rows.iter().zip(["MergedBelow", "MergedAbove"]) {
+        assert_eq!(row.2, format!("struct {}", name), "{:?}", row);
+        assert_eq!(norm(row.1), "test_lib::attr,test_lib::tracked", "{:?}", row);
+    }
+    fn assert_announced<T: ?Sized + announce_test_machinery_lib::announce::Announce>() {}
+    assert_announced::<lib::MergedBelow>();
+    assert_announced::<lib::MergedAbove>();
+    let m = lib::MergedAbove {
+        a: 1,
+        tracked: false,
+    };
+    assert_eq!(m.a, 1);
+}

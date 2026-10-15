@@ -1,0 +1,37 @@
+error: announce: this announcement sets `macro_name = A`, but another announcement of the same item sets `macro_name = B`. The announcements of one item are merged into one trampoline, so they must agree: remove one of them or make them equal
+ --> tests/ui/merge_conflict.rs:4:1
+  |
+4 | #[announce::announce(macro_name = A)]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `announce::announce` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: announce: this announcement sets `layout = single`, but another announcement of the same item sets `layout = direct`. The announcements of one item are merged into one trampoline, so they must agree: remove one of them or make them equal
+ --> tests/ui/merge_conflict.rs:9:1
+  |
+9 | #[announce::announce(layout = single)]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `announce::announce` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: announce: this announcement sets `macro_name = B`, but another announcement of the same item sets `macro_name = A`. The announcements of one item are merged into one trampoline, so they must agree: remove one of them or make them equal
+  --> tests/ui/merge_conflict.rs:18:1
+   |
+18 | #[announce(macro_name = B)]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: announce: `mock` does not apply to an item that has `#[derive(Announce)]`: the derive cannot change the item, so it cannot be merged with this announcement
+  --> tests/ui/merge_conflict.rs:22:1
+   |
+22 | #[announce::announce(mock = my_lib::Real)]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this error originates in the attribute macro `announce::announce` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: announce: `emit_item` does not apply to an item that has `#[derive(Announce)]`: the derive cannot change the item, so it cannot be merged with this announcement
+  --> tests/ui/merge_conflict.rs:26:1
+   |
+26 | #[announce::announce(emit_item = false)]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this error originates in the attribute macro `announce::announce` (in Nightly builds, run with -Z macro-backtrace for more info)

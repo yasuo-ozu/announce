@@ -491,3 +491,82 @@ announce::helper::callback! {
         Ok(quote! { pub const #name: &[&str] = &[ #(#rows),* ]; })
     }
 }
+
+// ---- several announcements of one item (tests/defs/src/merge.rs) ----
+
+/// An attribute macro that returns its input as it is. `#[announce]` cannot know
+/// that, so it waits for it (see the module `merge` of the definitions).
+#[proc_macro_attribute]
+pub fn passthrough(_: TokenStream, item: TokenStream) -> TokenStream {
+    item
+}
+
+/// `#[emit_announce(OPTIONS)]`: a macro that announces what it produces. Emits the
+/// item with `#[::announce::announce(OPTIONS)]` as its outermost attribute.
+#[proc_macro_attribute]
+pub fn emit_announce(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let (attr, item): (TokenStream2, TokenStream2) = (attr.into(), item.into());
+    TokenStream::from(quote! { #[::announce::announce(#attr)] #item })
+}
+
+/// `#[emit_derive_announce(OPTIONS)]`: the same with the derive form, which puts the
+/// options in the helper attribute.
+#[proc_macro_attribute]
+pub fn emit_derive_announce(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let (attr, item): (TokenStream2, TokenStream2) = (attr.into(), item.into());
+    TokenStream::from(quote! {
+        #[derive(::announce::Announce)]
+        #[announce(#attr)]
+        #item
+    })
+}
+
+/// `#[chain(N)]`: a macro that runs `N` times, each time announcing the item with
+/// `meta = merge::step(N)` and leaving `#[chain(N-1)]` to expand next. `#[chain(0)]`
+/// only returns the item. All the announcements must end up as one.
+#[proc_macro_attribute]
+pub fn chain(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let n: u32 = match attr.to_string().trim().parse() {
+        Ok(n) => n,
+        Err(_) => {
+            return quote! { ::core::compile_error!("chain: expected a number"); }.into();
+        }
+    };
+    let item: TokenStream2 = item.into();
+    if n == 0 {
+        return item.into();
+    }
+    let (next, step) = (
+        proc_macro2::Literal::u32_unsuffixed(n - 1),
+        proc_macro2::Literal::u32_unsuffixed(n),
+    );
+    TokenStream::from(quote! {
+        #[::announce::announce(meta = merge::step(#step))]
+        #[::announce_test_derive::chain(#next)]
+        #item
+    })
+}
+
+/// A check that leaves a mark where it runs: `tick! { (NAME), ITEM }` emits
+/// `pub const TICK_<ITEM>_<NAME>: u8 = 0;`, so a check that ran twice for one item is
+/// an error (the constant would be defined twice). It owns no attributes.
+#[proc_macro]
+pub fn tick(input: TokenStream) -> TokenStream {
+    announce::helper::check(input.into(), &[], |ci| {
+        let name = match &ci.item {
+            syn::Item::Struct(s) => s.ident.to_string(),
+            syn::Item::Enum(s) => s.ident.to_string(),
+            syn::Item::Trait(s) => s.ident.to_string(),
+            other => {
+                return Err(syn::Error::new_spanned(other, "tick: unsupported item"));
+            }
+        };
+        let arg: String = ci.args.to_string().split_whitespace().collect();
+        let id = syn::Ident::new(
+            &format!("TICK_{}_{}", name.to_uppercase(), arg.to_uppercase()),
+            proc_macro2::Span::call_site(),
+        );
+        Ok(quote! { pub const #id: u8 = 0; })
+    })
+    .into()
+}

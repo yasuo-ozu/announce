@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+- Several announcements on one item are merged into one trampoline, one `Announce`
+  impl and one `META`, instead of failing with E0252 and E0119. An `#[announce]`
+  that finds another announcement on its item (`#[announce]`, `#[x::announce]`, or
+  `#[derive(Announce)]` with its `#[announce(..)]` helper) emits only the item, with
+  its options added to that announcement: checks and `meta` are united,
+  `allow_primitive`, `allow_std_prelude` and `docs` are OR-ed, `crate` is the
+  other's, and a `macro_name`, `mock`, `repeater`, `layout` or `emit_item` that
+  differs is one error. An `#[announce]` that is expanded while the item still has
+  attributes of macros that have not run (`#[a] #[b] item`, where `a` emits
+  `#[announce]`) waits once, below them, so that their announcements merge into it.
+  `#[derive(Announce)]` leaves the announcement to an `#[x::announce]` below it.
+  `announce::machinery::announce` merges the same way.
+- `#[derive(Announce)]` merges several `#[announce(..)]` helper attributes instead of
+  rejecting the second ("only one helper attribute is allowed").
+- Announcing the same item twice, with different `macro_name`s, no longer gives two
+  trampolines: it is one error. Announce a copy (see `emit_item`) for a second name.
+- `Options` gets an internal option `__deferred = true`, written by the waiting
+  `#[announce]`.
+
 ## 0.1.1
 
 - `no_std` definers: `announce::helper`, `announce::machinery` and

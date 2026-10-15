@@ -6,6 +6,7 @@ use announce::announce;
 pub mod docs;
 pub mod large;
 pub mod large_leak;
+pub mod merge;
 pub mod owned;
 pub mod wire;
 

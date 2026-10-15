@@ -85,6 +85,10 @@ pub struct Options {
     /// `false`: they are removed there, which makes the trampoline smaller.
     /// The item that is compiled keeps its docs either way.
     pub docs: bool,
+    /// `__deferred = true`: internal. Set by `#[announce]` when it has moved itself
+    /// below the other attributes of the item (see `fold`): it never moves again.
+    /// Accepted when written, but not meant to be.
+    pub(crate) deferred: bool,
     /// Set by `#[derive(Announce)]`: the item is emitted by the user and always
     /// gets the `Announce` impl. Not an option.
     pub(crate) derived: bool,
@@ -108,6 +112,7 @@ impl Default for Options {
             emit_item: true,
             layout: Layout::Auto,
             docs: false,
+            deferred: false,
             derived: false,
             given: Vec::new(),
             checks: Vec::new(),
@@ -127,6 +132,141 @@ impl Options {
         self.krate
             .clone()
             .unwrap_or_else(crate::cratepath::default_crate_path)
+    }
+}
+
+/// Two announcements of one item disagree on an option that has one value only
+/// (see [`Options::merge`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct MergeConflict {
+    /// The name of the option, as written in the attribute.
+    pub option: &'static str,
+    /// Its value in the announcement that is merged into.
+    pub target: String,
+    /// Its value in the announcement that is merged.
+    pub folder: String,
+}
+
+impl MergeConflict {
+    /// The message of the error, for the attribute that folds (`here`).
+    pub fn message(&self) -> String {
+        format!(
+            "announce: this announcement sets `{} = {}`, but another announcement of the same \
+             item sets `{} = {}`. The announcements of one item are merged into one trampoline, \
+             so they must agree: remove one of them or make them equal",
+            self.option, self.folder, self.option, self.target
+        )
+    }
+}
+
+fn tokens_text(t: &dyn ToTokens) -> String {
+    t.to_token_stream().to_string()
+}
+
+/// The value of an option that has one value only, from two announcements: the one
+/// that is set, or the common value; a conflict when both are set and differ.
+fn agree<T: ToTokens + Clone>(
+    option: &'static str,
+    target: &Option<T>,
+    folder: &Option<T>,
+) -> std::result::Result<Option<T>, MergeConflict> {
+    match (target, folder) {
+        (Some(a), Some(b)) if tokens_text(a) != tokens_text(b) => Err(MergeConflict {
+            option,
+            target: tokens_text(a).split_whitespace().collect(),
+            folder: tokens_text(b).split_whitespace().collect(),
+        }),
+        (Some(a), _) => Ok(Some(a.clone())),
+        (None, b) => Ok(b.clone()),
+    }
+}
+
+/// `target` followed by the entries of `folder` that are not in it yet.
+fn union(target: &[Check], folder: &[Check]) -> Vec<Check> {
+    let mut out = target.to_vec();
+    for c in folder {
+        let text = tokens_text(c);
+        if !out.iter().any(|o| tokens_text(o) == text) {
+            out.push(c.clone());
+        }
+    }
+    out
+}
+
+impl Options {
+    /// Whether the key was written (or, for options built in code, has a value
+    /// other than the default).
+    fn is_given(&self, key: &str, not_default: bool) -> bool {
+        not_default || self.given.iter().any(|g| g == key)
+    }
+
+    /// `emit_item` if it is set: written, or `false`.
+    fn explicit_emit_item(&self) -> Option<bool> {
+        self.is_given("emit_item", !self.emit_item)
+            .then(|| self.emit_item)
+    }
+
+    /// The options of two announcements of one item, as one announcement.
+    ///
+    /// `self` is the announcement that stays (the *target*), `folder` the one that
+    /// is merged into it. The result is what the target would be if it had been
+    /// written with the options of both. A pure function: it does not read the
+    /// item or the environment.
+    ///
+    /// | option | result |
+    /// |---|---|
+    /// | checks, `meta` | the target's, then the folder's that are not in it yet (exact duplicates dropped) |
+    /// | `allow_primitive`, `allow_std_prelude`, `docs` | the OR of the two effective values (the default of `allow_primitive` is `true`, so it is `false` only when both say so) |
+    /// | `crate` | the target's if set, else the folder's: two paths that both name `announce` do not conflict |
+    /// | `macro_name`, `mock`, `repeater` | the one that is set; both set and different is a conflict |
+    /// | `layout` | the one that is not `auto`; both and different is a conflict |
+    /// | `emit_item` | the one that is set (written, or `false`); both and different is a conflict |
+    /// | `__deferred` | set if either is set |
+    ///
+    /// `derived` is not written by anyone: the target's stays. The written keys
+    /// (`given`) are united. The attributes that checks own are not an option: they
+    /// come from the checks' answers to the query, which runs after the merge, on the
+    /// checks of both.
+    pub(crate) fn merge(&self, folder: &Options) -> std::result::Result<Options, MergeConflict> {
+        let mut out = self.clone();
+        out.macro_name = agree("macro_name", &self.macro_name, &folder.macro_name)?;
+        out.mock = agree("mock", &self.mock, &folder.mock)?;
+        out.repeater = agree("repeater", &self.repeater, &folder.repeater)?;
+        if out.layout == Layout::Auto {
+            out.layout = folder.layout;
+        } else if folder.layout != Layout::Auto && folder.layout != self.layout {
+            return Err(MergeConflict {
+                option: "layout",
+                target: format!("{:?}", self.layout).to_lowercase(),
+                folder: format!("{:?}", folder.layout).to_lowercase(),
+            });
+        }
+        out.emit_item = match (self.explicit_emit_item(), folder.explicit_emit_item()) {
+            (Some(a), Some(b)) if a != b => {
+                return Err(MergeConflict {
+                    option: "emit_item",
+                    target: a.to_string(),
+                    folder: b.to_string(),
+                })
+            }
+            (Some(a), _) | (None, Some(a)) => a,
+            (None, None) => true,
+        };
+        if out.krate.is_none() {
+            out.krate = folder.krate.clone();
+        }
+        out.allow_primitive = self.allow_primitive || folder.allow_primitive;
+        out.allow_std_prelude = self.allow_std_prelude || folder.allow_std_prelude;
+        out.docs = self.docs || folder.docs;
+        out.deferred = self.deferred || folder.deferred;
+        out.checks = union(&self.checks, &folder.checks);
+        out.metas = union(&self.metas, &folder.metas);
+        for key in &folder.given {
+            if !out.given.contains(key) {
+                out.given.push(key.clone());
+            }
+        }
+        Ok(out)
     }
 }
 
@@ -161,6 +301,9 @@ impl ToTokens for Options {
         }
         if self.docs {
             parts.push(quote! { docs = true });
+        }
+        if self.deferred {
+            parts.push(quote! { __deferred = true });
         }
         for m in &self.metas {
             parts.push(quote! { meta = #m });
@@ -231,6 +374,7 @@ impl Parse for Options {
                         };
                     }
                     "docs" => opts.docs = input.parse::<LitBool>()?.value,
+                    "__deferred" => opts.deferred = input.parse::<LitBool>()?.value,
                     "allow_primitive" => opts.allow_primitive = input.parse::<LitBool>()?.value,
                     "allow_std_prelude" => opts.allow_std_prelude = input.parse::<LitBool>()?.value,
                     "meta" => {
@@ -301,5 +445,195 @@ impl Parse for CaptureArgs {
             owned,
             opts: input.parse()?,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn opts(src: &str) -> Options {
+        syn::parse2(src.parse().unwrap()).unwrap_or_else(|e| panic!("{}: {}", src, e))
+    }
+
+    fn text(o: &Options) -> String {
+        o.to_token_stream().to_string().split_whitespace().collect()
+    }
+
+    /// The merge of two sets of options, printed.
+    fn merged(target: &str, folder: &str) -> String {
+        text(&opts(target).merge(&opts(folder)).unwrap())
+    }
+
+    fn conflict(target: &str, folder: &str) -> MergeConflict {
+        opts(target).merge(&opts(folder)).err().unwrap()
+    }
+
+    #[test]
+    fn lists_are_a_union_that_keeps_the_order() {
+        assert_eq!(
+            merged("a::c1, meta = a::m", "b::c2(x), meta = b::m"),
+            "meta=a::m,meta=b::m,a::c1,b::c2(x)"
+        );
+        // The target's entries come first, whatever the folder wrote first.
+        assert_eq!(merged("meta = a::m", "meta = b::m"), "meta=a::m,meta=b::m");
+        assert_eq!(merged("meta = b::m", "meta = a::m"), "meta=b::m,meta=a::m");
+    }
+
+    #[test]
+    fn exact_duplicates_are_dropped() {
+        assert_eq!(
+            merged(
+                "a::c(1), meta = m::x",
+                "a::c(1), a::c(2), meta = m::x, meta = m::y"
+            ),
+            "meta=m::x,meta=m::y,a::c(1),a::c(2)"
+        );
+        // A check and a meta entry of the same path are different things.
+        assert_eq!(merged("a::c", "meta = a::c"), "meta=a::c,a::c");
+        // Merging with itself changes nothing.
+        let o = "macro_name = N, meta = m::x, a::c(1)";
+        assert_eq!(merged(o, o), text(&opts(o)));
+        assert_eq!(merged("", ""), "");
+    }
+
+    #[test]
+    fn booleans_are_the_or_of_the_effective_values() {
+        // `allow_primitive` is true unless both say false.
+        assert_eq!(merged("allow_primitive = false", ""), "");
+        assert_eq!(merged("", "allow_primitive = false"), "");
+        assert_eq!(
+            merged("allow_primitive = false", "allow_primitive = true"),
+            ""
+        );
+        assert_eq!(
+            merged("allow_primitive = false", "allow_primitive = false"),
+            "allow_primitive=false"
+        );
+        // The others are false unless one says true.
+        assert_eq!(
+            merged("allow_std_prelude = true", ""),
+            "allow_std_prelude=true"
+        );
+        assert_eq!(
+            merged("", "allow_std_prelude = true"),
+            "allow_std_prelude=true"
+        );
+        assert_eq!(merged("allow_std_prelude = false", ""), "");
+        assert_eq!(merged("docs = true", "docs = false"), "docs=true");
+        assert_eq!(merged("docs = false", "docs = true"), "docs=true");
+    }
+
+    #[test]
+    fn crate_is_the_targets_else_the_folders() {
+        assert_eq!(
+            merged("crate = ::a::announce", "crate = ::b::announce"),
+            "crate=::a::announce"
+        );
+        assert_eq!(merged("", "crate = ::b::announce"), "crate=::b::announce");
+        assert_eq!(merged("crate = ::a::announce", ""), "crate=::a::announce");
+    }
+
+    #[test]
+    fn single_valued_options_agree_or_conflict() {
+        for (opt, a, b) in [
+            ("macro_name", "A", "B"),
+            ("mock", "x::A", "x::B"),
+            ("repeater", "crate::A", "crate::B"),
+            ("layout", "single", "direct"),
+            ("emit_item", "false", "true"),
+        ] {
+            let (ta, tb) = (format!("{} = {}", opt, a), format!("{} = {}", opt, b));
+            let c = conflict(&ta, &tb);
+            assert_eq!(c.option, opt);
+            assert_eq!((c.target.as_str(), c.folder.as_str()), (a, b), "{}", opt);
+            assert!(c.message().contains(opt), "{}", c.message());
+            // Equal values are fine, and a value that is set beats one that is not.
+            assert_eq!(merged(&ta, &ta), text(&opts(&ta)));
+            assert_eq!(merged(&ta, ""), text(&opts(&ta)), "{}", opt);
+            assert_eq!(merged("", &tb), text(&opts(&tb)), "{}", opt);
+        }
+    }
+
+    #[test]
+    fn layout_auto_is_not_a_value() {
+        assert_eq!(merged("layout = auto", "layout = single"), "layout=single");
+        assert_eq!(merged("layout = direct", "layout = auto"), "layout=direct");
+        assert_eq!(
+            merged("layout = single", "layout = single"),
+            "layout=single"
+        );
+    }
+
+    #[test]
+    fn emit_item_true_is_a_value_only_when_written() {
+        // Not written: the other one decides.
+        assert_eq!(merged("", "emit_item = false"), "emit_item=false");
+        assert_eq!(merged("emit_item = false", ""), "emit_item=false");
+        // Written as the default, and `false` from the other: a disagreement.
+        assert_eq!(
+            conflict("emit_item = true", "emit_item = false").option,
+            "emit_item"
+        );
+        // An option built in code has no written keys: `false` counts as set.
+        let built = Options {
+            emit_item: false,
+            ..Options::default()
+        };
+        assert_eq!(text(&opts("").merge(&built).unwrap()), "emit_item=false");
+        assert_eq!(text(&built.merge(&opts("")).unwrap()), "emit_item=false");
+        assert!(built.merge(&opts("emit_item = true")).is_err());
+    }
+
+    #[test]
+    fn mock_paths_are_compared_as_tokens() {
+        assert_eq!(merged("mock = a::B", "mock = a::B"), "mock=a::B");
+        assert!(opts("mock = a::B").merge(&opts("mock = ::a::B")).is_err());
+    }
+
+    #[test]
+    fn the_deferred_marker_is_kept_if_either_has_it() {
+        assert_eq!(merged("__deferred = true", ""), "__deferred=true");
+        assert_eq!(merged("", "__deferred = true"), "__deferred=true");
+        assert_eq!(merged("", ""), "");
+        // It is an ordinary option of the parser, and prints back.
+        let o = opts("macro_name = N, __deferred = true");
+        assert!(o.deferred);
+        assert_eq!(text(&opts(&text(&o))), text(&o));
+    }
+
+    #[test]
+    fn the_written_keys_are_united() {
+        let m = opts("macro_name = N")
+            .merge(&opts("docs = true, macro_name = N"))
+            .unwrap();
+        assert_eq!(m.given, ["macro_name", "docs"]);
+    }
+
+    #[test]
+    fn the_merge_prints_back_as_options_the_target_can_parse() {
+        let m = opts(
+            "crate = ::a::announce, macro_name = N, allow_std_prelude = true, meta = m::x(1), a::c",
+        )
+        .merge(&opts(
+            "docs = true, layout = single, meta = m::y, b::c(2), a::c",
+        ))
+        .unwrap();
+        let printed = m.to_token_stream();
+        let again: Options = syn::parse2(printed.clone()).unwrap();
+        assert_eq!(text(&again), text(&m));
+        assert_eq!(
+            text(&m),
+            "crate=::a::announce,macro_name=N,allow_std_prelude=true,layout=single,docs=true,\
+             meta=m::x(1),meta=m::y,a::c,b::c(2)"
+        );
+    }
+
+    #[test]
+    fn the_merge_is_pure() {
+        let (a, b) = (opts("meta = a::x"), opts("meta = b::x"));
+        let _ = a.merge(&b).unwrap();
+        assert_eq!(text(&a), "meta=a::x");
+        assert_eq!(text(&b), "meta=b::x");
     }
 }

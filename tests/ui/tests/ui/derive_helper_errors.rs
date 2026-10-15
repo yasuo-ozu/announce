@@ -1,8 +1,5 @@
-// `#[derive(Announce)]` takes one `#[announce(..)]` helper attribute.
-#[derive(announce::Announce)]
-#[announce(meta = my_lib::info(1))]
-#[announce(macro_name = Other)]
-pub struct Twice;
+// Several `#[announce(..)]` helper attributes are one announcement: see
+// `merge_conflict.rs` for the errors.
 
 // `mock` does not apply to the derive: the item is emitted as written.
 #[derive(announce::Announce)]

@@ -22,7 +22,6 @@
 //! The first group is written by `#[announce]` (or by the derive) and is only
 //! read by `finish`. The `attrs(..)` groups are what the checks add.
 
-use crate::capture_output;
 use crate::helper::{OwnedAttrs, Query};
 use crate::options::Options;
 use proc_macro2::{Ident, Span, TokenStream};
@@ -196,7 +195,9 @@ pub fn try_finish(input: TokenStream) -> Result<TokenStream> {
             // by the capture derive.
             crate::scan::head(&state.item)?;
             t.step("scan");
-            Ok(capture_output(
+            // The query is answered, so what the checks own is known: this is where
+            // the attribute can still wait for the macros below it.
+            Ok(crate::emit_or_defer(
                 &opts,
                 &state.attr,
                 state.item,

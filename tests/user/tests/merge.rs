@@ -1,0 +1,221 @@
+//! Several announcements of one item make one trampoline, one `Announce` impl and one
+//! META with the entries of all of them. The items are in `announce_test_defs::merge`,
+//! where a second trampoline or impl would not compile.
+
+use announce::Announce;
+use announce_test_defs::merge;
+use announce_test_derive::summary;
+
+type Rows = &'static [(&'static str, &'static str, &'static str)];
+
+mod rows_a {
+    use super::{merge, summary};
+    merge::AttrAttr! {
+        [merge::AttrAttr!, merge::ThreeAttrs!, merge::BareBelow!, merge::NoOptions!,
+         merge::AttrAttrEnum!, merge::AttrAttrTrait!, merge::Renamed!,
+         merge::AttrAboveDerive!, merge::AttrAboveDeriveNoHelper!, merge::TwoAttrsAboveDerive!,
+         merge::AttrBelowDerive!, merge::AttrBelowDeriveNoHelper!,
+         merge::AttrBelowDeriveAmongOthers!, merge::DeriveTwice!, summary!] ALL
+    }
+}
+
+mod rows_b {
+    use super::{merge, summary};
+    merge::EmitIntoAttr! {
+        [merge::EmitIntoAttr!, merge::EmitIntoDerive!, merge::EmitDeriveIntoAttr!,
+         merge::BothDefer!, merge::DeferOnce!, merge::Between!, merge::ChainFive!,
+         merge::MarkedNeverWaits!, merge::ChainThenAttr!, merge::Ticked!,
+         merge::TickedWaiting!, merge::TickedBothDefer!, merge::TickedDerive!,
+         merge::OwnedOnItem!, summary!] ALL
+    }
+}
+
+/// The META of the trampoline called `key`, without spaces.
+fn meta(rows: Rows, key: &str) -> String {
+    let mut found = rows.iter().filter(|r| r.0 == key);
+    let row = found
+        .next()
+        .unwrap_or_else(|| panic!("{} is not in {:?}", key, rows));
+    assert!(found.next().is_none(), "{} is there twice", key);
+    row.1.split_whitespace().collect()
+}
+
+fn is_announce<T: Announce>() {}
+
+#[test]
+fn attribute_and_attribute() {
+    let rows = rows_a::ALL;
+    assert_eq!(rows.len(), 14);
+    // The target's entries come first.
+    assert_eq!(meta(rows, "AttrAttr"), "merge::b,merge::a");
+    assert_eq!(meta(rows, "AttrAttrEnum"), "merge::b,merge::a");
+    assert_eq!(meta(rows, "AttrAttrTrait"), "merge::b,merge::a");
+    is_announce::<merge::AttrAttr>();
+    is_announce::<merge::AttrAttrEnum>();
+}
+
+#[test]
+fn three_attributes() {
+    assert_eq!(
+        meta(rows_a::ALL, "ThreeAttrs"),
+        "merge::c,merge::b,merge::a"
+    );
+    is_announce::<merge::ThreeAttrs>();
+}
+
+#[test]
+fn a_bare_attribute_below_is_taken_over() {
+    assert_eq!(meta(rows_a::ALL, "BareBelow"), "merge::b,merge::a");
+    is_announce::<merge::BareBelow>();
+}
+
+#[test]
+fn announcements_without_options() {
+    assert_eq!(meta(rows_a::ALL, "NoOptions"), "");
+    is_announce::<merge::NoOptions>();
+}
+
+#[test]
+fn options_are_merged_and_the_names_are_kept() {
+    // `Renamed` is the `macro_name` of the first announcement; `String` in the item
+    // needs the `allow_std_prelude` of the first as well (it would not compile).
+    assert_eq!(meta(rows_a::ALL, "Renamed"), "merge::b,merge::a");
+    let _ = merge::DifferentOptions(String::new());
+}
+
+#[test]
+fn attribute_above_a_derive_folds_into_its_helper() {
+    let rows = rows_a::ALL;
+    assert_eq!(meta(rows, "AttrAboveDerive"), "merge::b,merge::a");
+    assert_eq!(meta(rows, "AttrAboveDeriveNoHelper"), "merge::a");
+    assert_eq!(
+        meta(rows, "TwoAttrsAboveDerive"),
+        "merge::c,merge::b,merge::a"
+    );
+    is_announce::<merge::AttrAboveDerive>();
+    is_announce::<merge::AttrAboveDeriveNoHelper>();
+    is_announce::<merge::TwoAttrsAboveDerive>();
+}
+
+#[test]
+fn attribute_below_a_derive_is_the_one_that_announces() {
+    let rows = rows_a::ALL;
+    assert_eq!(meta(rows, "AttrBelowDerive"), "merge::b,merge::a");
+    assert_eq!(meta(rows, "AttrBelowDeriveNoHelper"), "merge::a");
+    assert_eq!(
+        meta(rows, "AttrBelowDeriveAmongOthers"),
+        "merge::b,merge::a"
+    );
+    is_announce::<merge::AttrBelowDerive>();
+    is_announce::<merge::AttrBelowDeriveNoHelper>();
+    is_announce::<merge::AttrBelowDeriveAmongOthers>();
+}
+
+#[test]
+fn two_derives_announce_once() {
+    assert_eq!(meta(rows_a::ALL, "DeriveTwice"), "merge::a");
+    is_announce::<merge::DeriveTwice>();
+}
+
+#[test]
+fn a_macro_that_announces_into_a_pending_announcement() {
+    let rows = rows_b::ALL;
+    assert_eq!(rows.len(), 14);
+    assert_eq!(meta(rows, "EmitIntoAttr"), "merge::b,merge::a");
+    assert_eq!(meta(rows, "EmitIntoDerive"), "merge::b,merge::a");
+    // The derive form puts the helper first, and the user's attribute after it
+    // is a second helper of the same derive: they are one announcement.
+    assert_eq!(meta(rows, "EmitDeriveIntoAttr"), "merge::a,merge::b");
+    is_announce::<merge::EmitIntoAttr>();
+    is_announce::<merge::EmitIntoDerive>();
+    is_announce::<merge::EmitDeriveIntoAttr>();
+}
+
+#[test]
+fn an_announcement_waits_for_the_macros_below_it() {
+    let rows = rows_b::ALL;
+    // The first announcement moved below the second `emit_announce`, which
+    // announced into it.
+    assert_eq!(meta(rows, "BothDefer"), "merge::a,merge::b");
+    // Nothing announces later: it only waited, once.
+    assert_eq!(meta(rows, "DeferOnce"), "merge::a");
+    // An unknown macro between two announcements, announcing too.
+    assert_eq!(meta(rows, "Between"), "merge::three,merge::one,merge::two");
+    is_announce::<merge::BothDefer>();
+    is_announce::<merge::DeferOnce>();
+    is_announce::<merge::Between>();
+}
+
+#[test]
+fn macros_that_keep_announcing_end() {
+    let rows = rows_b::ALL;
+    // Five macros, one after the other, each announcing and leaving the rest to
+    // the next: one trampoline, in the order of the first one to the last.
+    assert_eq!(
+        meta(rows, "ChainFive"),
+        "merge::step(5),merge::step(4),merge::step(3),merge::step(2),merge::step(1)"
+    );
+    // With attributes of the user's around.
+    assert_eq!(
+        meta(rows, "ChainThenAttr"),
+        "merge::a,merge::step(3),merge::step(2),merge::step(1)"
+    );
+    // The marker ends the waiting, whatever is below.
+    assert_eq!(meta(rows, "MarkedNeverWaits"), "merge::a");
+    is_announce::<merge::ChainFive>();
+    is_announce::<merge::ChainThenAttr>();
+    is_announce::<merge::MarkedNeverWaits>();
+}
+
+#[test]
+fn checks_run_once_each() {
+    // Each `tick` leaves a constant; a check that ran twice for an item would
+    // not compile. `tick(shared)` is in both announcements and runs once.
+    assert_eq!(merge::TICK_TICKED_LEFT, 0);
+    assert_eq!(merge::TICK_TICKED_SHARED, 0);
+    assert_eq!(merge::TICK_TICKED_RIGHT, 0);
+    assert_eq!(merge::TICK_TICKEDWAITING_WAITING, 0);
+    assert_eq!(merge::TICK_TICKEDBOTHDEFER_FIRST, 0);
+    assert_eq!(merge::TICK_TICKEDBOTHDEFER_SECOND, 0);
+    assert_eq!(merge::TICK_TICKEDDERIVE_HELPER, 0);
+    assert_eq!(merge::TICK_TICKEDDERIVE_ATTR, 0);
+    let rows = rows_b::ALL;
+    // A check is listed in META like a `meta` entry, the target's first, the
+    // duplicate once.
+    let m = meta(rows, "Ticked");
+    let order = ["tick(shared)", "tick(right)", "tick(left)"];
+    let at: Vec<usize> = order.iter().map(|o| m.find(o).unwrap()).collect();
+    assert!(at.windows(2).all(|w| w[0] < w[1]), "{}", m);
+    assert_eq!(m.matches("tick(shared)").count(), 1, "{}", m);
+    assert!(m.contains("merge::a") && m.contains("merge::b"), "{}", m);
+    assert!(meta(rows, "TickedWaiting").contains("tick(waiting)"));
+    let m = meta(rows, "TickedBothDefer");
+    assert!(m.find("tick(first)").unwrap() < m.find("tick(second)").unwrap());
+    let m = meta(rows, "TickedDerive");
+    assert!(
+        m.contains("tick(helper)") && m.contains("tick(attr)"),
+        "{}",
+        m
+    );
+    is_announce::<merge::Ticked>();
+    is_announce::<merge::TickedBothDefer>();
+    is_announce::<merge::TickedDerive>();
+}
+
+#[test]
+fn an_attribute_of_a_check_on_the_item() {
+    // `my_lib` is owned by `record_attrs`: `#[announce]` removed it, so the
+    // announcement did not move below it.
+    assert_eq!(merge::SEEN_OWNEDONITEM, ["my_lib(on_the_item)"]);
+    assert!(meta(rows_b::ALL, "OwnedOnItem").contains("record_attrs"));
+}
+
+#[test]
+fn items_that_are_not_pub() {
+    // Private, `pub(crate)`, `pub(super)` and `pub(in path)`.
+    let rows = merge::hidden_rows();
+    assert_eq!(meta(rows[0], "Private"), "merge::b,merge::a");
+    assert_eq!(meta(rows[1], "Crate"), "merge::b,merge::a");
+    assert_eq!(meta(rows[2], "Super"), "merge::a,merge::b");
+    assert_eq!(meta(rows[3], "InPath"), "merge::b,merge::a");
+}

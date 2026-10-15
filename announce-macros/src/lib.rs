@@ -46,8 +46,7 @@ use proc_macro::TokenStream;
 ///
 /// - `macro_name = Ident`: name of the trampoline. Default: the item's name. Set it
 ///   when a derive or attribute macro owns that name: the derive forwards to the
-///   trampoline with `announce::helper::redirect`. Also needed to announce an item
-///   twice.
+///   trampoline with `announce::helper::redirect`.
 /// - `crate = path`: path to the `announce` crate in generated code. Default: read
 ///   from the `Cargo.toml` of the crate being compiled, so a renamed dependency
 ///   works. A proc-macro library whose users do not depend on `announce` must set
@@ -83,6 +82,47 @@ use proc_macro::TokenStream;
 /// // (after the query of "Checks and attributes of your own").
 /// #[announce(my_lib::no_tuple(named))]
 /// pub struct S { pub a: u8 }
+/// ```
+///
+/// # Several announcements on one item
+///
+/// An item can be announced by more than one: your `#[announce]` and the
+/// `#[announce(..)]` or `#[derive(Announce)]` that a macro of a library puts on the
+/// items it produces. They are **merged**: one trampoline, one `Announce` impl, and
+/// one `META` with what all of them attached.
+///
+/// - An `#[announce]` that finds another announcement on its item (`#[announce]`,
+///   `#[x::announce]`, or `#[derive(Announce)]` with its helper attribute) emits only
+///   the item, with its own options added to the other one. The first in the order of
+///   the attributes is the one. A derive gets a helper attribute if it has none, and
+///   several helper attributes of one derive are merged as well.
+/// - Merging options: checks and `meta` entries are united, the other announcement's
+///   first, without duplicates. `allow_primitive`, `allow_std_prelude` and `docs`
+///   are on if any of them is on (`allow_primitive` is off only if all say so).
+///   `crate` is the other's, else this one's: two paths to `announce` do not conflict.
+///   `macro_name`, `mock`, `repeater`, `layout` and `emit_item` take the value that is
+///   set; two values that differ are an error at the attribute that was expanded, and
+///   the item is kept. A derive takes no `mock` and no `emit_item = false`.
+/// - A macro below `#[announce]` may announce later (`#[a] #[b] item`, where `a` emits
+///   `#[announce] #[b] item`). When no announcement is pending and the item has an
+///   attribute that is not known to be inert (`doc`, `cfg`, `repr`, `derive`, lints,
+///   `deprecated`, `inline`, tool attributes, ..), `#[announce]` waits: it moves below
+///   all the attributes, once (the internal option `__deferred = true` marks it), so
+///   that `b` expands first and its announcement merges into this one. It does not
+///   wait for an item that is not emitted (`emit_item = false`, `mock`), nor if a
+///   check owns an attribute of the item. A macro that drops the attributes it does
+///   not know would drop the announcement then.
+/// - A derive expands before the attribute macros below it, and they do not see its
+///   attribute. So `#[derive(Announce)]` leaves the announcement to an
+///   `#[x::announce]` below it (the attribute reads the helper that is left), and
+///   merges with one above it. What it cannot do is merge with a macro below it that
+///   announces only when it expands: that gives E0252 and E0119. Put the derive below
+///   such macros.
+///
+/// ```ignore
+/// #[announce(meta = a::info)]
+/// #[announce::announce(my_lib::check)]   // one trampoline: META has both
+/// pub struct S(pub u8);
 /// ```
 ///
 /// # Calling a trampoline
@@ -396,8 +436,8 @@ use proc_macro::TokenStream;
 ///
 /// Only the trampoline is emitted, not the `mod`, so the copy does not clash with the
 /// real `MyTrait`. The library makes every path in the module resolve for its
-/// callbacks, and a callback unwraps the module. Announcing one item twice needs a
-/// different `macro_name` each time.
+/// callbacks, and a callback unwraps the module. The copy is another item, so it has a
+/// `macro_name` of its own.
 ///
 /// # The `Announce` impl
 ///
@@ -458,7 +498,9 @@ pub fn define_repeater(input: TokenStream) -> TokenStream {
 /// Options go in a helper attribute, `#[announce(..)]`. They are the
 /// [options](macro@announce#options) of the `#[announce]` attribute, except `mock`
 /// and `emit_item`. By default the announced item has no doc attributes: see
-/// [Docs](macro@announce#docs).
+/// [Docs](macro@announce#docs). Several helper attributes, and an `#[announce]`
+/// attribute on the same item, are merged:
+/// [Several announcements on one item](macro@announce#several-announcements-on-one-item).
 ///
 /// ```ignore
 /// #[derive(announce::Announce)]

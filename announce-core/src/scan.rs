@@ -9,7 +9,7 @@
 //! the identifier. It never looks inside a group, apart from the first token of
 //! `pub( .. )`, and it never reads the generics, the fields or the body.
 
-use proc_macro2::{Delimiter, Ident, TokenStream, TokenTree};
+use proc_macro2::{Delimiter, Group, Ident, TokenStream, TokenTree};
 
 /// The kinds of item that `#[announce]` supports.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -156,6 +156,206 @@ pub(crate) fn head(tokens: &TokenStream) -> syn::Result<Head> {
         }
     }
     Ok(Head { kind, ident })
+}
+
+/// One outer attribute `#[..]` at the start of an item, as far as the scan reads it:
+/// its path and its arguments, not the arguments' contents.
+#[derive(Clone, Debug)]
+pub(crate) struct OuterAttr {
+    /// Index of the `#` in [`Outer::tts`]; the bracket group follows it.
+    pub at: usize,
+    /// The path starts with `::`.
+    pub leading_colon: bool,
+    /// The segments of the path (`x::y::announce`). Empty if the attribute does not
+    /// have the form `path`, `path(..)`, `path[..]`, `path{..}` or `path = ..`.
+    pub segments: Vec<Ident>,
+    /// The tokens inside the brackets, and how many of them are the path.
+    inner: Vec<TokenTree>,
+    path_len: usize,
+    /// The delimited group after the path, if there is one.
+    pub args: Option<Group>,
+    /// The attribute has the form `path = ..`.
+    pub eq: bool,
+}
+
+impl OuterAttr {
+    fn last(&self) -> Option<&Ident> {
+        self.segments.last()
+    }
+
+    /// The path is just `name`.
+    pub fn is_bare(&self, name: &str) -> bool {
+        !self.leading_colon && self.segments.len() == 1 && self.segments[0] == name
+    }
+
+    /// The path ends in `name` and has something before it: `x::announce`,
+    /// `::announce`.
+    pub fn is_qualified(&self, name: &str) -> bool {
+        (self.leading_colon || self.segments.len() > 1) && self.last().map_or(false, |l| l == name)
+    }
+
+    /// `#[derive(.. Announce ..)]`, whatever path `Announce` is written with.
+    pub fn derives_announce(&self) -> bool {
+        if self.last().map_or(true, |l| l != "derive") {
+            return false;
+        }
+        let args = match &self.args {
+            Some(g) if g.delimiter() == Delimiter::Parenthesis => g,
+            _ => return false,
+        };
+        let mut last: Option<Ident> = None;
+        for t in args.stream() {
+            match t {
+                TokenTree::Ident(i) => last = Some(i),
+                TokenTree::Punct(p) if p.as_char() == ',' => {
+                    if last.take().map_or(false, |l| l == "Announce") {
+                        return true;
+                    }
+                }
+                _ => {}
+            }
+        }
+        last.map_or(false, |l| l == "Announce")
+    }
+
+    /// An attribute that no macro can be behind: a built-in attribute that leaves
+    /// the item as it is, or an attribute of a tool. `#[derive(..)]` is inert as
+    /// well (a `#[derive(Announce)]` is looked for before this is asked).
+    pub fn is_inert(&self) -> bool {
+        const INERT: &[&str] = &[
+            "doc",
+            "cfg",
+            "cfg_attr",
+            "repr",
+            "allow",
+            "warn",
+            "deny",
+            "forbid",
+            "expect",
+            "must_use",
+            "non_exhaustive",
+            "deprecated",
+            "inline",
+            "cold",
+            "automatically_derived",
+            "derive",
+            "macro_use",
+            "no_implicit_prelude",
+            "path",
+            // The helper attribute of `#[derive(Announce)]`.
+            "announce",
+        ];
+        const TOOLS: &[&str] = &["rustfmt", "clippy", "diagnostic", "rust_analyzer"];
+        if self.leading_colon {
+            return false;
+        }
+        match self.segments.as_slice() {
+            [one] => {
+                let name = one.to_string();
+                INERT.contains(&name.as_str()) || name.starts_with("rustc_")
+            }
+            [tool, _] => TOOLS.contains(&tool.to_string().as_str()),
+            _ => false,
+        }
+    }
+
+    /// The first segment of the path is one of `owned` (see `OwnedAttrs::owns`).
+    pub fn is_owned_by(&self, owned: &crate::helper::OwnedAttrs) -> bool {
+        !self.leading_colon
+            && self.segments.first().map_or(false, |s| {
+                owned.contains(s.to_string().trim_start_matches("r#"))
+            })
+    }
+
+    /// The tokens inside the brackets with the arguments replaced: the path, then
+    /// `(args)` if `args` is not empty.
+    pub fn with_args(&self, args: TokenStream) -> TokenStream {
+        let mut out: TokenStream = self.inner[..self.path_len].iter().cloned().collect();
+        if !args.is_empty() {
+            out.extend([TokenTree::Group(Group::new(Delimiter::Parenthesis, args))]);
+        }
+        out
+    }
+}
+
+/// An item split into its outer attributes and the rest.
+pub(crate) struct Outer {
+    /// All the top-level tokens of the item (a group without delimiters is read in
+    /// place). The attributes come first: `#` and `[..]`, one after the other.
+    pub tts: Vec<TokenTree>,
+    pub attrs: Vec<OuterAttr>,
+}
+
+impl Outer {
+    /// The index in `tts` where the attributes end.
+    pub fn attrs_end(&self) -> usize {
+        self.attrs.last().map_or(0, |a| a.at + 2)
+    }
+}
+
+/// Whether the item starts with an outer attribute: the cheap test that comes
+/// before [`outer`].
+pub(crate) fn starts_with_attr(tokens: &TokenStream) -> bool {
+    is_punct(Flat::new(tokens.clone()).next().as_ref(), '#')
+}
+
+fn parse_attr(at: usize, group: &Group) -> OuterAttr {
+    let inner: Vec<TokenTree> = group.stream().into_iter().collect();
+    let colons = |i: usize| is_punct(inner.get(i), ':') && is_punct(inner.get(i + 1), ':');
+    let leading_colon = colons(0);
+    let mut i = if leading_colon { 2 } else { 0 };
+    let mut segments = Vec::new();
+    let mut dirty = false;
+    while let Some(TokenTree::Ident(id)) = inner.get(i) {
+        segments.push(id.clone());
+        i += 1;
+        if colons(i) {
+            i += 2;
+            // `a::` and then no name.
+            dirty = !matches!(inner.get(i), Some(TokenTree::Ident(_)));
+        } else {
+            break;
+        }
+    }
+    let path_len = i;
+    let (mut args, mut eq) = (None, false);
+    match inner.get(path_len) {
+        None => {}
+        Some(TokenTree::Group(g)) if inner.len() == path_len + 1 => args = Some(g.clone()),
+        Some(TokenTree::Punct(p)) if p.as_char() == '=' => eq = true,
+        _ => dirty = true,
+    }
+    if dirty || segments.is_empty() {
+        segments.clear();
+        args = None;
+        eq = false;
+    }
+    OuterAttr {
+        at,
+        leading_colon,
+        segments,
+        inner,
+        path_len,
+        args,
+        eq,
+    }
+}
+
+/// Reads the outer attributes at the start of `tokens`.
+pub(crate) fn outer(tokens: &TokenStream) -> Outer {
+    let tts: Vec<TokenTree> = Flat::new(tokens.clone()).collect();
+    let mut attrs = Vec::new();
+    let mut at = 0;
+    while is_punct(tts.get(at), '#') {
+        match tts.get(at + 1) {
+            Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Bracket => {
+                attrs.push(parse_attr(at, g));
+                at += 2;
+            }
+            _ => break,
+        }
+    }
+    Outer { tts, attrs }
 }
 
 #[cfg(test)]

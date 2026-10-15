@@ -64,6 +64,17 @@
 //! assert!(out.contains(":: my_lib :: announce :: __private :: Capture"));
 //! ```
 //!
+//! # Several announcements
+//!
+//! [`announce`] goes the way of the attribute in this as well. If the item it
+//! gets has another announcement (`#[announce]`, `#[x::announce]`,
+//! `#[derive(Announce)]`), the output is the item with that announcement holding the
+//! options of both, and no trampoline; if it has attributes of macros that have not
+//! expanded yet, the output can be the item with `#[<crate path>::announce(..)]` moved
+//! below them. See [Several announcements on one
+//! item](macro@crate::announce#several-announcements-on-one-item). The derives
+//! ([`derive_announce`] and [`derive_announce_with`]) never do that.
+//!
 //! # Checks
 //!
 //! With checks in the options (`my_lib::check`), the output is not that yet. It is
