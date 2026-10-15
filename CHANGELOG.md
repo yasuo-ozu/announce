@@ -8,16 +8,22 @@
   `#[derive(Announce)]` with its `#[announce(..)]` helper) emits only the item, with
   its options added to that announcement: checks and `meta` are united,
   `allow_primitive`, `allow_std_prelude` and `docs` are OR-ed, `crate` is the
-  other's, and a `macro_name`, `mock`, `repeater`, `layout` or `emit_item` that
-  differs is one error. An `#[announce]` that is expanded while the item still has
+  other's, and a `mock`, `repeater`, `layout` or `emit_item` that differs is one
+  error. An `#[announce]` that is expanded while the item still has
   attributes of macros that have not run (`#[a] #[b] item`, where `a` emits
   `#[announce]`) waits once, below them, so that their announcements merge into it.
   `#[derive(Announce)]` leaves the announcement to an `#[x::announce]` below it.
   `announce::machinery::announce` merges the same way.
 - `#[derive(Announce)]` merges several `#[announce(..)]` helper attributes instead of
   rejecting the second ("only one helper attribute is allowed").
-- Announcing the same item twice, with different `macro_name`s, no longer gives two
-  trampolines: it is one error. Announce a copy (see `emit_item`) for a second name.
+- Announcements of one item merge only if they give the same trampoline name: the
+  `macro_name`, else the name of the item. Announcing one item twice under different
+  names (`#[announce] #[announce(macro_name = ParseAlt)] trait Parse {}`) failed in 0.1
+  with E0119 (two `Announce` impls), although the docs of `macro_name` suggested it. It
+  is now one error at the attribute that was expanded, and the item is kept. An announcement without `macro_name` is named after
+  the item, so it does not merge with one that renames the trampoline. Use the same
+  `macro_name` (or none) in every announcement; announce a copy (see `emit_item`) for a
+  second name.
 - `Options` gets an internal option `__deferred = true`, written by the waiting
   `#[announce]`.
 

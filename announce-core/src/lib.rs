@@ -96,7 +96,7 @@ pub fn try_announce(attr: TokenStream, item: TokenStream) -> syn::Result<TokenSt
     t.subject(|| format!("{:?} {}", head.kind, head.ident));
     t.step("scan");
     let (mut attr, mut item, mut errors) = (attr, item, TokenStream::new());
-    match fold::fold(&opts, &item) {
+    match fold::fold(&opts, &head.ident, &item) {
         fold::Folded::No => {}
         fold::Folded::Emit(out) => return Ok(out),
         fold::Folded::Absorbed {
@@ -242,6 +242,9 @@ pub fn try_derive_announce(input: TokenStream) -> syn::Result<TokenStream> {
     let mut t = timing::Timer::new("derive");
     let mut item: syn::Item = syn::parse2(input)?;
     t.step("parse");
+    // Refuses what is not a struct, enum or union, before the name is read.
+    derive_attrs(&mut item)?;
+    let name = generate::ident_vis(&item)?.0;
     let attrs = derive_attrs(&mut item)?;
     // Another announcement below this derive makes the trampoline (it expands
     // after the derive, and sees the helper attribute that is left).
@@ -249,7 +252,7 @@ pub fn try_derive_announce(input: TokenStream) -> syn::Result<TokenStream> {
         return Ok(TokenStream::new());
     }
     // The helper attributes are one announcement (a macro that announces what it
-    // produces can add one to the user's).
+    // produces can add one to the user's). They must agree on the trampoline name.
     let mut opts: Option<Options> = None;
     for a in attrs.iter().filter(|a| a.path().is_ident("announce")) {
         let next = match &a.meta {
@@ -259,7 +262,7 @@ pub fn try_derive_announce(input: TokenStream) -> syn::Result<TokenStream> {
         opts = Some(match opts {
             None => next,
             Some(prev) => prev
-                .merge(&next)
+                .merge(&next, &name)
                 .map_err(|c| syn::Error::new_spanned(a, c.message()))?,
         });
     }
@@ -1053,10 +1056,42 @@ mod tests {
             out
         );
         assert!(
-            out.contains("`macro_name=A`") && out.contains("`macro_name=B`"),
+            out.contains("announcedtwicewithdifferenttrampolinenames(`A`and`B`)"),
             "{}",
             out
         );
+    }
+
+    #[test]
+    fn announcements_merge_only_under_one_trampoline_name() {
+        // Unset is the name of the item: `Parse!` and `ParseAlt!` are two names.
+        let out = norm(&announce(
+            ts("crate = ::l::announce"),
+            ts("#[announce(macro_name = ParseAlt)] pub trait Parse {}"),
+        ));
+        assert!(out.starts_with("::core::compile_error!"), "{}", out);
+        assert_eq!(out.matches("compile_error").count(), 1, "{}", out);
+        assert!(out.contains("(`Parse`and`ParseAlt`)"), "{}", out);
+        assert!(out.contains("onetrampoline"), "{}", out);
+        assert!(
+            out.ends_with("#[announce(macro_name=ParseAlt)]pubtraitParse{}"),
+            "{}",
+            out
+        );
+        // The same name, set in one of them or in both, is one trampoline.
+        for (attr, item) in [
+            ("macro_name = Parse", "#[announce] pub trait Parse {}"),
+            ("", "#[announce(macro_name = Parse)] pub trait Parse {}"),
+            (
+                "macro_name = ParseAlt",
+                "#[announce(macro_name = ParseAlt)] pub trait Parse {}",
+            ),
+        ] {
+            let src = format!("crate = ::l::announce, {}", attr);
+            let out = norm(&announce(ts(&src), ts(item)));
+            assert!(!out.contains("compile_error"), "{}: {}", item, out);
+            assert_eq!(out.matches("Capture").count(), 1, "{}", out);
+        }
     }
 
     #[test]
@@ -1076,11 +1111,48 @@ mod tests {
             out
         );
         let e = try_derive_announce(ts(
-            "#[announce(macro_name = A)] #[announce(meta = m::x)] #[announce(macro_name = B)] struct S;",
+            "#[announce(macro_name = A)] #[announce(macro_name = A, meta = m::x)] #[announce(macro_name = B)] struct S;",
         ))
         .err()
         .unwrap();
-        assert!(e.to_string().contains("`macro_name = B`"), "{}", e);
+        assert!(
+            e.to_string()
+                .contains("announced twice with different trampoline names (`B` and `A`)"),
+            "{}",
+            e
+        );
+    }
+
+    #[test]
+    fn derive_helpers_must_agree_on_the_trampoline_name() {
+        // Unset is the name of the item.
+        for src in [
+            "#[announce(macro_name = Alt)] #[announce(meta = m::x)] struct S;",
+            "#[announce] #[announce(macro_name = Alt)] struct S;",
+            "#[announce(macro_name = Alt)] #[announce] struct S;",
+        ] {
+            let e = try_derive_announce(ts(src)).err().unwrap();
+            let msg = e.to_string();
+            assert!(
+                msg.contains("different trampoline names") && msg.contains("`Alt`"),
+                "{}: {}",
+                src,
+                msg
+            );
+        }
+        // Equal effective names merge, and the explicit one is kept.
+        for src in [
+            "#[announce(macro_name = S)] #[announce(meta = m::x)] struct S;",
+            "#[announce(meta = m::x)] #[announce(macro_name = S)] struct S;",
+            "#[announce(macro_name = Alt)] #[announce(macro_name = Alt)] struct S;",
+        ] {
+            let out = norm(&try_derive_announce(ts(src)).unwrap());
+            assert_eq!(out.matches("macro_rules!").count(), 1, "{}: {}", src, out);
+        }
+        let out = norm(&derive_announce(ts(
+            "#[announce(meta = m::x)] #[announce(macro_name = Alt)] struct S;",
+        )));
+        assert!(out.contains("compile_error"), "{}", out);
     }
 
     #[test]

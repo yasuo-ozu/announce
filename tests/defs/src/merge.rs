@@ -43,9 +43,10 @@ pub trait AttrAttrTrait {
     fn f(&self) -> u8;
 }
 
-/// Options that differ but do not conflict are all kept.
+/// Options that differ but do not conflict are all kept. Both announcements name the
+/// trampoline `Renamed` (it is one trampoline, so one name).
 #[announce(crate = ::announce, macro_name = Renamed, allow_std_prelude = true, meta = merge::a)]
-#[::announce::announce(layout = single, docs = true, meta = merge::b)]
+#[::announce::announce(macro_name = Renamed, layout = single, docs = true, meta = merge::b)]
 pub struct DifferentOptions(pub String);
 
 // ---- attribute above and below a derive ------------------------------------

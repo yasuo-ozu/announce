@@ -46,7 +46,9 @@ use proc_macro::TokenStream;
 ///
 /// - `macro_name = Ident`: name of the trampoline. Default: the item's name. Set it
 ///   when a derive or attribute macro owns that name: the derive forwards to the
-///   trampoline with `announce::helper::redirect`.
+///   trampoline with `announce::helper::redirect`. One item has one trampoline: when
+///   it is announced more than once, every announcement must give the same name (see
+///   [Several announcements on one item](#several-announcements-on-one-item)).
 /// - `crate = path`: path to the `announce` crate in generated code. Default: read
 ///   from the `Cargo.toml` of the crate being compiled, so a renamed dependency
 ///   works. A proc-macro library whose users do not depend on `announce` must set
@@ -100,9 +102,15 @@ use proc_macro::TokenStream;
 ///   first, without duplicates. `allow_primitive`, `allow_std_prelude` and `docs`
 ///   are on if any of them is on (`allow_primitive` is off only if all say so).
 ///   `crate` is the other's, else this one's: two paths to `announce` do not conflict.
-///   `macro_name`, `mock`, `repeater`, `layout` and `emit_item` take the value that is
-///   set; two values that differ are an error at the attribute that was expanded, and
-///   the item is kept. A derive takes no `mock` and no `emit_item = false`.
+///   `mock`, `repeater`, `layout` and `emit_item` take the value that is set; two
+///   values that differ are an error at the attribute that was expanded, and the item
+///   is kept. A derive takes no `mock` and no `emit_item = false`.
+/// - One item has one trampoline, so the announcements must agree on its name: the
+///   `macro_name`, else the name of the item. They merge only if these names are equal
+///   (the explicit `macro_name` is kept). `#[announce] #[announce(macro_name = ParseAlt)]
+///   pub trait Parse {}` is an error, not a trampoline `ParseAlt` with `Parse!` gone:
+///   use the same `macro_name` (or none) in every announcement. Announce a copy for a
+///   second name (see `emit_item` under "Inline modules").
 /// - A macro below `#[announce]` may announce later (`#[a] #[b] item`, where `a` emits
 ///   `#[announce] #[b] item`). When no announcement is pending and the item has an
 ///   attribute that is not known to be inert (`doc`, `cfg`, `repr`, `derive`, lints,

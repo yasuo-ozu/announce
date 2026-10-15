@@ -207,10 +207,11 @@ impl OuterAttr {
         for t in args.stream() {
             match t {
                 TokenTree::Ident(i) => last = Some(i),
-                TokenTree::Punct(p) if p.as_char() == ',' => {
-                    if last.take().map_or(false, |l| l == "Announce") {
-                        return true;
-                    }
+                // `take` runs at every comma: the name before it is dealt with here.
+                TokenTree::Punct(p)
+                    if p.as_char() == ',' && last.take().map_or(false, |l| l == "Announce") =>
+                {
+                    return true;
                 }
                 _ => {}
             }

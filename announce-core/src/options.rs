@@ -61,7 +61,9 @@ pub enum Layout {
 #[derive(Clone)]
 #[non_exhaustive]
 pub struct Options {
-    /// `macro_name = Name`: name of the emitted macro. Default: the item's name.
+    /// `macro_name = Name`: name of the emitted macro. Default: the item's name. All
+    /// the announcements of one item must give the same name, the item's name where
+    /// it is not set: one item has one trampoline.
     pub macro_name: Option<Ident>,
     /// `mock = path`: the item is a stand-in for the item at `path`.
     pub mock: Option<Path>,
@@ -139,7 +141,8 @@ impl Options {
 /// (see [`Options::merge`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct MergeConflict {
-    /// The name of the option, as written in the attribute.
+    /// The name of the option, as written in the attribute. For `macro_name` the
+    /// values are the effective trampoline names: the item's name where it is not set.
     pub option: &'static str,
     /// Its value in the announcement that is merged into.
     pub target: String,
@@ -150,6 +153,14 @@ pub(crate) struct MergeConflict {
 impl MergeConflict {
     /// The message of the error, for the attribute that folds (`here`).
     pub fn message(&self) -> String {
+        if self.option == "macro_name" {
+            return format!(
+                "announce: this item is announced twice with different trampoline names (`{}` \
+                 and `{}`). One item has one trampoline, so use the same `macro_name` (or none) \
+                 in every announcement",
+                self.folder, self.target
+            );
+        }
         format!(
             "announce: this announcement sets `{} = {}`, but another announcement of the same \
              item sets `{} = {}`. The announcements of one item are merged into one trampoline, \
@@ -206,19 +217,27 @@ impl Options {
             .then(|| self.emit_item)
     }
 
+    /// The name of the trampoline: `macro_name`, else the name of the item (`item`).
+    /// A raw identifier names the same macro as the plain one.
+    fn trampoline_name(&self, item: &Ident) -> String {
+        use syn::ext::IdentExt;
+        self.macro_name.as_ref().unwrap_or(item).unraw().to_string()
+    }
+
     /// The options of two announcements of one item, as one announcement.
     ///
     /// `self` is the announcement that stays (the *target*), `folder` the one that
-    /// is merged into it. The result is what the target would be if it had been
-    /// written with the options of both. A pure function: it does not read the
-    /// item or the environment.
+    /// is merged into it, `item` the name of the item. The result is what the target
+    /// would be if it had been written with the options of both. A pure function: it
+    /// does not read the item or the environment.
     ///
     /// | option | result |
     /// |---|---|
     /// | checks, `meta` | the target's, then the folder's that are not in it yet (exact duplicates dropped) |
     /// | `allow_primitive`, `allow_std_prelude`, `docs` | the OR of the two effective values (the default of `allow_primitive` is `true`, so it is `false` only when both say so) |
     /// | `crate` | the target's if set, else the folder's: two paths that both name `announce` do not conflict |
-    /// | `macro_name`, `mock`, `repeater` | the one that is set; both set and different is a conflict |
+    /// | `macro_name` | the effective names must be equal (`macro_name`, else `item`): an explicit one is kept; different names are a conflict, as one item has one trampoline |
+    /// | `mock`, `repeater` | the one that is set; both set and different is a conflict |
     /// | `layout` | the one that is not `auto`; both and different is a conflict |
     /// | `emit_item` | the one that is set (written, or `false`); both and different is a conflict |
     /// | `__deferred` | set if either is set |
@@ -227,9 +246,23 @@ impl Options {
     /// (`given`) are united. The attributes that checks own are not an option: they
     /// come from the checks' answers to the query, which runs after the merge, on the
     /// checks of both.
-    pub(crate) fn merge(&self, folder: &Options) -> std::result::Result<Options, MergeConflict> {
+    pub(crate) fn merge(
+        &self,
+        folder: &Options,
+        item: &Ident,
+    ) -> std::result::Result<Options, MergeConflict> {
+        let (target_name, folder_name) = (self.trampoline_name(item), folder.trampoline_name(item));
+        if target_name != folder_name {
+            return Err(MergeConflict {
+                option: "macro_name",
+                target: target_name,
+                folder: folder_name,
+            });
+        }
         let mut out = self.clone();
-        out.macro_name = agree("macro_name", &self.macro_name, &folder.macro_name)?;
+        if out.macro_name.is_none() {
+            out.macro_name = folder.macro_name.clone();
+        }
         out.mock = agree("mock", &self.mock, &folder.mock)?;
         out.repeater = agree("repeater", &self.repeater, &folder.repeater)?;
         if out.layout == Layout::Auto {
@@ -460,13 +493,28 @@ mod tests {
         o.to_token_stream().to_string().split_whitespace().collect()
     }
 
-    /// The merge of two sets of options, printed.
+    fn ident(name: &str) -> Ident {
+        syn::parse_str(name).unwrap()
+    }
+
+    /// The merge of two sets of options on the item `S`, printed.
     fn merged(target: &str, folder: &str) -> String {
-        text(&opts(target).merge(&opts(folder)).unwrap())
+        merged_on("S", target, folder)
+    }
+
+    fn merged_on(item: &str, target: &str, folder: &str) -> String {
+        text(&opts(target).merge(&opts(folder), &ident(item)).unwrap())
     }
 
     fn conflict(target: &str, folder: &str) -> MergeConflict {
-        opts(target).merge(&opts(folder)).err().unwrap()
+        conflict_on("S", target, folder)
+    }
+
+    fn conflict_on(item: &str, target: &str, folder: &str) -> MergeConflict {
+        opts(target)
+            .merge(&opts(folder), &ident(item))
+            .err()
+            .unwrap()
     }
 
     #[test]
@@ -537,7 +585,6 @@ mod tests {
     #[test]
     fn single_valued_options_agree_or_conflict() {
         for (opt, a, b) in [
-            ("macro_name", "A", "B"),
             ("mock", "x::A", "x::B"),
             ("repeater", "crate::A", "crate::B"),
             ("layout", "single", "direct"),
@@ -553,6 +600,55 @@ mod tests {
             assert_eq!(merged(&ta, ""), text(&opts(&ta)), "{}", opt);
             assert_eq!(merged("", &tb), text(&opts(&tb)), "{}", opt);
         }
+    }
+
+    #[test]
+    fn trampoline_names_must_be_equal() {
+        // Both set: equal names merge, different names are a conflict.
+        assert_eq!(merged("macro_name = A", "macro_name = A"), "macro_name=A");
+        let c = conflict("macro_name = A", "macro_name = B");
+        assert_eq!(c.option, "macro_name");
+        assert_eq!((c.target.as_str(), c.folder.as_str()), ("A", "B"));
+        // Unset is the name of the item: `S` here.
+        assert_eq!(merged("", ""), "");
+        let c = conflict("macro_name = B", "");
+        assert_eq!((c.target.as_str(), c.folder.as_str()), ("B", "S"));
+        let c = conflict("", "macro_name = B");
+        assert_eq!((c.target.as_str(), c.folder.as_str()), ("S", "B"));
+        // Set to the name of the item and unset are the same name; the explicit one stays.
+        assert_eq!(merged("macro_name = S", ""), "macro_name=S");
+        assert_eq!(merged("", "macro_name = S"), "macro_name=S");
+        assert_eq!(merged("macro_name = S", "macro_name = S"), "macro_name=S");
+        assert_eq!(merged_on("A", "macro_name = A", ""), "macro_name=A");
+        assert_eq!(merged_on("A", "", "macro_name = A"), "macro_name=A");
+        // The item's name is not the name of another item.
+        assert_eq!(conflict_on("A", "macro_name = S", "").option, "macro_name");
+        // A raw identifier is the same macro name.
+        assert_eq!(merged("macro_name = r#S", ""), "macro_name=r#S");
+        assert_eq!(
+            merged("macro_name = r#A", "macro_name = A"),
+            "macro_name=r#A"
+        );
+        assert_eq!(merged_on("r#S", "macro_name = S", ""), "macro_name=S");
+    }
+
+    #[test]
+    fn the_trampoline_name_conflict_says_what_to_do() {
+        let m = conflict("", "macro_name = ParseAlt").message();
+        assert!(
+            m.contains("announced twice with different trampoline names (`ParseAlt` and `S`)"),
+            "{}",
+            m
+        );
+        assert!(m.contains("one trampoline"), "{}", m);
+        assert!(
+            m.contains("use the same `macro_name` (or none) in every announcement"),
+            "{}",
+            m
+        );
+        // The message names the expanding announcement's name first.
+        let m = conflict("macro_name = Parse", "macro_name = ParseAlt").message();
+        assert!(m.contains("(`ParseAlt` and `Parse`)"), "{}", m);
     }
 
     #[test]
@@ -580,15 +676,24 @@ mod tests {
             emit_item: false,
             ..Options::default()
         };
-        assert_eq!(text(&opts("").merge(&built).unwrap()), "emit_item=false");
-        assert_eq!(text(&built.merge(&opts("")).unwrap()), "emit_item=false");
-        assert!(built.merge(&opts("emit_item = true")).is_err());
+        let s = ident("S");
+        assert_eq!(
+            text(&opts("").merge(&built, &s).unwrap()),
+            "emit_item=false"
+        );
+        assert_eq!(
+            text(&built.merge(&opts(""), &s).unwrap()),
+            "emit_item=false"
+        );
+        assert!(built.merge(&opts("emit_item = true"), &s).is_err());
     }
 
     #[test]
     fn mock_paths_are_compared_as_tokens() {
         assert_eq!(merged("mock = a::B", "mock = a::B"), "mock=a::B");
-        assert!(opts("mock = a::B").merge(&opts("mock = ::a::B")).is_err());
+        assert!(opts("mock = a::B")
+            .merge(&opts("mock = ::a::B"), &ident("S"))
+            .is_err());
     }
 
     #[test]
@@ -605,7 +710,7 @@ mod tests {
     #[test]
     fn the_written_keys_are_united() {
         let m = opts("macro_name = N")
-            .merge(&opts("docs = true, macro_name = N"))
+            .merge(&opts("docs = true, macro_name = N"), &ident("S"))
             .unwrap();
         assert_eq!(m.given, ["macro_name", "docs"]);
     }
@@ -615,9 +720,11 @@ mod tests {
         let m = opts(
             "crate = ::a::announce, macro_name = N, allow_std_prelude = true, meta = m::x(1), a::c",
         )
-        .merge(&opts(
-            "docs = true, layout = single, meta = m::y, b::c(2), a::c",
-        ))
+        .merge(
+            &opts("docs = true, layout = single, meta = m::y, b::c(2), a::c"),
+            // The folder has no `macro_name`: the item is named `N` as well.
+            &ident("N"),
+        )
         .unwrap();
         let printed = m.to_token_stream();
         let again: Options = syn::parse2(printed.clone()).unwrap();
@@ -632,7 +739,7 @@ mod tests {
     #[test]
     fn the_merge_is_pure() {
         let (a, b) = (opts("meta = a::x"), opts("meta = b::x"));
-        let _ = a.merge(&b).unwrap();
+        let _ = a.merge(&b, &ident("S")).unwrap();
         assert_eq!(text(&a), "meta=a::x");
         assert_eq!(text(&b), "meta=b::x");
     }

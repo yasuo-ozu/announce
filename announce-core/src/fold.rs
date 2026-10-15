@@ -23,6 +23,10 @@
 //! and the attribute is removed ([`Folded::Absorbed`]): the announcement that is
 //! expanding takes them over.
 //!
+//! One item has one trampoline, so the announcements must agree on its name: the
+//! `macro_name`, else the name of the item. Different names are one error at the
+//! announcement that is expanding, with the item as it was ([`Options::merge`]).
+//!
 //! A derive that has an `#[x::announce]` attribute below it has already expanded when
 //! the attribute does. It cannot change the item, so it emits nothing and leaves the
 //! announcement to the attribute ([`derive_defers`]), which finds the helper.
@@ -62,7 +66,7 @@
 use crate::helper::OwnedAttrs;
 use crate::options::{MergeConflict, Options};
 use crate::scan::{self, Outer};
-use proc_macro2::{Delimiter, Group, Span, TokenStream, TokenTree};
+use proc_macro2::{Delimiter, Group, Ident, Span, TokenStream, TokenTree};
 use template_quote::{quote, ToTokens};
 
 /// What [`fold`] found.
@@ -143,8 +147,11 @@ fn rebuild(outer: &Outer, removed: &[usize], edit: Edit) -> TokenStream {
 }
 
 /// Rule 1: merges the announcement that is expanding (`me`) into another announcement
-/// of `item`, if there is one. See the module docs.
-pub(crate) fn fold(me: &Options, item: &TokenStream) -> Folded {
+/// of `item` (named `name`), if there is one. See the module docs.
+///
+/// The announcements must agree on the trampoline name: `macro_name`, else `name`
+/// ([`Options::merge`]).
+pub(crate) fn fold(me: &Options, name: &Ident, item: &TokenStream) -> Folded {
     if !scan::starts_with_attr(item) {
         return Folded::No;
     }
@@ -170,7 +177,7 @@ pub(crate) fn fold(me: &Options, item: &TokenStream) -> Folded {
                     removed.push(k);
                 }
                 // The attribute is the target: its entries come first.
-                Some(Ok(theirs)) => match theirs.merge(&current) {
+                Some(Ok(theirs)) => match theirs.merge(&current, name) {
                     Ok(merged) => {
                         current = merged;
                         removed.push(k);
@@ -192,7 +199,7 @@ pub(crate) fn fold(me: &Options, item: &TokenStream) -> Folded {
                 // Its own expansion reports it.
                 _ => continue,
             };
-            return match target.merge(&current) {
+            return match target.merge(&current, name) {
                 Ok(merged) => {
                     let inner = a.with_args(merged.to_token_stream());
                     let mut out = errors;
@@ -225,7 +232,7 @@ pub(crate) fn fold(me: &Options, item: &TokenStream) -> Folded {
                     return Folded::Emit(error_with_item(msg, item));
                 }
             }
-            let mut merged = match target.merge(&current) {
+            let mut merged = match target.merge(&current, name) {
                 Ok(m) => m,
                 Err(c) => return conflict(&c, item),
             };
@@ -342,7 +349,8 @@ mod tests {
 
     /// `fold` for `me` on `item`, printed: `No`, `Emit(..)` or `Absorbed(options; item)`.
     fn folded(me: &str, item: &str) -> String {
-        match fold(&opts(me), &ts(item)) {
+        let name = scan::head(&ts(item)).unwrap().ident;
+        match fold(&opts(me), &name, &ts(item)) {
             Folded::No => "No".to_string(),
             Folded::Emit(t) => format!("Emit({})", norm(&t)),
             Folded::Absorbed { opts, item, errors } => format!(
@@ -521,35 +529,105 @@ mod tests {
 
     #[test]
     fn a_conflict_is_one_error_and_the_item_as_it_was() {
-        for (me, item, option) in [
+        const NAMES: &str = "announcedtwicewithdifferenttrampolinenames";
+        for (me, item, needle) in [
             (
                 "macro_name = A",
                 "#[x::announce(macro_name = B)] struct S;",
-                "macro_name",
+                format!("{}(`A`and`B`)", NAMES),
             ),
             (
                 "layout = single",
                 "#[x::announce(layout = direct)] struct S;",
-                "layout",
+                "`layout=".to_string(),
             ),
             (
                 "macro_name = A",
                 "#[announce(macro_name = B)] struct S;",
-                "macro_name",
+                format!("{}(`A`and`B`)", NAMES),
             ),
             (
                 "macro_name = A",
                 "#[derive(Announce)] #[announce(macro_name = B)] struct S;",
-                "macro_name",
+                format!("{}(`A`and`B`)", NAMES),
+            ),
+            // A name that is set and one that is not: the item's name is the other.
+            (
+                "",
+                "#[x::announce(macro_name = ParseAlt)] pub trait Parse {}",
+                format!("{}(`Parse`and`ParseAlt`)", NAMES),
+            ),
+            (
+                "macro_name = ParseAlt",
+                "#[x::announce] pub trait Parse {}",
+                format!("{}(`ParseAlt`and`Parse`)", NAMES),
+            ),
+            (
+                "",
+                "#[announce(macro_name = ParseAlt)] pub trait Parse {}",
+                format!("{}(`Parse`and`ParseAlt`)", NAMES),
+            ),
+            (
+                "macro_name = ParseAlt",
+                "#[announce] pub trait Parse {}",
+                format!("{}(`ParseAlt`and`Parse`)", NAMES),
+            ),
+            (
+                "",
+                "#[derive(Announce)] #[announce(macro_name = ParseAlt)] pub trait Parse {}",
+                format!("{}(`Parse`and`ParseAlt`)", NAMES),
+            ),
+            (
+                "macro_name = ParseAlt",
+                "#[derive(Announce)] struct Parse;",
+                format!("{}(`ParseAlt`and`Parse`)", NAMES),
             ),
         ] {
             let out = folded(me, item);
             assert!(out.starts_with("Emit(::core::compile_error!"), "{}", out);
-            assert!(out.contains(&format!("`{}=", option)), "{}", out);
+            assert!(out.contains(&needle), "{}\n{}", needle, out);
             assert_eq!(out.matches("compile_error").count(), 1, "{}", out);
             // The item is there as it was, with the attribute that stays.
             assert!(out.ends_with(&format!("{})", norm(&ts(item)))), "{}", out);
         }
+    }
+
+    #[test]
+    fn equal_trampoline_names_merge() {
+        // The item's name is the default name: `macro_name = S` on `S` is the same.
+        assert_eq!(
+            folded("macro_name = S", "#[x::announce] struct S;"),
+            "Emit(#[x::announce(macro_name=S)]structS;)"
+        );
+        assert_eq!(
+            folded("", "#[x::announce(macro_name = S)] struct S;"),
+            "Emit(#[x::announce(macro_name=S)]structS;)"
+        );
+        assert_eq!(
+            folded("macro_name = A", "#[x::announce(macro_name = A)] struct S;"),
+            "Emit(#[x::announce(macro_name=A)]structS;)"
+        );
+        // The explicit name stays in whichever announcement it was.
+        assert_eq!(
+            folded("macro_name = S", "#[announce] struct S;"),
+            "Absorbed(macro_name=S;structS;;)"
+        );
+        assert_eq!(
+            folded("", "#[announce(macro_name = S)] #[doc = \"d\"] struct S;"),
+            "Absorbed(macro_name=S;#[doc=\"d\"]structS;;)"
+        );
+        assert_eq!(
+            folded(
+                "macro_name = S",
+                "#[derive(Announce)] #[announce(meta = b::x)] struct S;"
+            ),
+            "Emit(#[derive(Announce)]#[announce(macro_name=S,meta=b::x)]structS;)"
+        );
+        // A derive without a helper attribute is named after the item.
+        assert_eq!(
+            folded("macro_name = S", "#[derive(Announce)] struct S;"),
+            "Emit(#[derive(Announce)]#[announce(macro_name=S)]structS;)"
+        );
     }
 
     #[test]
@@ -576,7 +654,8 @@ mod tests {
         ))]
         .into_iter()
         .collect();
-        match fold(&opts("meta = a::x"), &item) {
+        let name = scan::head(&item).unwrap().ident;
+        match fold(&opts("meta = a::x"), &name, &item) {
             Folded::Emit(out) => {
                 assert_eq!(norm(&out), "#[x::announce(meta=b::x,meta=a::x)]pubstructS;")
             }
