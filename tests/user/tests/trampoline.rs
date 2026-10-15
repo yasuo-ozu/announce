@@ -264,6 +264,20 @@ fn call_side_transformer_rewrites_payload_and_adds_meta() {
     assert!(out.contains("pubstructPartly{puba:u8,pubc:u8}"), "{}", out);
 }
 
+mod compat_macros {
+    // `callback!` and `transformer!` still define working proc macros.
+    use super::summary;
+    use announce_test_derive::{compat_idents, compat_noop, compat_tag};
+    ::announce_test_defs::transformed::Partly! { [::announce_test_defs::transformed::Partly!, compat_noop!, compat_tag!, summary!] T }
+    ::announce_test_defs::transformed::Partly! { [::announce_test_defs::transformed::Partly!, compat_idents!] NAMES }
+}
+
+#[test]
+fn compat_macros_callback_and_transformer_still_work() {
+    assert_eq!(norm(compat_macros::T[0].1), "orig(1),tagged");
+    assert_eq!(compat_macros::NAMES, ["Partly"]);
+}
+
 mod gathered {
     use announce_test_derive::gathered;
     gathered! { [gathered!] (::announce_test_defs::kinds::Shape, ::announce_test_defs::kinds::Greet, ::announce_test_defs::kinds::Tuple<u8>) G }

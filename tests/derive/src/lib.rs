@@ -292,10 +292,11 @@ pub fn derive_announced(input: TokenStream) -> TokenStream {
     TokenStream::from(quote! { #[::announce::announce(emit_item = false)] #input })
 }
 
-announce::helper::transformer! {
-    /// Transformer: keeps only `pub` fields in the newest entry's struct and
-    /// lists their names in META as `fields(..)`.
-    pub fn public_fields(entry) {
+/// Transformer: keeps only `pub` fields in the newest entry's struct and
+/// lists their names in META as `fields(..)`.
+#[proc_macro]
+pub fn public_fields(input: TokenStream) -> TokenStream {
+    announce::helper::transformer(input.into(), |mut entry| {
         let mut s: syn::ItemStruct = syn::parse2(entry.item.clone())?;
         let mut names = Vec::new();
         if let syn::Fields::Named(f) = &mut s.fields {
@@ -310,7 +311,8 @@ announce::helper::transformer! {
         entry.item = quote! { #s };
         entry.meta.push(syn::parse_quote!(fields(#(#names),*)));
         Ok(entry)
-    }
+    })
+    .into()
 }
 
 struct GatherRest {
@@ -330,11 +332,12 @@ impl syn::parse::Parse for GatherRest {
     }
 }
 
-announce::helper::callback! {
-    /// `gathered! { [gathered!] (a::A, b::B) NAME }` fetches the listed
-    /// definitions (in one go) and emits `NAME: &[&str]` with their item
-    /// idents in the requested order.
-    pub fn gathered(input) {
+/// `gathered! { [gathered!] (a::A, b::B) NAME }` fetches the listed
+/// definitions (in one go) and emits `NAME: &[&str]` with their item
+/// idents in the requested order.
+#[proc_macro]
+pub fn gathered(input: TokenStream) -> TokenStream {
+    announce::helper::callback(input.into(), |input| {
         let rest: GatherRest = input.rest_as()?;
         let needed = rest.paths.iter().cloned().map(announce::helper::Cont::bang);
         let entries = match input.gather(needed) {
@@ -354,20 +357,29 @@ announce::helper::callback! {
         }
         let name = &rest.name;
         Ok(quote! { pub const #name: &[&str] = &[ #(#idents),* ]; })
-    }
+    })
+    .into()
 }
 
-announce::helper::callback! {
-    /// `fetched_raw! { [fetched_raw!] (a::A, b::B) NAME }`: like `gathered`, but
-    /// with the raw `Input::fetch` for what is still missing. Emits `NAME: &[&str]`
-    /// with the item idents in the requested order, and `NAME_OPTIONS: &str`, the
-    /// options group the callback was last called with.
-    pub fn fetched_raw(input) {
+/// `fetched_raw! { [fetched_raw!] (a::A, b::B) NAME }`: like `gathered`, but
+/// with the raw `Input::fetch` for what is still missing. Emits `NAME: &[&str]`
+/// with the item idents in the requested order, and `NAME_OPTIONS: &str`, the
+/// options group the callback was last called with.
+#[proc_macro]
+pub fn fetched_raw(input: TokenStream) -> TokenStream {
+    announce::helper::callback(input.into(), |input| {
         let rest: GatherRest = input.rest_as()?;
-        let needed: Vec<announce::helper::Cont> =
-            rest.paths.iter().cloned().map(announce::helper::Cont::bang).collect();
-        let missing: Vec<announce::helper::Cont> =
-            needed.iter().filter(|c| input.entry_for(c).is_none()).cloned().collect();
+        let needed: Vec<announce::helper::Cont> = rest
+            .paths
+            .iter()
+            .cloned()
+            .map(announce::helper::Cont::bang)
+            .collect();
+        let missing: Vec<announce::helper::Cont> = needed
+            .iter()
+            .filter(|c| input.entry_for(c).is_none())
+            .cloned()
+            .collect();
         if !missing.is_empty() {
             return Ok(input.fetch(missing));
         }
@@ -384,21 +396,27 @@ announce::helper::callback! {
             idents.push(ident.to_string());
         }
         let name = &rest.name;
-        let options = input.options.as_ref().map(|o| o.to_string()).unwrap_or_default();
+        let options = input
+            .options
+            .as_ref()
+            .map(|o| o.to_string())
+            .unwrap_or_default();
         let options_name = syn::Ident::new(&format!("{}_OPTIONS", name), name.span());
         Ok(quote! {
             pub const #name: &[&str] = &[ #(#idents),* ];
             pub const #options_name: &str = #options;
         })
-    }
+    })
+    .into()
 }
 
-announce::helper::callback! {
-    /// Records, for every entry in visiting order, `pub const <REST>: &[(&str, usize, usize, String)]`
-    /// is not possible in a const, so the rows are strings: `"names|in item|in stripped"`:
-    /// the owned attribute names of the entry (`Entry::owned_attrs`, comma separated), the
-    /// number of owned attributes in `Entry::item` and in `Entry::item_without_owned_attrs`.
-    pub fn owned_report(input) {
+/// Records, for every entry in visiting order, `pub const <REST>: &[(&str, usize, usize, String)]`
+/// is not possible in a const, so the rows are strings: `"names|in item|in stripped"`:
+/// the owned attribute names of the entry (`Entry::owned_attrs`, comma separated), the
+/// number of owned attributes in `Entry::item` and in `Entry::item_without_owned_attrs`.
+#[proc_macro]
+pub fn owned_report(input: TokenStream) -> TokenStream {
+    announce::helper::callback(input.into(), |input| {
         let name: syn::Ident = input.rest_as()?;
         let mut rows = Vec::new();
         for e in input.entries_in_order() {
@@ -406,20 +424,27 @@ announce::helper::callback! {
             let names: Vec<String> = owned.names().iter().map(|n| n.to_string()).collect();
             let item = e.item()?;
             let stripped = e.item_without_owned_attrs()?;
-            rows.push(format!("{}|{}|{}", names.join(","), owned.find(&item).len(), owned.find(&stripped).len()));
+            rows.push(format!(
+                "{}|{}|{}",
+                names.join(","),
+                owned.find(&item).len(),
+                owned.find(&stripped).len()
+            ));
         }
         Ok(quote! { pub const #name: &[&str] = &[ #(#rows),* ]; })
-    }
+    })
+    .into()
 }
 
-announce::helper::callback! {
-    /// Reports what a callback receives next to the entries, for the tests that
-    /// REST is the caller's tokens and nothing else. Emits, with fixed names:
-    /// `REST: &str` (`input.rest`, printed), `ENTRIES: usize`, `OWNED: &[&str]` (the
-    /// names of `Entry::owned_attrs`, comma separated, one row for each entry in
-    /// visiting order) and `META: &[&str]` (the META of each entry). It forwards
-    /// when more continuations remain.
-    pub fn rest_probe(input) {
+/// Reports what a callback receives next to the entries, for the tests that
+/// REST is the caller's tokens and nothing else. Emits, with fixed names:
+/// `REST: &str` (`input.rest`, printed), `ENTRIES: usize`, `OWNED: &[&str]` (the
+/// names of `Entry::owned_attrs`, comma separated, one row for each entry in
+/// visiting order) and `META: &[&str]` (the META of each entry). It forwards
+/// when more continuations remain.
+#[proc_macro]
+pub fn rest_probe(input: TokenStream) -> TokenStream {
+    announce::helper::callback(input.into(), |input| {
         if let Some(fwd) = input.forward() {
             return Ok(fwd);
         }
@@ -428,9 +453,20 @@ announce::helper::callback! {
         let mut owned = Vec::new();
         let mut metas = Vec::new();
         for e in input.entries_in_order() {
-            let names: Vec<String> = e.owned_attrs().names().iter().map(|n| n.to_string()).collect();
+            let names: Vec<String> = e
+                .owned_attrs()
+                .names()
+                .iter()
+                .map(|n| n.to_string())
+                .collect();
             owned.push(names.join(","));
-            metas.push(e.meta.iter().map(|m| template_quote::ToTokens::to_token_stream(m).to_string()).collect::<Vec<_>>().join(", "));
+            metas.push(
+                e.meta
+                    .iter()
+                    .map(|m| template_quote::ToTokens::to_token_stream(m).to_string())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            );
         }
         Ok(quote! {
             pub const REST: &str = #rest;
@@ -438,14 +474,16 @@ announce::helper::callback! {
             pub const OWNED: &[&str] = &[ #(#owned),* ];
             pub const META: &[&str] = &[ #(#metas),* ];
         })
-    }
+    })
+    .into()
 }
 
-announce::helper::callback! {
-    /// Re-emits every entry's item, rewritten with its type-leak information
-    /// (`TypeLeak::apply`) when the definition has an repeater, and records the
-    /// META as `pub const <REST>: &[&str]`.
-    pub fn apply_leak(input) {
+/// Re-emits every entry's item, rewritten with its type-leak information
+/// (`TypeLeak::apply`) when the definition has an repeater, and records the
+/// META as `pub const <REST>: &[&str]`.
+#[proc_macro]
+pub fn apply_leak(input: TokenStream) -> TokenStream {
+    announce::helper::callback(input.into(), |input| {
         let name: syn::Ident = input.rest_as()?;
         let mut out = proc_macro2::TokenStream::new();
         let mut metas = Vec::new();
@@ -454,24 +492,35 @@ announce::helper::callback! {
             if let Some(tl) = e.type_leak()? {
                 tl.apply(&mut item);
             }
-            metas.push(e.meta.iter().map(|m| template_quote::ToTokens::to_token_stream(m).to_string()).collect::<Vec<_>>().join(", "));
+            metas.push(
+                e.meta
+                    .iter()
+                    .map(|m| template_quote::ToTokens::to_token_stream(m).to_string())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            );
             out.extend(quote! { #item });
         }
         Ok(quote! { #out pub const #name: &[&str] = &[ #(#metas),* ]; })
-    }
+    })
+    .into()
 }
 
-announce::helper::callback! {
-    /// Reads the `type_leak(..)` META through `Entry::type_leak` and records,
-    /// for every entry in visiting order, `pub const <REST>: &[&str]` with
-    /// `"-"` when the entry has no table, else `"[Type@Args,..]"`: each
-    /// replaced type (type-leak's required entries) and the first argument of
-    /// its repeater at the scope of the item (types and arguments without
-    /// spaces, sorted by text, so the order of the table does not matter).
-    pub fn leak_types(input) {
+/// Reads the `type_leak(..)` META through `Entry::type_leak` and records,
+/// for every entry in visiting order, `pub const <REST>: &[&str]` with
+/// `"-"` when the entry has no table, else `"[Type@Args,..]"`: each
+/// replaced type (type-leak's required entries) and the first argument of
+/// its repeater at the scope of the item (types and arguments without
+/// spaces, sorted by text, so the order of the table does not matter).
+#[proc_macro]
+pub fn leak_types(input: TokenStream) -> TokenStream {
+    announce::helper::callback(input.into(), |input| {
         let name: syn::Ident = input.rest_as()?;
         let squash = |t: &dyn template_quote::ToTokens| {
-            template_quote::ToTokens::to_token_stream(t).to_string().split_whitespace().collect::<String>()
+            template_quote::ToTokens::to_token_stream(t)
+                .to_string()
+                .split_whitespace()
+                .collect::<String>()
         };
         let mut rows = Vec::new();
         for e in input.entries_in_order() {
@@ -480,7 +529,8 @@ announce::helper::callback! {
                 Some(tl) => {
                     let mut pairs = Vec::new();
                     for (ix, ty) in tl.types() {
-                        let args = tl.entry_args(ix, &announce::helper::type_leak::UseSite::identity())?;
+                        let args =
+                            tl.entry_args(ix, &announce::helper::type_leak::UseSite::identity())?;
                         pairs.push(format!("{}@{}", squash(ty), squash(&args)));
                     }
                     pairs.sort();
@@ -489,5 +539,46 @@ announce::helper::callback! {
             });
         }
         Ok(quote! { pub const #name: &[&str] = &[ #(#rows),* ]; })
+    })
+    .into()
+}
+
+// The macro forms `callback!` and `transformer!` are kept for compatibility
+// (flat_enum 0.2 and other crates define their proc macros with them). They are thin
+// wrappers around the functions `callback` and `transformer`; these three are tests
+// that they still work.
+
+announce::helper::callback! {
+    /// `compat_idents! { [compat_idents!] NAME }`: emits `NAME: &[&str]` with the item
+    /// idents of the entries in visiting order. Defined with the macro `callback!`.
+    pub fn compat_idents(input) {
+        let name: syn::Ident = input.rest_as()?;
+        let mut idents = Vec::new();
+        for e in input.entries_in_order() {
+            match e.item()? {
+                syn::Item::Struct(s) => idents.push(s.ident.to_string()),
+                other => return Err(syn::Error::new_spanned(other, "expected a struct")),
+            }
+        }
+        Ok(quote! { pub const #name: &[&str] = &[ #(#idents),* ]; })
+    }
+}
+
+announce::helper::transformer! {
+    /// Adds `tagged` to the META of the newest entry. Defined with the macro
+    /// `transformer!`; the body returns early when there is no META.
+    pub fn compat_tag(entry) {
+        if entry.meta.is_empty() {
+            return Ok(entry);
+        }
+        entry.meta.push(syn::parse_quote!(tagged));
+        Ok(entry)
+    }
+}
+
+announce::helper::transformer! {
+    /// Changes nothing: its `entry` is not mutated, and that must not warn.
+    pub fn compat_noop(entry) {
+        Ok(entry)
     }
 }

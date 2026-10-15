@@ -11,7 +11,8 @@
 //! [`Options`] (`announce::machinery`). See their docs, and
 //! `announce::machinery` for how a library uses them. [`helper`] is what
 //! callbacks and checks use (`announce::helper`): the parser of the tokens a
-//! trampoline sends, and the macros [`callback!`] and [`transformer!`].
+//! trampoline sends, and the functions [`helper::callback()`] and
+//! [`helper::transformer()`].
 
 mod cratepath;
 mod fastpath;

@@ -1,5 +1,38 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- `announce::helper::callback` and `announce::helper::transformer`: plain functions that
+  take a closure, like `announce::helper::check`. You write the `#[proc_macro]` function
+  yourself and call them from it:
+
+  ```rust
+  #[proc_macro]
+  pub fn my_callback(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+      announce::helper::callback(input.into(), |input| { /* Input -> syn::Result<TokenStream> */ })
+          .into()
+  }
+
+  #[proc_macro]
+  pub fn public_fields(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+      announce::helper::transformer(input.into(), |mut entry| { /* Entry -> syn::Result<Entry> */ })
+          .into()
+  }
+  ```
+
+  Both work on `proc_macro2` streams, so they can be tested without a proc-macro crate,
+  and a `syn::Error` becomes a `compile_error!` as before.
+
+### Changed
+
+- The macros `announce::helper::callback!` and `announce::helper::transformer!` are kept
+  for compatibility, but they are now thin wrappers that call the functions above, and
+  they are hidden from the docs. Their syntax and behavior are unchanged, so crates that
+  use them (flat_enum 0.2, for example) keep building; new code should call the
+  functions. `announce::signature_only!` and the docs now use the functions.
+
 ## 0.1.1
 
 - `no_std` definers: `announce::helper`, `announce::machinery` and
