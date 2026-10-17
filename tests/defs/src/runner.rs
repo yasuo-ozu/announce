@@ -1,5 +1,5 @@
 //! Several announcements of one item: the first announcement puts the runner (the hidden
-//! attribute `_actually_run_announce`) last among the attributes of the item, the others are
+//! attribute `__announce_runner`) last among the attributes of the item, the others are
 //! merged into it, and the runner makes one trampoline and one `Announce` impl when it
 //! expands (a second trampoline would not compile). The META of the trampolines is read by
 //! `tests/user/tests/runner.rs`.

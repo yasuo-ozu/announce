@@ -66,7 +66,7 @@ fn random_u64() -> u64 {
 /// the `crate = ..` option.
 ///
 /// If the item has other outer attributes, the result is not the trampoline yet: it is the
-/// item with the hidden attribute macro `#[<crate path>::__private::_actually_run_announce(..)]`
+/// item with the hidden attribute macro `#[<crate path>::__private::__announce_runner(..)]`
 /// (the *runner*) as its last attribute, which holds the options and generates the
 /// trampoline when it expands, after every other attribute macro on the item (and drops
 /// the item, with `mock` or `emit_item = false`), and, after the item, a *sentinel* that
@@ -169,7 +169,7 @@ pub(crate) fn capture_output(
     }
 }
 
-/// What the runner `#[<crate path>::__private::_actually_run_announce(args)]` does to
+/// What the runner `#[<crate path>::__private::__announce_runner(args)]` does to
 /// the item that follows it. Not part of the API: it is the body of the hidden attribute
 /// macro that `#[announce]` puts last among the attributes of an item. See the docs of
 /// `announce::announce` ("Several announcements on one item").
@@ -502,7 +502,7 @@ mod tests {
                 "{}",
                 out
             );
-            assert!(!out.contains("_actually_run_announce"), "{}", out);
+            assert!(!out.contains("__announce_runner"), "{}", out);
         }
         // An item with another attribute has the runner as its last attribute, in the
         // given crate, and nothing else.
@@ -513,7 +513,7 @@ mod tests {
         assert_eq!(
             out,
             [
-                "#[derive(Debug)]#[::l::announce::__private::_actually_run_announce(_announce_format_version=\"1\",_announce_sentinel=\"impl\",crate=::l::announce)]pubstructS{puba:u8}",
+                "#[derive(Debug)]#[::l::announce::__private::__announce_runner(__announce_format_version=\"1\",__announce_sentinel=\"impl\",crate=::l::announce)]pubstructS{puba:u8}",
                 CHK
             ]
             .concat()
@@ -578,7 +578,7 @@ mod tests {
         ));
         assert!(
             out.contains(
-                "_actually_run_announce(_announce_format_version=\"1\",_announce_sentinel=\"impl\",layout=single)"
+                "__announce_runner(__announce_format_version=\"1\",__announce_sentinel=\"impl\",layout=single)"
             ),
             "{}",
             out
@@ -617,7 +617,7 @@ mod tests {
         // Nothing else yet: no item, no runner, no capture dummy.
         assert!(
             !out.contains("Capture")
-                && !out.contains("_actually_run_announce")
+                && !out.contains("__announce_runner")
                 && out.matches("pubstructS").count() == 1,
             "{}",
             out
@@ -662,7 +662,7 @@ mod tests {
         assert_eq!(
             out,
             [
-                "#[x]#[::l::announce::__private::_actually_run_announce(_announce_format_version=\"1\",_announce_sentinel=\"impl\",crate=::l::announce,a::check)]pubstructS{puba:u8}",
+                "#[x]#[::l::announce::__private::__announce_runner(__announce_format_version=\"1\",__announce_sentinel=\"impl\",crate=::l::announce,a::check)]pubstructS{puba:u8}",
                 CHK
             ]
             .concat()
@@ -701,7 +701,7 @@ mod tests {
         assert_eq!(
             out,
             [
-                "#[x]#[::l::announce::__private::_actually_run_announce(_announce_format_version=\"1\",_announce_sentinel=\"impl\",_announce_owned(my_lib,other),crate=::l::announce,a::check)]\
+                "#[x]#[::l::announce::__private::__announce_runner(__announce_format_version=\"1\",__announce_sentinel=\"impl\",__announce_owned(my_lib,other),crate=::l::announce,a::check)]\
                  #[my_lib(on_item)]pubstructS{#[my_lib(skip)]puba:u8}",
                 CHK
             ]
@@ -826,7 +826,7 @@ mod tests {
                     o.attrs.iter().position(|a| {
                         a.segments
                             .last()
-                            .map_or(false, |l| l == "_actually_run_announce")
+                            .map_or(false, |l| l == "__announce_runner")
                     })
                 })
                 .unwrap_or_else(|| panic!("nothing left to expand: {}", norm(&out)));
@@ -841,7 +841,7 @@ mod tests {
             let is_runner = o.attrs[at]
                 .segments
                 .last()
-                .map_or(false, |l| l == "_actually_run_announce");
+                .map_or(false, |l| l == "__announce_runner");
             out = if is_runner {
                 run_announce(attr.clone(), item.clone())
             } else {
@@ -874,7 +874,7 @@ mod tests {
         assert_eq!(
             runner,
             [
-                "#[other]#[::l::announce::__private::_actually_run_announce(_announce_format_version=\"1\",_announce_sentinel=\"impl\",_announce_owned(my_lib),crate=::l::announce,a::check)]#[my_lib(x)]pubstructS;",
+                "#[other]#[::l::announce::__private::__announce_runner(__announce_format_version=\"1\",__announce_sentinel=\"impl\",__announce_owned(my_lib),crate=::l::announce,a::check)]#[my_lib(x)]pubstructS;",
                 CHK
             ]
             .concat()
@@ -900,7 +900,7 @@ mod tests {
         // No other attribute, no runner: one query, and the trampoline.
         let (end, queries) = drive("crate = ::l::announce, a::check", "pub struct S;", owned);
         assert_eq!(queries, 1);
-        assert!(!end.contains("_actually_run_announce"), "{}", end);
+        assert!(!end.contains("__announce_runner"), "{}", end);
     }
 
     #[test]
@@ -939,7 +939,7 @@ mod tests {
             let out = norm(&announce(ts(&attr), ts("#[derive(Debug)] pub struct S;")));
             // The item is not emitted, so the sentinel is the call of the trampoline.
             let want = format!(
-                "#[derive(Debug)]#[::l::announce::__private::_actually_run_announce(_announce_format_version=\"1\",_announce_sentinel=\"macro\",crate=::l::announce,{})]pubstructS;S!{{@__announce_exists}}",
+                "#[derive(Debug)]#[::l::announce::__private::__announce_runner(__announce_format_version=\"1\",__announce_sentinel=\"macro\",crate=::l::announce,{})]pubstructS;S!{{@__announce_exists}}",
                 opt.replace(' ', "")
             );
             assert_eq!(out, want);
@@ -948,13 +948,13 @@ mod tests {
             let out = norm(&announce(ts(&attr), ts("pub struct S;")));
             assert!(
                 out.starts_with("#[derive(::l::announce::__private::Capture)]")
-                    && !out.contains("_actually_run_announce"),
+                    && !out.contains("__announce_runner"),
                 "{}",
                 out
             );
             assert_eq!(out.matches("pubstructS").count(), 1, "{}", out);
             // The runner makes the trampoline and drops the item.
-            let args = format!("_announce_format_version = \"1\", {}", attr);
+            let args = format!("__announce_format_version = \"1\", {}", attr);
             let out = norm(&run_announce(ts(&args), ts("#[doc = \"d\"] pub struct S;")));
             assert!(
                 out.starts_with("#[derive(::l::announce::__private::Capture)]"),
@@ -975,7 +975,7 @@ mod tests {
             )));
             assert!(
                 end.contains("pubstructS;S!{@__announce_exists}")
-                    && end.contains("_actually_run_announce(_announce_format_version=\"1\",_announce_sentinel=\"macro\",_announce_owned(my_lib),"),
+                    && end.contains("__announce_runner(__announce_format_version=\"1\",__announce_sentinel=\"macro\",__announce_owned(my_lib),"),
                 "{}",
                 end
             );
@@ -988,7 +988,7 @@ mod tests {
         // values that differ are the one merge error.
         let runner = |opt: &str| {
             format!(
-                "#[::l::announce::__private::_actually_run_announce(_announce_format_version = \"1\"{})]",
+                "#[::l::announce::__private::__announce_runner(__announce_format_version = \"1\"{})]",
                 opt
             )
         };
@@ -1047,7 +1047,7 @@ mod tests {
     fn announcements_merge_only_under_one_trampoline_name() {
         let runner = |opts: &str| {
             format!(
-                "#[::l::announce::__private::_actually_run_announce(_announce_format_version = \"1\"{})]",
+                "#[::l::announce::__private::__announce_runner(__announce_format_version = \"1\"{})]",
                 opts
             )
         };
@@ -1061,7 +1061,7 @@ mod tests {
         assert!(out.ends_with(&norm(&ts(&item))), "{}", out);
         // The same when one runner expands with another on the item.
         let out = norm(&run_announce(
-            ts("_announce_format_version = \"1\", macro_name = ParseAlt"),
+            ts("__announce_format_version = \"1\", macro_name = ParseAlt"),
             ts(&format!("{} pub trait Parse {{}}", runner(""))),
         ));
         assert!(out.starts_with("::core::compile_error!"), "{}", out);
@@ -1075,7 +1075,7 @@ mod tests {
             let item = format!("#[x] {} pub trait Parse {{}}", runner(set));
             let out = norm(&announce(ts(attr), ts(&item)));
             assert!(!out.contains("compile_error"), "{}: {}", item, out);
-            assert_eq!(out.matches("_actually_run_announce").count(), 1, "{}", out);
+            assert_eq!(out.matches("__announce_runner").count(), 1, "{}", out);
         }
     }
 
@@ -1260,7 +1260,7 @@ mod tests {
         for item in ["pub struct S { pub a: }", "pub trait T { fn }"] {
             let out = norm(&announce(TokenStream::new(), ts(item)));
             assert!(
-                (out.contains("Capture") || out.contains("_actually_run_announce"))
+                (out.contains("Capture") || out.contains("__announce_runner"))
                     && !out.contains("compile_error"),
                 "{}",
                 out

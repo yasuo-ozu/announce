@@ -4,4 +4,4 @@ error: announce: this item has an `#[announce]` that expands after its announcem
 5 | #[announce::announce(meta = my_lib::first)]
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
   |
-  = note: this error originates in the attribute macro `::announce::__private::_actually_run_announce` (in Nightly builds, run with -Z macro-backtrace for more info)
+  = note: this error originates in the attribute macro `::announce::__private::__announce_runner` (in Nightly builds, run with -Z macro-backtrace for more info)

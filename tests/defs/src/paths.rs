@@ -1,4 +1,4 @@
-//! The runner is told by its name (`_actually_run_announce`), never by the path `announce`.
+//! The runner is told by its name (`__announce_runner`), never by the path `announce`.
 //! `tests/user/tests/paths.rs` reads the META of the trampolines made here. Nothing here
 //! may be an error: a second trampoline or `Announce` impl would not compile, and a
 //! check that ran twice for one item would define its constant twice.

@@ -96,7 +96,7 @@ use proc_macro::TokenStream;
 ///
 /// - **The runner makes the trampoline, last.** The first time `#[announce]` expands it
 ///   emits the item and nothing else, with the hidden attribute
-///   `#[announce::__private::_actually_run_announce(..)]`, the *runner*, as the last
+///   `#[announce::__private::__announce_runner(..)]`, the *runner*, as the last
 ///   of its attributes. The runner holds the options. It expands after every other
 ///   attribute macro and derive on the item (rustc expands the attributes from the top),
 ///   and then it makes the trampoline. So the item is announced as it is after the other
@@ -161,7 +161,7 @@ use proc_macro::TokenStream;
 ///   version error from this `announce`; a version error reported by the other `announce`
 ///   (which removes this runner) is followed by the sentinel's error.
 /// - **The format of the runner is versioned.** Its arguments start with the entry
-///   `_announce_format_version = "1"`, which every `announce` that reads them checks
+///   `__announce_format_version = "1"`, which every `announce` that reads them checks
 ///   first, without reading the rest. If an item has runners of other versions (two versions
 ///   of the `announce` crate announce it), that is one compile error that lists the
 ///   versions and tells to use one version in every crate (`cargo tree -i announce`
@@ -550,7 +550,7 @@ pub fn define_repeater(input: TokenStream) -> TokenStream {
 /// part of the API, never written by hand.
 #[doc(hidden)]
 #[proc_macro_attribute]
-pub fn _actually_run_announce(attr: TokenStream, item: TokenStream) -> TokenStream {
+pub fn __announce_runner(attr: TokenStream, item: TokenStream) -> TokenStream {
     announce_core::run_announce(attr.into(), item.into()).into()
 }
 

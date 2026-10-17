@@ -38,7 +38,7 @@ pub trait ExplicitTrait {
 }
 
 /// With a derive of another trait, the item goes through the runner, which names the
-/// renamed dependency (`::ann::__private::_actually_run_announce`).
+/// renamed dependency (`::ann::__private::__announce_runner`).
 #[ann::announce(crate = ::ann, meta = info(2))]
 #[derive(Debug)]
 pub struct ExplicitWithDerive {

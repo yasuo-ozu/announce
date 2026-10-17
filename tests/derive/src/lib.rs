@@ -531,7 +531,7 @@ pub fn other_version(_: TokenStream, item: TokenStream) -> TokenStream {
         out.extend(tokens.next());
     }
     out.extend(TokenStream::from(quote! {
-        #[::announce::__private::_actually_run_announce(_announce_format_version = "7")]
+        #[::announce::__private::__announce_runner(__announce_format_version = "7")]
     }));
     out.extend(tokens);
     out

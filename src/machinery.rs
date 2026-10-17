@@ -68,7 +68,7 @@
 //!
 //! [`announce`] goes the way of the attribute in this as well. If the item has other outer
 //! attributes, the output is the item with the hidden attribute
-//! `#[<crate path>::__private::_actually_run_announce(..)]`, the *runner*, as its last
+//! `#[<crate path>::__private::__announce_runner(..)]`, the *runner*, as its last
 //! attribute, and, after the item, a *sentinel* (an item that fails at the definition if the
 //! runner never runs, for example because a macro below returned the item without its
 //! attributes). The runner holds the options (and the version of its encoding), and when it
@@ -87,9 +87,9 @@
 //! let attr: TokenStream = "crate = ::my_lib::announce, meta = my_lib::info".parse().unwrap();
 //! let item: TokenStream = "#[derive(Debug)] pub struct S;".parse().unwrap();
 //! let out = announce(attr, item).to_string();
-//! assert!(out.contains("__private ::_actually_run_announce"));
-//! assert!(out.contains("_announce_format_version = \"1\""));
-//! assert!(out.contains("_announce_sentinel = \"impl\""));
+//! assert!(out.contains("__private ::__announce_runner"));
+//! assert!(out.contains("__announce_format_version = \"1\""));
+//! assert!(out.contains("__announce_sentinel = \"impl\""));
 //! assert!(out.contains("__announce_chk"));
 //! assert!(!out.contains("Capture"));
 //! ```

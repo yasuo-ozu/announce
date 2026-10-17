@@ -10,9 +10,9 @@
 //! # The runner
 //!
 //! ```text
-//! #[KRATE::__private::_actually_run_announce(
-//!     _announce_format_version = "1",
-//!     _announce_owned(my_lib, other),
+//! #[KRATE::__private::__announce_runner(
+//!     __announce_format_version = "1",
+//!     __announce_owned(my_lib, other),
 //!     crate = KRATE, meta = a::b, my_lib::check
 //! )]
 //! ```
@@ -21,7 +21,7 @@
 //! last segment of its path, [`RUNNER`], and by nothing else (never by the path
 //! `announce`). Its arguments are:
 //!
-//! - `_announce_format_version = "1"`: the version of this encoding, [`RUNNER_FORMAT`].
+//! - `__announce_format_version = "1"`: the version of this encoding, [`RUNNER_FORMAT`].
 //!   **Bump it whenever the encoding of the arguments changes.** It is read before
 //!   anything else, without parsing the rest (the other entries may be in the encoding of
 //!   another version), by looking at the entries between the top-level commas. Several
@@ -33,11 +33,11 @@
 //!   duplicates, with the crate path of each runner where they differ; a runner without
 //!   an entry is version `unknown`), says which version this `announce` expects, and tells
 //!   to use one version in every crate (`cargo tree -i announce`).
-//! - `_announce_sentinel = "impl"` or `"macro"`: the kind of the sentinel that the
+//! - `__announce_sentinel = "impl"` or `"macro"`: the kind of the sentinel that the
 //!   announcement that put the runner on the item emitted next to it (see "The sentinel"
 //!   below). When runners or announcements are merged, `impl` wins, as it is the one that
 //!   the options can break. Left out when there is no sentinel.
-//! - `_announce_owned(a, b)`: the names of the attributes that the checks of the
+//! - `__announce_owned(a, b)`: the names of the attributes that the checks of the
 //!   announcements own: the answer of the query. Left out when there are none.
 //! - the rest are the options of `#[announce(..)]` as [`Options`] prints them.
 //!
@@ -99,7 +99,7 @@
 //! trampoline go away together. An item with a `#[cfg_attr(..)]` that can make a `cfg`
 //! (its arguments mention `cfg`) gets no sentinel, as it could not tell if the item is there.
 //!
-//! The runner records the kind in `_announce_sentinel`. A later announcement that merges
+//! The runner records the kind in `__announce_sentinel`. A later announcement that merges
 //! options that take away what the `impl` sentinel relies on (`mock`, `emit_item = false`)
 //! is one error with the item, which says that they must be on the first announcement of the
 //! item (the type disappears with `emit_item = false`, and a mock has no impl). The item is
@@ -170,17 +170,17 @@ use template_quote::{quote, ToTokens};
 pub(crate) const RUNNER_FORMAT: &str = "1";
 
 /// The name of the runner, the last segment of its path.
-pub(crate) const RUNNER: &str = "_actually_run_announce";
+pub(crate) const RUNNER: &str = "__announce_runner";
 
 /// The entry of the arguments that holds the version.
-const VERSION_KEY: &str = "_announce_format_version";
+const VERSION_KEY: &str = "__announce_format_version";
 
 /// The entry of the arguments that holds the names that checks own.
-const OWNED_KEY: &str = "_announce_owned";
+const OWNED_KEY: &str = "__announce_owned";
 
 /// The entry of the arguments that holds the kind of the sentinel (`"impl"` or `"macro"`),
 /// if the announcement that put the runner on the item emitted one.
-const SENTINEL_KEY: &str = "_announce_sentinel";
+const SENTINEL_KEY: &str = "__announce_sentinel";
 
 /// What the announcement that puts the runner on an item emits next to the item, to fail
 /// at the definition if the runner never runs (a macro below `#[announce]` that returns
@@ -310,7 +310,7 @@ fn entries(ts: TokenStream) -> Vec<Vec<TokenTree>> {
     out
 }
 
-/// `_announce_format_version = "lit"`: the text of the literal, without quotes.
+/// `__announce_format_version = "lit"`: the text of the literal, without quotes.
 fn version_entry(entry: &[TokenTree]) -> Option<String> {
     string_entry(entry, VERSION_KEY)
 }
@@ -970,12 +970,12 @@ mod tests {
     /// The runner at the crate path `::l::announce` with these entries.
     fn runner(entries: &str) -> String {
         format!(
-            "#[::l::announce::__private::_actually_run_announce({})]",
+            "#[::l::announce::__private::__announce_runner({})]",
             entries
         )
     }
 
-    const V: &str = "_announce_format_version = \"1\"";
+    const V: &str = "__announce_format_version = \"1\"";
 
     /// The sentinel of a struct `S` without generics, as printed (after the item).
     const CHK: &str = "#[allow(deprecated)]const_:()={fn__announce_chk<T:?::core::marker::Sized\
@@ -990,8 +990,8 @@ mod tests {
                 "#[b] #[c(1)] pub struct S(pub u8);"
             ),
             [
-                "#[b]#[c(1)]#[::l::announce::__private::_actually_run_announce(\
-                 _announce_format_version=\"1\",_announce_sentinel=\"impl\",\
+                "#[b]#[c(1)]#[::l::announce::__private::__announce_runner(\
+                 __announce_format_version=\"1\",__announce_sentinel=\"impl\",\
                  crate=::l::announce,meta=a::x)]pubstructS(pubu8);",
                 CHK
             ]
@@ -1007,8 +1007,8 @@ mod tests {
         ] {
             let out = made("crate = ::l::announce", &[], &format!("#[x] {}", item));
             assert!(
-                out.starts_with("#[x]#[::l::announce::__private::_actually_run_announce(")
-                    && out.contains("_announce_format_version=\"1\""),
+                out.starts_with("#[x]#[::l::announce::__private::__announce_runner(")
+                    && out.contains("__announce_format_version=\"1\""),
                 "{}",
                 out
             );
@@ -1023,7 +1023,7 @@ mod tests {
         let out = made("", &[], "#[x] struct S;");
         assert!(
             out.contains(
-                "_actually_run_announce(_announce_format_version=\"1\",_announce_sentinel=\"impl\")]structS;"
+                "__announce_runner(__announce_format_version=\"1\",__announce_sentinel=\"impl\")]structS;"
             ),
             "{}",
             out
@@ -1039,8 +1039,8 @@ mod tests {
                 "#[x] pub struct S;"
             ),
             [
-                "#[x]#[::l::announce::__private::_actually_run_announce(_announce_format_version=\"1\",\
-                 _announce_sentinel=\"impl\",_announce_owned(my_lib,other),\
+                "#[x]#[::l::announce::__private::__announce_runner(__announce_format_version=\"1\",\
+                 __announce_sentinel=\"impl\",__announce_owned(my_lib,other),\
                  crate=::l::announce,a::check)]pubstructS;",
                 CHK
             ]
@@ -1060,8 +1060,8 @@ mod tests {
             ),
             [
                 "#[doc=\"a\"]#[::my_lib]#[derive(Debug)]\
-                 #[::l::announce::__private::_actually_run_announce(_announce_format_version=\"1\",\
-                 _announce_sentinel=\"impl\",_announce_owned(my_lib,other),\
+                 #[::l::announce::__private::__announce_runner(__announce_format_version=\"1\",\
+                 __announce_sentinel=\"impl\",__announce_owned(my_lib,other),\
                  crate=::l::announce,a::check)]\
                  #[my_lib(1)]#[other]#[my_lib::y=1]structS;",
                 CHK
@@ -1078,8 +1078,8 @@ mod tests {
             ),
             [
                 "#[cfg_attr(a,inline)]#[cfg_attr(my_lib,inline)]\
-                 #[::l::announce::__private::_actually_run_announce(_announce_format_version=\"1\",\
-                 _announce_sentinel=\"impl\",_announce_owned(my_lib),crate=::l::announce)]\
+                 #[::l::announce::__private::__announce_runner(__announce_format_version=\"1\",\
+                 __announce_sentinel=\"impl\",__announce_owned(my_lib),crate=::l::announce)]\
                  #[cfg_attr(a,my_lib(1))]#[cfg_attr(a,inline,cfg_attr(b,my_lib))]structS;",
                 CHK
             ]
@@ -1092,11 +1092,11 @@ mod tests {
                 &["other"],
                 &format!(
                     "#[other(2)] #[x] {} #[my_lib(1)] #[y] struct S;",
-                    runner(&format!("{}, _announce_owned(my_lib)", V))
+                    runner(&format!("{}, __announce_owned(my_lib)", V))
                 )
             ),
-            "#[x]#[::l::announce::__private::_actually_run_announce(_announce_format_version=\"1\",\
-             _announce_owned(my_lib,other),crate=::l::announce,b::check)]\
+            "#[x]#[::l::announce::__private::__announce_runner(__announce_format_version=\"1\",\
+             __announce_owned(my_lib,other),crate=::l::announce,b::check)]\
              #[my_lib(1)]#[other(2)]#[y]structS;"
         );
     }
@@ -1111,11 +1111,11 @@ mod tests {
                 &["other"],
                 &format!(
                     "#[x] {} #[y] pub struct S(pub u8);",
-                    runner(&format!("{}, _announce_owned(my_lib), crate = ::l::announce, meta = a::x", V))
+                    runner(&format!("{}, __announce_owned(my_lib), crate = ::l::announce, meta = a::x", V))
                 )
             ),
-            "#[x]#[::l::announce::__private::_actually_run_announce(_announce_format_version=\"1\",\
-             _announce_owned(my_lib,other),crate=::l::announce,meta=a::x,meta=b::x,c::check)]#[y]pubstructS(pubu8);"
+            "#[x]#[::l::announce::__private::__announce_runner(__announce_format_version=\"1\",\
+             __announce_owned(my_lib,other),crate=::l::announce,meta=a::x,meta=b::x,c::check)]#[y]pubstructS(pubu8);"
         );
         // Options that disagree are one error, with the item.
         let item = format!(
@@ -1147,7 +1147,7 @@ mod tests {
         ] {
             let out = attribute(me, item);
             assert!(
-                out.contains("Capture") && !out.contains("_actually_run_announce"),
+                out.contains("Capture") && !out.contains("__announce_runner"),
                 "{}: {}",
                 item,
                 out
@@ -1175,7 +1175,7 @@ mod tests {
         ] {
             let out = attribute(me, item);
             assert!(
-                out.contains("_actually_run_announce") && !out.contains("Capture"),
+                out.contains("__announce_runner") && !out.contains("Capture"),
                 "{}: {}",
                 item,
                 out
@@ -1197,7 +1197,7 @@ mod tests {
             "/// d\n#[my_lib(x)] pub struct S { #[my_lib(y)] pub a: u8 }",
             "attrs(my_lib)",
         )));
-        assert!(!out.contains("_actually_run_announce"), "{}", out);
+        assert!(!out.contains("__announce_runner"), "{}", out);
         assert!(
             out.starts_with("#[derive(::l::announce::__private::Capture)]"),
             "{}",
@@ -1216,11 +1216,11 @@ mod tests {
             "#[cfg_attr(a, my_lib(x))] pub struct S;",
             "attrs(my_lib)",
         )));
-        assert!(!out.contains("_actually_run_announce"), "{}", out);
+        assert!(!out.contains("__announce_runner"), "{}", out);
         // Without the answer the attribute is an attribute that may expand: the runner,
         // and the attribute follows it.
         let out = norm(&crate::finish(state("#[my_lib(x)] pub struct S;", "")));
-        assert!(out.contains("_actually_run_announce"), "{}", out);
+        assert!(out.contains("__announce_runner"), "{}", out);
         // Another attribute, next to the owned one: the runner, with the owned attribute
         // after it.
         let out = norm(&crate::finish(state(
@@ -1228,7 +1228,7 @@ mod tests {
             "attrs(my_lib)",
         )));
         assert!(
-            out.starts_with("#[derive(Debug)]#[::l::announce::__private::_actually_run_announce(")
+            out.starts_with("#[derive(Debug)]#[::l::announce::__private::__announce_runner(")
                 && out.contains("#[my_lib(x)]pubstructS;"),
             "{}",
             out
@@ -1245,7 +1245,7 @@ mod tests {
             "pub(crate) union S { a: u8 }",
         ] {
             let out = made("crate = ::l::announce", &[], &format!("#[x] {}", item));
-            assert!(out.contains("_announce_sentinel=\"impl\""), "{}", out);
+            assert!(out.contains("__announce_sentinel=\"impl\""), "{}", out);
             // After the item, a sibling.
             assert!(out.ends_with(CHK), "{}", out);
             assert_eq!(out.matches("__announce_chk").count(), 2, "{}", out);
@@ -1271,7 +1271,7 @@ mod tests {
             let opts = format!("crate = ::l::announce, {}", opts);
             let out = made(&opts, &[], &format!("#[x] {}", item));
             assert!(
-                out.contains("_announce_sentinel=\"macro\""),
+                out.contains("__announce_sentinel=\"macro\""),
                 "{}: {}",
                 item,
                 out
@@ -1318,8 +1318,8 @@ mod tests {
         ] {
             let out = made("crate = ::l::announce", &[], item);
             assert!(
-                out.contains("_actually_run_announce(_announce_format_version=\"1\"")
-                    && !out.contains("_announce_sentinel")
+                out.contains("__announce_runner(__announce_format_version=\"1\"")
+                    && !out.contains("__announce_sentinel")
                     && !out.contains("__announce_chk")
                     && !out.contains("__announce_exists"),
                 "{}: {}",
@@ -1334,22 +1334,22 @@ mod tests {
         // Merged into the runner: no sentinel, and the one of the runner is kept.
         let item = format!(
             "#[x] {} struct S;",
-            runner(&format!("{}, _announce_sentinel = \"impl\"", V))
+            runner(&format!("{}, __announce_sentinel = \"impl\"", V))
         );
         let out = made("meta = b::x", &[], &item);
         assert!(!out.contains("compile_error"), "{}", out);
-        assert_eq!(out.matches("_announce_sentinel").count(), 1, "{}", out);
+        assert_eq!(out.matches("__announce_sentinel").count(), 1, "{}", out);
         assert!(!out.contains("__announce_chk"), "{}", out);
         // The runner that expands, merged into another one.
         let out = norm(&run(
             ts(&format!(
-                "{}, _announce_sentinel = \"macro\", meta = a::x",
+                "{}, __announce_sentinel = \"macro\", meta = a::x",
                 V
             )),
             ts(&item),
         ));
         assert!(
-            out.contains("_announce_sentinel=\"impl\"") && !out.contains("\"macro\""),
+            out.contains("__announce_sentinel=\"impl\"") && !out.contains("\"macro\""),
             "{}",
             out
         );
@@ -1357,18 +1357,19 @@ mod tests {
         // At once: no runner, no sentinel.
         let out = attribute("crate = ::l::announce", "/// d\npub struct S;");
         assert!(
-            !out.contains("_announce_sentinel") && !out.contains("__announce_chk"),
+            !out.contains("__announce_sentinel") && !out.contains("__announce_chk"),
             "{}",
             out
         );
         // The runner reads its sentinel, and refuses one that it does not know.
-        let args = RunnerArgs::read(ts(&format!("{}, _announce_sentinel = \"macro\"", V))).unwrap();
+        let args =
+            RunnerArgs::read(ts(&format!("{}, __announce_sentinel = \"macro\"", V))).unwrap();
         assert_eq!(args.sentinel, Some(Sentinel::Macro));
         assert_eq!(
             norm(&args.to_token_stream()),
-            "_announce_format_version=\"1\",_announce_sentinel=\"macro\""
+            "__announce_format_version=\"1\",__announce_sentinel=\"macro\""
         );
-        let e = RunnerArgs::read(ts(&format!("{}, _announce_sentinel = \"cake\"", V)))
+        let e = RunnerArgs::read(ts(&format!("{}, __announce_sentinel = \"cake\"", V)))
             .err()
             .unwrap();
         assert!(e.to_string().contains("unknown sentinel `cake`"), "{}", e);
@@ -1380,7 +1381,7 @@ mod tests {
             format!(
                 "#[x] {} struct S;",
                 runner(&format!(
-                    "{}, _announce_sentinel = \"{}\", {}",
+                    "{}, __announce_sentinel = \"{}\", {}",
                     V, sentinel, opt
                 ))
             )
@@ -1393,7 +1394,7 @@ mod tests {
             // the item (and its runner, so that nothing else follows).
             let item = format!(
                 "#[x] {} struct S;",
-                runner(&format!("{}, _announce_sentinel = \"impl\"", V))
+                runner(&format!("{}, __announce_sentinel = \"impl\"", V))
             );
             let out = made(opt, &[], &item);
             assert!(out.starts_with("::core::compile_error!"), "{}", out);
@@ -1424,7 +1425,7 @@ mod tests {
             &format!(
                 "#[x] {} struct S;",
                 runner(&format!(
-                    "{}, _announce_sentinel = \"macro\", mock = a::B",
+                    "{}, __announce_sentinel = \"macro\", mock = a::B",
                     V
                 ))
             ),
@@ -1447,7 +1448,7 @@ mod tests {
         let out = made("meta = b::x", &[], &item);
         assert!(!out.contains("compile_error"), "{}", out);
         assert_eq!(
-            out.matches("_announce_format_version").count(),
+            out.matches("__announce_format_version").count(),
             1,
             "{}",
             out
@@ -1493,7 +1494,7 @@ mod tests {
     fn a_runner_of_another_version_is_refused_without_reading_it() {
         // Two different entries in one runner. The rest is not in our encoding.
         let both =
-            runner("_announce_format_version = \"1\", ?? !!, _announce_format_version = \"2\"");
+            runner("__announce_format_version = \"1\", ?? !!, __announce_format_version = \"2\"");
         let (a, r) = version_errors(V, std::slice::from_ref(&both));
         for out in [norm(&ts(&a)), r] {
             assert_version_error(&out, &["`1`,`2`"]);
@@ -1504,12 +1505,12 @@ mod tests {
         let out = norm(&run(ts(V), ts(&format!("#[x] {} struct S;", both))));
         assert!(out.ends_with("#[x]structS;"), "{}", out);
         // One entry of another version.
-        let (a, r) = version_errors(V, &[runner("_announce_format_version = \"2\", ?? !!")]);
+        let (a, r) = version_errors(V, &[runner("__announce_format_version = \"2\", ?? !!")]);
         assert_version_error(&a, &["`2`"]);
         assert_version_error(&r, &["`2`"]);
         // The runner that expands is the one with the other version.
         let r = norm(&run(
-            ts("_announce_format_version = \"7\""),
+            ts("__announce_format_version = \"7\""),
             ts("#[x] struct S;"),
         ));
         assert_version_error(&r, &["`7`"]);
@@ -1517,9 +1518,10 @@ mod tests {
 
     #[test]
     fn runners_of_different_versions_are_listed_with_their_crate_paths() {
-        let a = "#[::one::announce::__private::_actually_run_announce(_announce_format_version = \"1\")]";
-        let b = "#[::two::announce::__private::_actually_run_announce(_announce_format_version = \"2\", ?? !!)]";
-        let c = "#[::three::_actually_run_announce(_announce_format_version = \"2\")]";
+        let a =
+            "#[::one::announce::__private::__announce_runner(__announce_format_version = \"1\")]";
+        let b = "#[::two::announce::__private::__announce_runner(__announce_format_version = \"2\", ?? !!)]";
+        let c = "#[::three::__announce_runner(__announce_format_version = \"2\")]";
         let item = format!("#[x] {} {} {} struct S;", a, b, c);
         let out = made("", &[], &item);
         assert_version_error(
@@ -1535,15 +1537,15 @@ mod tests {
         // The runner that expands is one of them (its path is not known, so the paths do
         // not differ).
         let r = norm(&run(
-            ts("_announce_format_version = \"1\""),
+            ts("__announce_format_version = \"1\""),
             ts(&format!("#[x] {} struct S;", b)),
         ));
         assert_version_error(&r, &["`1`,`2`"]);
         // The same version at the same path is listed without the path.
         let item = format!(
             "#[x] {} {} struct S;",
-            runner("_announce_format_version = \"3\""),
-            runner("_announce_format_version = \"3\", _announce_format_version = \"4\"")
+            runner("__announce_format_version = \"3\""),
+            runner("__announce_format_version = \"3\", __announce_format_version = \"4\"")
         );
         let out = made("", &[], &item);
         assert_version_error(&out, &["`3`,`4`"]);
@@ -1555,10 +1557,10 @@ mod tests {
         for r in [
             runner("meta = a::x"),
             runner(""),
-            "#[::l::announce::__private::_actually_run_announce]".to_string(),
-            runner("_announce_format_version, meta = a::x"),
-            runner("_announce_format_version(1)"),
-            runner("x::_announce_format_version = \"1\""),
+            "#[::l::announce::__private::__announce_runner]".to_string(),
+            runner("__announce_format_version, meta = a::x"),
+            runner("__announce_format_version(1)"),
+            runner("x::__announce_format_version = \"1\""),
         ] {
             let item = format!("#[x] {} struct S;", r);
             let out = made("", &[], &item);
@@ -1568,7 +1570,7 @@ mod tests {
             assert!(out.ends_with("#[x]structS;"), "{}: {}", r, out);
         }
         // The runner that expands, too: its arguments are all there is.
-        for args in ["", "meta = a::x", "_announce_format_version, meta = a::x"] {
+        for args in ["", "meta = a::x", "__announce_format_version, meta = a::x"] {
             let out = norm(&run(ts(args), ts("#[x] struct S;")));
             assert_version_error(&out, &["`unknown`"]);
         }
@@ -1579,8 +1581,8 @@ mod tests {
 
     #[test]
     fn several_runners_of_the_current_version_are_merged_into_the_last() {
-        let first = "#[::one::announce::__private::_actually_run_announce(_announce_format_version = \"1\", _announce_owned(a), crate = ::one::announce, meta = one::x)]";
-        let second = "#[::two::announce::__private::_actually_run_announce(_announce_format_version = \"1\", _announce_owned(b), crate = ::two::announce, meta = two::x)]";
+        let first = "#[::one::announce::__private::__announce_runner(__announce_format_version = \"1\", __announce_owned(a), crate = ::one::announce, meta = one::x)]";
+        let second = "#[::two::announce::__private::__announce_runner(__announce_format_version = \"1\", __announce_owned(b), crate = ::two::announce, meta = two::x)]";
         // From an announcement: the last is the target, the earlier is gone.
         let out = made(
             "meta = three::x",
@@ -1589,21 +1591,21 @@ mod tests {
         );
         assert_eq!(
             out,
-            "#[x]#[y]#[::two::announce::__private::_actually_run_announce(_announce_format_version=\"1\",\
-             _announce_owned(b,a,c),crate=::two::announce,meta=two::x,meta=one::x,meta=three::x)]structS;"
+            "#[x]#[y]#[::two::announce::__private::__announce_runner(__announce_format_version=\"1\",\
+             __announce_owned(b,a,c),crate=::two::announce,meta=two::x,meta=one::x,meta=three::x)]structS;"
         );
         // From the runner that expands: it goes into the last one, which runs next.
         let out = norm(&run(
-            ts("_announce_format_version = \"1\", crate = ::zero::announce, meta = zero::x"),
+            ts("__announce_format_version = \"1\", crate = ::zero::announce, meta = zero::x"),
             ts(&format!("#[x] {} {} struct S;", first, second)),
         ));
         assert_eq!(
             out,
-            "#[x]#[::two::announce::__private::_actually_run_announce(_announce_format_version=\"1\",\
-             _announce_owned(b,a),crate=::two::announce,meta=two::x,meta=one::x,meta=zero::x)]structS;"
+            "#[x]#[::two::announce::__private::__announce_runner(__announce_format_version=\"1\",\
+             __announce_owned(b,a),crate=::two::announce,meta=two::x,meta=one::x,meta=zero::x)]structS;"
         );
         // Options that disagree are one error.
-        let clash = "#[::two::announce::__private::_actually_run_announce(_announce_format_version = \"1\", macro_name = Other)]";
+        let clash = "#[::two::announce::__private::__announce_runner(__announce_format_version = \"1\", macro_name = Other)]";
         let out = made("", &[], &format!("{} {} struct S;", first, clash));
         assert!(
             out.contains("`Other`") && out.starts_with("::core::compile_error!"),
@@ -1618,7 +1620,7 @@ mod tests {
     fn the_runner_makes_the_trampoline_without_the_attributes_that_checks_own() {
         let out = norm(&run(
             ts(&format!(
-                "{}, _announce_owned(my_lib), crate = ::l::announce, a::check",
+                "{}, __announce_owned(my_lib), crate = ::l::announce, a::check",
                 V
             )),
             ts("#[doc = \"d\"] #[my_lib(1)] pub struct S { #[my_lib(2)] pub a: u8 }"),
@@ -1638,7 +1640,7 @@ mod tests {
         );
         assert_eq!(out.matches("#[my_lib(1)]").count(), 1, "{}", out);
         // No runner is left.
-        assert!(!out.contains("_actually_run_announce"), "{}", out);
+        assert!(!out.contains("__announce_runner"), "{}", out);
     }
 
     #[test]
@@ -1733,7 +1735,7 @@ mod tests {
                         .args
                         .as_ref()
                         .map_or(false, |g| g.stream().to_string().contains("Capture")),
-                    "emit" | "pass" | "late" | "dup" | "_actually_run_announce" => true,
+                    "emit" | "pass" | "late" | "dup" | "__announce_runner" => true,
                     _ => false,
                 }
             });
@@ -1754,7 +1756,7 @@ mod tests {
             let name = a.segments.last().unwrap().to_string();
             item = match name.as_str() {
                 "announce" => crate::announce(args, rest),
-                "_actually_run_announce" => crate::run_announce(args, rest),
+                "__announce_runner" => crate::run_announce(args, rest),
                 "derive" => rest,
                 "emit" => {
                     let mut out = ts(&format!(
@@ -1845,12 +1847,7 @@ mod tests {
                 made
             );
             assert!(!left.contains("compile_error"), "{}: {}", item, left);
-            assert!(
-                !left.contains("_actually_run_announce"),
-                "{}: {}",
-                item,
-                left
-            );
+            assert!(!left.contains("__announce_runner"), "{}: {}", item, left);
             // Every announcement expands once, and the runner once.
             assert!(steps <= 4 * metas.len() + 4, "{}: {}", item, steps);
         }

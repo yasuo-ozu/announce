@@ -61,5 +61,5 @@ pub mod machinery;
 
 #[doc(hidden)]
 pub mod __private {
-    pub use announce_macros::{_actually_run_announce, finish, remove, Capture};
+    pub use announce_macros::{__announce_runner, finish, remove, Capture};
 }

@@ -8,7 +8,7 @@
   `META`, instead of failing with E0252 and E0119, for every kind of item, for `#[announce]`
   and for macros that announce what they produce (`announce::machinery::announce` too).
 - The first `#[announce]` on an item puts a hidden attribute macro, the runner
-  (`announce::__private::_actually_run_announce`), last among its attributes. The other
+  (`announce::__private::__announce_runner`), last among its attributes. The other
   announcements merge their options into it, in the order rustc expands them, and the
   runner makes the trampoline after every other macro on the item. So callbacks see the item
   after the other attribute macros have run, and without the derives that have expanded.
@@ -44,7 +44,7 @@
   macro appends below the runner is one error, and is removed, instead of a second
   trampoline. A bare or renamed import put there is not seen.
 - The arguments of the runner carry the version of their encoding
-  (`_announce_format_version`). An item announced by two versions of the `announce` crate
+  (`__announce_format_version`). An item announced by two versions of the `announce` crate
   that disagree is one error that lists the versions. An `#[announce]` of announce 0.1 on
   the same item as one of this version is not merged (0.1 has no runner): it makes a second
   trampoline (E0252). Use one version of `announce` in every crate.
