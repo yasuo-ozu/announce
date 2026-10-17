@@ -1,0 +1,15 @@
+error: announce: `emit_item = false` must be on the first announcement of an item (the one that expands first, the highest in the attributes of the item), not on a later one: the first announcement checks that the item has its `Announce` impl, which `mock` and `emit_item = false` remove
+ --> tests/ui/merge_not_first.rs:5:1
+  |
+5 | #[announce::announce(emit_item = false)]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `announce::announce` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: announce: `mock` must be on the first announcement of an item (the one that expands first, the highest in the attributes of the item), not on a later one: the first announcement checks that the item has its `Announce` impl, which `mock` and `emit_item = false` remove
+ --> tests/ui/merge_not_first.rs:9:1
+  |
+9 | #[announce::announce(mock = my_lib::Real)]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `announce::announce` (in Nightly builds, run with -Z macro-backtrace for more info)

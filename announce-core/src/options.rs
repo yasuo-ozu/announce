@@ -436,6 +436,8 @@ impl Parse for Options {
 /// out when there are none.
 pub struct CaptureArgs {
     pub random: u64,
+    /// The sentinel of the announcement, if it emitted one (see `runner::Sentinel`).
+    pub sentinel: Option<crate::runner::Sentinel>,
     pub owned: crate::helper::OwnedAttrs,
     pub opts: Options,
 }
@@ -444,6 +446,15 @@ impl Parse for CaptureArgs {
     fn parse(input: ParseStream) -> Result<Self> {
         let lit: syn::LitInt = input.parse()?;
         input.parse::<Token![;]>()?;
+        let mut sentinel = None;
+        if input.peek(syn::Ident) && input.peek2(Token![;]) {
+            let word: Ident = input.parse()?;
+            sentinel = Some(
+                crate::runner::Sentinel::from_capture_word(&word.to_string())
+                    .ok_or_else(|| Error::new(word.span(), "announce: malformed capture dummy"))?,
+            );
+            input.parse::<Token![;]>()?;
+        }
         let owned = if input.peek(syn::token::Bracket) {
             let content;
             syn::bracketed!(content in input);
@@ -456,6 +467,7 @@ impl Parse for CaptureArgs {
         };
         Ok(CaptureArgs {
             random: lit.base10_parse()?,
+            sentinel,
             owned,
             opts: input.parse()?,
         })

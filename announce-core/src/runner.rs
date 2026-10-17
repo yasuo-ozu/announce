@@ -33,6 +33,10 @@
 //!   duplicates, with the crate path of each runner where they differ; a runner without
 //!   an entry is version `unknown`), says which version this `announce` expects, and tells
 //!   to use one version in every crate (`cargo tree -i announce`).
+//! - `_announce_sentinel = "impl"` or `"macro"`: the kind of the sentinel that the
+//!   announcement that put the runner on the item emitted next to it (see "The sentinel"
+//!   below). When runners or announcements are merged, `impl` wins, as it is the one that
+//!   the options can break. Left out when there is no sentinel.
 //! - `_announce_owned(a, b)`: the names of the attributes that the checks of the
 //!   announcements own: the answer of the query. Left out when there are none.
 //! - the rest are the options of `#[announce(..)]` as [`Options`] prints them.
@@ -53,11 +57,64 @@
 //! 3. Otherwise the item comes back with the runner as its last attribute, or, if the
 //!    item has one (the versions are checked first), with the options merged into it
 //!    (the runner is the target: its entries come first; options that differ are one
-//!    error with the item). Nothing else is emitted yet. The attributes that the checks
+//!    error with the item). The announcement that puts the runner there also emits the
+//!    sentinel after the item. Nothing else is emitted yet. The attributes that the checks
 //!    own are moved to right after the runner, in their order, after those that are there
 //!    already: rustc rejects an attribute that nothing knows above an attribute macro that
 //!    has still to expand (`cannot find attribute`), and the runner is below everything
 //!    else.
+//!
+//! # The sentinel
+//!
+//! A macro below `#[announce]` that returns the item without its outer attributes (one that
+//! rebuilds its input from the fields it parsed, say) drops the runner, and then nothing
+//! announces the item, with no error at the definition: the only one would be "cannot find
+//! macro `S`" at a call, somewhere else. So the announcement that **puts the runner** on the
+//! item (only that one: not an announcement that merges into a runner, and not an item that
+//! is announced at once, which has no runner to lose) also emits a *sentinel*, as an item (a
+//! statement in a block) right after the item. It fails at the definition if the runner never
+//! ran, in one of two forms:
+//!
+//! - `impl`, when the runner will implement `Announce` for a type that can be named without
+//!   reading generics: a struct, enum or union with no `<` after its name, announced without
+//!   `mock` and `emit_item = false`:
+//!
+//!   ```text
+//!   const _: () = {
+//!       fn __announce_chk<T: ?::core::marker::Sized + KRATE::Announce>() {}
+//!       let _ = __announce_chk::<S>;
+//!   };
+//!   ```
+//!
+//!   (with `#[allow(deprecated)]`). If the runner is gone the error is that of `Announce`
+//!   (`on_unimplemented`), at the name of the item.
+//! - `macro`, for everything else (generic structs, traits, type aliases, inline modules,
+//!   `mock`, `emit_item = false`): a call of the trampoline, `NAME! { @__announce_exists }`,
+//!   where `NAME` is the `macro_name`, else the name of the item, as a bare name (so it works
+//!   in a block too). The trampoline has an arm for it (the first one, which expands to
+//!   nothing: see `generate`). If the runner is gone the error is "cannot find macro `NAME`",
+//!   at the name of the item (at `macro_name = NAME` if that is where the name is).
+//!
+//! The sentinel carries the `#[cfg(..)]` attributes of the item, as the item and the
+//! trampoline go away together. An item with a `#[cfg_attr(..)]` that can make a `cfg`
+//! (its arguments mention `cfg`) gets no sentinel, as it could not tell if the item is there.
+//!
+//! The runner records the kind in `_announce_sentinel`. A later announcement that merges
+//! options that take away what the `impl` sentinel relies on (`mock`, `emit_item = false`)
+//! is one error with the item, which says that they must be on the first announcement of the
+//! item (the type disappears with `emit_item = false`, and a mock has no impl). The item is
+//! kept with its runner, so nothing else follows.
+//!
+//! If generation fails (the capture derive reports a type error, say) it emits a stand-in for
+//! what the sentinel needs next to its error (`generate::sentinel_stub`: an impl, or a macro
+//! with the arm of the sentinel), so that the sentinel does not add an error about the same
+//! item; the dummy of the capture derive tells it the kind. The same is done by the runner
+//! when it reports a version error. Errors where the runner and the trampoline go away
+//! without a stand-in are followed by the error of the sentinel (the compile error of the
+//! first comes first, as the errors of macros are reported at expansion and the sentinel's
+//! at name resolution or type check): a runner whose arguments cannot be read, an item that
+//! a macro below the runner changed into another kind, and the versions error of an
+//! `announce` of another version that removes our runner.
 //!
 //! `mock = ..` and `emit_item = false` are options like the others: they are merged
 //! (a value that is set wins over one that is not, two different values are the error),
@@ -121,6 +178,112 @@ const VERSION_KEY: &str = "_announce_format_version";
 /// The entry of the arguments that holds the names that checks own.
 const OWNED_KEY: &str = "_announce_owned";
 
+/// The entry of the arguments that holds the kind of the sentinel (`"impl"` or `"macro"`),
+/// if the announcement that put the runner on the item emitted one.
+const SENTINEL_KEY: &str = "_announce_sentinel";
+
+/// What the announcement that puts the runner on an item emits next to the item, to fail
+/// at the definition if the runner never runs (a macro below `#[announce]` that returns
+/// the item without its attributes drops the runner, and then nothing is announced).
+///
+/// - [`Sentinel::Impl`]: `const _: () = { fn __announce_chk<T: ?Sized + KRATE::Announce>() {}
+///   let _ = __announce_chk::<S>; };`. It needs the runner to implement `Announce` for a
+///   type that can be named without reading generics: a struct, enum or union without
+///   generic parameters, announced without `mock` and `emit_item = false`.
+/// - [`Sentinel::Macro`]: `NAME! { @__announce_exists }`, a call of the trampoline, which has
+///   an arm for it. Everything else.
+///
+/// Both are items (or statements) that expand right after the item, and the first one that
+/// cannot be resolved is the error: `Announce` is not implemented for `S`, or "cannot find
+/// macro `NAME`", at the name of the item.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Sentinel {
+    Impl,
+    Macro,
+}
+
+impl Sentinel {
+    fn word(self) -> &'static str {
+        match self {
+            Sentinel::Impl => "impl",
+            Sentinel::Macro => "macro",
+        }
+    }
+
+    /// The sentinel of two runners that are merged: `Impl` wins, as it is the one that
+    /// the options can break.
+    fn merge(target: Option<Sentinel>, folder: Option<Sentinel>) -> Option<Sentinel> {
+        match (target, folder) {
+            (Some(Sentinel::Impl), _) | (_, Some(Sentinel::Impl)) => Some(Sentinel::Impl),
+            (a, b) => a.or(b),
+        }
+    }
+
+    /// The word that tells the `Capture` derive, in its `#[__announce(..)]`, which
+    /// stand-in to emit if it fails.
+    pub(crate) fn capture_word(self) -> &'static str {
+        match self {
+            Sentinel::Impl => "sentinel_impl",
+            Sentinel::Macro => "sentinel_macro",
+        }
+    }
+
+    pub(crate) fn from_capture_word(word: &str) -> Option<Sentinel> {
+        match word {
+            "sentinel_impl" => Some(Sentinel::Impl),
+            "sentinel_macro" => Some(Sentinel::Macro),
+            _ => None,
+        }
+    }
+
+    fn from_word(word: &str) -> Option<Sentinel> {
+        match word {
+            "impl" => Some(Sentinel::Impl),
+            "macro" => Some(Sentinel::Macro),
+            _ => None,
+        }
+    }
+
+    /// The sentinel that an announcement with these options makes for this item.
+    pub(crate) fn of(head: &scan::Head, opts: &Options) -> Sentinel {
+        let adt = matches!(
+            head.kind,
+            scan::Kind::Struct | scan::Kind::Enum | scan::Kind::Union
+        );
+        if adt && !head.generic && opts.mock.is_none() && opts.emit_item {
+            Sentinel::Impl
+        } else {
+            Sentinel::Macro
+        }
+    }
+
+    /// The sentinel itself. `cfgs` are the `#[cfg(..)]` attributes of the item, which the
+    /// sentinel has to have too (an item that is `cfg`'d out is not announced).
+    fn tokens(self, head: &scan::Head, opts: &Options, cfgs: &TokenStream) -> TokenStream {
+        match self {
+            Sentinel::Impl => {
+                let krate = opts.krate();
+                let ident = &head.ident;
+                quote! {
+                    #cfgs
+                    #[allow(deprecated)]
+                    const _: () = {
+                        fn __announce_chk<T: ?::core::marker::Sized + #krate::Announce>() {}
+                        let _ = __announce_chk::<#ident>;
+                    };
+                }
+            }
+            Sentinel::Macro => {
+                let name = opts
+                    .macro_name
+                    .clone()
+                    .unwrap_or_else(|| head.ident.clone());
+                quote! { #cfgs #name! { @__announce_exists } }
+            }
+        }
+    }
+}
+
 /// An error at the announcement that is expanding, and the item as it was.
 pub(crate) fn error_with_item(message: String, item: &TokenStream) -> TokenStream {
     let mut out = syn::Error::new(Span::call_site(), message).to_compile_error();
@@ -149,9 +312,14 @@ fn entries(ts: TokenStream) -> Vec<Vec<TokenTree>> {
 
 /// `_announce_format_version = "lit"`: the text of the literal, without quotes.
 fn version_entry(entry: &[TokenTree]) -> Option<String> {
+    string_entry(entry, VERSION_KEY)
+}
+
+/// `key = "lit"`: the text of the literal, without quotes.
+fn string_entry(entry: &[TokenTree], key: &str) -> Option<String> {
     match entry {
         [TokenTree::Ident(k), TokenTree::Punct(p), TokenTree::Literal(l)]
-            if k == VERSION_KEY && p.as_char() == '=' =>
+            if k == key && p.as_char() == '=' =>
         {
             let text = l.to_string();
             Some(
@@ -181,6 +349,8 @@ pub(crate) struct RunnerArgs {
     pub owned: OwnedAttrs,
     /// The merged options.
     pub opts: Options,
+    /// The sentinel that was emitted next to the item, `None` if there is none.
+    pub sentinel: Option<Sentinel>,
 }
 
 impl ToTokens for RunnerArgs {
@@ -188,6 +358,11 @@ impl ToTokens for RunnerArgs {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let key = Ident::new(VERSION_KEY, Span::call_site());
         let mut parts = vec![quote! { #key = #RUNNER_FORMAT }];
+        if let Some(sentinel) = self.sentinel {
+            let key = Ident::new(SENTINEL_KEY, Span::call_site());
+            let word = sentinel.word();
+            parts.push(quote! { #key = #word });
+        }
         if !self.owned.is_empty() {
             let key = Ident::new(OWNED_KEY, Span::call_site());
             let names = self.owned.names();
@@ -206,9 +381,25 @@ impl RunnerArgs {
     /// the version entries are dropped, the names are read, and the rest are options.
     pub(crate) fn read(args: TokenStream) -> syn::Result<RunnerArgs> {
         let mut owned = OwnedAttrs::new();
+        let mut sentinel = None;
         let mut rest: Vec<TokenStream> = Vec::new();
         for e in entries(args) {
             if version_entry(&e).is_some() {
+                continue;
+            }
+            if let Some(word) = string_entry(&e, SENTINEL_KEY) {
+                match Sentinel::from_word(&word) {
+                    Some(s) => sentinel = Sentinel::merge(sentinel, Some(s)),
+                    None => {
+                        return Err(syn::Error::new(
+                            Span::call_site(),
+                            format!(
+                                "announce: unknown sentinel `{}` in the arguments of `#[{}]`",
+                                word, RUNNER
+                            ),
+                        ))
+                    }
+                }
                 continue;
             }
             match e.as_slice() {
@@ -221,13 +412,41 @@ impl RunnerArgs {
             }
         }
         let opts = syn::parse2(quote! { #(#rest),* })?;
-        Ok(RunnerArgs { owned, opts })
+        Ok(RunnerArgs {
+            owned,
+            opts,
+            sentinel,
+        })
     }
 
-    /// Merges `folder` into this one (the target): the options, and the names.
+    /// Merges `folder` into this one (the target): the options, the names and the
+    /// sentinel.
     fn merge(&mut self, folder: &RunnerArgs, name: &Ident) -> Result<(), MergeConflict> {
         self.opts = self.opts.merge(&folder.opts, name)?;
         self.owned.extend(folder.owned.names().iter().cloned());
+        self.sentinel = Sentinel::merge(self.sentinel, folder.sentinel);
+        Ok(())
+    }
+
+    /// The error for merged options that remove what the sentinel relies on: the `Announce`
+    /// impl of the item (`mock` and `emit_item = false` have none).
+    fn check_sentinel(&self) -> Result<(), String> {
+        if self.sentinel == Some(Sentinel::Impl)
+            && (self.opts.mock.is_some() || !self.opts.emit_item)
+        {
+            let option = if self.opts.mock.is_some() {
+                "mock"
+            } else {
+                "emit_item = false"
+            };
+            return Err(format!(
+                "announce: `{}` must be on the first announcement of an item (the one that expands \
+                 first, the highest in the attributes of the item), not on a later one: the first \
+                 announcement checks that the item has its `Announce` impl, which `mock` and \
+                 `emit_item = false` remove",
+                option
+            ));
+        }
         Ok(())
     }
 }
@@ -513,15 +732,42 @@ fn assemble(
     out
 }
 
+/// The `#[cfg(..)]` attributes of the item, which its sentinel has to have as well, or
+/// `None` if the item has a `#[cfg_attr(..)]` that can make a `cfg` of its own: the sentinel
+/// is left out then, as it could not tell whether the item is there.
+fn sentinel_cfgs(outer: &Outer) -> Option<TokenStream> {
+    fn mentions_cfg(ts: TokenStream) -> bool {
+        ts.into_iter().any(|t| match t {
+            TokenTree::Ident(i) => i == "cfg",
+            TokenTree::Group(g) => mentions_cfg(g.stream()),
+            _ => false,
+        })
+    }
+    let mut cfgs = TokenStream::new();
+    for a in &outer.attrs {
+        if a.is_bare("cfg") {
+            cfgs.extend([outer.tts[a.at].clone(), outer.tts[a.at + 1].clone()]);
+        } else if a.is_bare("cfg_attr")
+            && a.args.as_ref().map_or(true, |g| mentions_cfg(g.stream()))
+        {
+            return None;
+        }
+    }
+    Some(cfgs)
+}
+
 /// An `#[announce]` that is emitted and has attributes of the item to wait for, with the
 /// checks answered (`owned`: what they own; empty without checks): the item with the
-/// runner, or with the options merged into the runner that is there. See the module docs.
+/// runner and the sentinel after it, or with the options merged into the runner that is
+/// there (no sentinel then: the announcement that put the runner there emitted it). See the
+/// module docs.
 pub(crate) fn announce(
     opts: &Options,
-    name: &Ident,
+    head: &scan::Head,
     item: TokenStream,
     owned: &OwnedAttrs,
 ) -> TokenStream {
+    let name = &head.ident;
     let outer = scan::outer(&item);
     let runners = runners_of(&outer);
     // The attributes that the checks own, above the runner: below it.
@@ -530,14 +776,21 @@ pub(crate) fn announce(
         .filter(|&k| !runners.contains(&k) && owns(&outer.attrs[k], owned))
         .collect();
     if runners.is_empty() {
+        let cfgs = sentinel_cfgs(&outer);
+        let sentinel = cfgs.as_ref().map(|_| Sentinel::of(head, opts));
         let args = RunnerArgs {
             owned: owned.clone(),
             opts: opts.clone(),
+            sentinel,
         };
         let krate = opts.krate();
         let runner = Ident::new(RUNNER, Span::call_site());
         let attr = quote! { #[#krate::__private::#runner(#args)] };
-        return assemble(&outer, &[], &moved, owned, Run::New(attr));
+        let mut out = assemble(&outer, &[], &moved, owned, Run::New(attr));
+        if let (Some(sentinel), Some(cfgs)) = (sentinel, cfgs) {
+            out.extend(sentinel.tokens(head, opts, &cfgs));
+        }
+        return out;
     }
     // The versions first, then the rest is read.
     if let Some(message) = version_error(&seen_on(&outer, &runners)) {
@@ -555,9 +808,13 @@ pub(crate) fn announce(
     let mine = RunnerArgs {
         owned: owned.clone(),
         opts: opts.clone(),
+        sentinel: None,
     };
     if let Err(c) = target.merge(&mine, name) {
         return conflict(&c, &item);
+    }
+    if let Err(message) = target.check_sentinel() {
+        return error_with_item(message, &item);
     }
     let last = *runners.last().unwrap();
     let earlier = &runners[..runners.len() - 1];
@@ -609,11 +866,24 @@ pub(crate) fn run(args: TokenStream, item: TokenStream) -> TokenStream {
     }
     seen.extend(seen_on(&outer, &others));
     if let Some(message) = version_error(&seen) {
-        // No runner is left, so the others do not report the same error again.
-        return error_with_item(
+        // No runner is left, so the others do not report the same error again, and no
+        // trampoline is made. The sentinel that this runner promised (if it can be read) is
+        // satisfied by a stand-in, so that it does not add an error to this one.
+        let mut out = error_with_item(
             message,
             &assemble(&outer, &others, &[], &OwnedAttrs::new(), Run::None),
         );
+        if let (Ok(mine), Ok(head)) = (RunnerArgs::read(args), scan::head(&item)) {
+            if let Some(sentinel) = mine.sentinel {
+                out.extend(crate::generate::sentinel_stub(
+                    sentinel,
+                    &head.ident,
+                    &mine.opts,
+                    crate::random_u64(),
+                ));
+            }
+        }
+        return out;
     }
     let head = match scan::head(&item) {
         Ok(h) => h,
@@ -633,6 +903,9 @@ pub(crate) fn run(args: TokenStream, item: TokenStream) -> TokenStream {
         };
         if let Err(c) = target.merge(&mine, &head.ident) {
             return conflict(&c, &item);
+        }
+        if let Err(message) = target.check_sentinel() {
+            return error_with_item(message, &item);
         }
         let last = *others.last().unwrap();
         return assemble(
@@ -662,6 +935,7 @@ pub(crate) fn run(args: TokenStream, item: TokenStream) -> TokenStream {
         item,
         random,
         &mine.owned,
+        mine.sentinel,
     ));
     errors
 }
@@ -684,10 +958,10 @@ mod tests {
 
     /// `announce` for `me` on `item`, printed.
     fn made(me: &str, owned: &[&str], item: &str) -> String {
-        let n = scan::head(&ts(item)).unwrap().ident;
+        let head = scan::head(&ts(item)).unwrap();
         norm(&announce(
             &opts(me),
-            &n,
+            &head,
             ts(item),
             &OwnedAttrs::from_strs(owned),
         ))
@@ -703,6 +977,10 @@ mod tests {
 
     const V: &str = "_announce_format_version = \"1\"";
 
+    /// The sentinel of a struct `S` without generics, as printed (after the item).
+    const CHK: &str = "#[allow(deprecated)]const_:()={fn__announce_chk<T:?::core::marker::Sized\
+                       +::l::announce::Announce>(){}let_=__announce_chk::<S>;};";
+
     #[test]
     fn the_runner_is_put_last_with_the_version() {
         assert_eq!(
@@ -711,8 +989,13 @@ mod tests {
                 &[],
                 "#[b] #[c(1)] pub struct S(pub u8);"
             ),
-            "#[b]#[c(1)]#[::l::announce::__private::_actually_run_announce(\
-             _announce_format_version=\"1\",crate=::l::announce,meta=a::x)]pubstructS(pubu8);"
+            [
+                "#[b]#[c(1)]#[::l::announce::__private::_actually_run_announce(\
+                 _announce_format_version=\"1\",_announce_sentinel=\"impl\",\
+                 crate=::l::announce,meta=a::x)]pubstructS(pubu8);",
+                CHK
+            ]
+            .concat()
         );
         // Whatever the kind of the item.
         for item in [
@@ -739,7 +1022,9 @@ mod tests {
         // which has `announce` in this crate's dev-dependency graph as `::announce`.
         let out = made("", &[], "#[x] struct S;");
         assert!(
-            out.ends_with("_actually_run_announce(_announce_format_version=\"1\")]structS;"),
+            out.contains(
+                "_actually_run_announce(_announce_format_version=\"1\",_announce_sentinel=\"impl\")]structS;"
+            ),
             "{}",
             out
         );
@@ -753,8 +1038,13 @@ mod tests {
                 &["my_lib", "other"],
                 "#[x] pub struct S;"
             ),
-            "#[x]#[::l::announce::__private::_actually_run_announce(_announce_format_version=\"1\",\
-             _announce_owned(my_lib,other),crate=::l::announce,a::check)]pubstructS;"
+            [
+                "#[x]#[::l::announce::__private::_actually_run_announce(_announce_format_version=\"1\",\
+                 _announce_sentinel=\"impl\",_announce_owned(my_lib,other),\
+                 crate=::l::announce,a::check)]pubstructS;",
+                CHK
+            ]
+            .concat()
         );
     }
 
@@ -768,10 +1058,15 @@ mod tests {
                 &["my_lib", "other"],
                 "#[my_lib(1)] #[doc = \"a\"] #[other] #[my_lib::y = 1] #[::my_lib] #[derive(Debug)] struct S;"
             ),
-            "#[doc=\"a\"]#[::my_lib]#[derive(Debug)]\
-             #[::l::announce::__private::_actually_run_announce(_announce_format_version=\"1\",\
-             _announce_owned(my_lib,other),crate=::l::announce,a::check)]\
-             #[my_lib(1)]#[other]#[my_lib::y=1]structS;"
+            [
+                "#[doc=\"a\"]#[::my_lib]#[derive(Debug)]\
+                 #[::l::announce::__private::_actually_run_announce(_announce_format_version=\"1\",\
+                 _announce_sentinel=\"impl\",_announce_owned(my_lib,other),\
+                 crate=::l::announce,a::check)]\
+                 #[my_lib(1)]#[other]#[my_lib::y=1]structS;",
+                CHK
+            ]
+            .concat()
         );
         // A `cfg_attr` that has an owned attribute among its attributes is owned as well,
         // and so is one nested in another; one that has not is not.
@@ -781,10 +1076,14 @@ mod tests {
                 &["my_lib"],
                 "#[cfg_attr(a, my_lib(1))] #[cfg_attr(a, inline, cfg_attr(b, my_lib))] #[cfg_attr(a, inline)] #[cfg_attr(my_lib, inline)] struct S;"
             ),
-            "#[cfg_attr(a,inline)]#[cfg_attr(my_lib,inline)]\
-             #[::l::announce::__private::_actually_run_announce(_announce_format_version=\"1\",\
-             _announce_owned(my_lib),crate=::l::announce)]\
-             #[cfg_attr(a,my_lib(1))]#[cfg_attr(a,inline,cfg_attr(b,my_lib))]structS;"
+            [
+                "#[cfg_attr(a,inline)]#[cfg_attr(my_lib,inline)]\
+                 #[::l::announce::__private::_actually_run_announce(_announce_format_version=\"1\",\
+                 _announce_sentinel=\"impl\",_announce_owned(my_lib),crate=::l::announce)]\
+                 #[cfg_attr(a,my_lib(1))]#[cfg_attr(a,inline,cfg_attr(b,my_lib))]structS;",
+                CHK
+            ]
+            .concat()
         );
         // Merged into the runner: those that were there stay first, the new ones follow.
         assert_eq!(
@@ -930,10 +1229,207 @@ mod tests {
         )));
         assert!(
             out.starts_with("#[derive(Debug)]#[::l::announce::__private::_actually_run_announce(")
-                && out.ends_with("#[my_lib(x)]pubstructS;"),
+                && out.contains("#[my_lib(x)]pubstructS;"),
             "{}",
             out
         );
+    }
+
+    // ---- the sentinel -----------------------------------------------------------------
+
+    #[test]
+    fn the_sentinel_is_an_impl_check_for_a_struct_enum_or_union_without_generics() {
+        for item in [
+            "pub struct S(pub u8);",
+            "enum S { A }",
+            "pub(crate) union S { a: u8 }",
+        ] {
+            let out = made("crate = ::l::announce", &[], &format!("#[x] {}", item));
+            assert!(out.contains("_announce_sentinel=\"impl\""), "{}", out);
+            // After the item, a sibling.
+            assert!(out.ends_with(CHK), "{}", out);
+            assert_eq!(out.matches("__announce_chk").count(), 2, "{}", out);
+            assert!(!out.contains("__announce_exists"), "{}", out);
+        }
+    }
+
+    #[test]
+    fn the_sentinel_is_the_call_of_the_trampoline_for_everything_else() {
+        for (opts, item, name) in [
+            ("", "struct S<T>(T);", "S"),
+            ("", "struct S<'a>(&'a u8);", "S"),
+            ("", "pub enum S<const N: usize> { A }", "S"),
+            ("", "union S<T: Copy> { a: T }", "S"),
+            ("", "pub trait S {}", "S"),
+            ("", "type S = u8;", "S"),
+            ("", "mod S {}", "S"),
+            ("mock = a::B", "struct S;", "S"),
+            ("emit_item = false", "struct S;", "S"),
+            ("macro_name = N", "trait S {}", "N"),
+            ("macro_name = N, emit_item = false", "mod S {}", "N"),
+        ] {
+            let opts = format!("crate = ::l::announce, {}", opts);
+            let out = made(&opts, &[], &format!("#[x] {}", item));
+            assert!(
+                out.contains("_announce_sentinel=\"macro\""),
+                "{}: {}",
+                item,
+                out
+            );
+            assert!(
+                out.ends_with(&format!("{}!{{@__announce_exists}}", name)),
+                "{}: {}",
+                item,
+                out
+            );
+            assert!(!out.contains("__announce_chk"), "{}: {}", item, out);
+        }
+        // A raw name is called as it is written.
+        let out = made("", &[], "#[x] trait r#match {}");
+        assert!(out.ends_with("r#match!{@__announce_exists}"), "{}", out);
+    }
+
+    #[test]
+    fn the_sentinel_has_the_cfgs_of_the_item() {
+        // The item and its sentinel go away together.
+        let out = made(
+            "crate = ::l::announce",
+            &[],
+            "#[cfg(a)] #[x] #[cfg(not(b))] struct S;",
+        );
+        assert!(
+            out.ends_with(&format!("#[cfg(a)]#[cfg(not(b))]{}", CHK)),
+            "{}",
+            out
+        );
+        let out = made("crate = ::l::announce", &[], "#[cfg(a)] #[x] trait S {}");
+        assert!(out.ends_with("#[cfg(a)]S!{@__announce_exists}"), "{}", out);
+        // A `cfg_attr` that is not about a `cfg` does not matter; one that can make a `cfg`
+        // leaves the sentinel out, as it could not tell if the item is there.
+        let out = made(
+            "crate = ::l::announce",
+            &[],
+            "#[cfg_attr(a, derive(Debug))] struct S;",
+        );
+        assert!(out.ends_with(CHK), "{}", out);
+        for item in [
+            "#[cfg_attr(a, cfg(b))] #[x] struct S;",
+            "#[x] #[cfg_attr(a, cfg_attr(b, cfg(c)))] trait S {}",
+        ] {
+            let out = made("crate = ::l::announce", &[], item);
+            assert!(
+                out.contains("_actually_run_announce(_announce_format_version=\"1\"")
+                    && !out.contains("_announce_sentinel")
+                    && !out.contains("__announce_chk")
+                    && !out.contains("__announce_exists"),
+                "{}: {}",
+                item,
+                out
+            );
+        }
+    }
+
+    #[test]
+    fn only_the_announcement_that_puts_the_runner_emits_a_sentinel() {
+        // Merged into the runner: no sentinel, and the one of the runner is kept.
+        let item = format!(
+            "#[x] {} struct S;",
+            runner(&format!("{}, _announce_sentinel = \"impl\"", V))
+        );
+        let out = made("meta = b::x", &[], &item);
+        assert!(!out.contains("compile_error"), "{}", out);
+        assert_eq!(out.matches("_announce_sentinel").count(), 1, "{}", out);
+        assert!(!out.contains("__announce_chk"), "{}", out);
+        // The runner that expands, merged into another one.
+        let out = norm(&run(
+            ts(&format!(
+                "{}, _announce_sentinel = \"macro\", meta = a::x",
+                V
+            )),
+            ts(&item),
+        ));
+        assert!(
+            out.contains("_announce_sentinel=\"impl\"") && !out.contains("\"macro\""),
+            "{}",
+            out
+        );
+        assert!(!out.contains("__announce_chk"), "{}", out);
+        // At once: no runner, no sentinel.
+        let out = attribute("crate = ::l::announce", "/// d\npub struct S;");
+        assert!(
+            !out.contains("_announce_sentinel") && !out.contains("__announce_chk"),
+            "{}",
+            out
+        );
+        // The runner reads its sentinel, and refuses one that it does not know.
+        let args = RunnerArgs::read(ts(&format!("{}, _announce_sentinel = \"macro\"", V))).unwrap();
+        assert_eq!(args.sentinel, Some(Sentinel::Macro));
+        assert_eq!(
+            norm(&args.to_token_stream()),
+            "_announce_format_version=\"1\",_announce_sentinel=\"macro\""
+        );
+        let e = RunnerArgs::read(ts(&format!("{}, _announce_sentinel = \"cake\"", V)))
+            .err()
+            .unwrap();
+        assert!(e.to_string().contains("unknown sentinel `cake`"), "{}", e);
+    }
+
+    #[test]
+    fn mock_and_emit_item_false_belong_to_the_first_announcement_of_a_struct() {
+        let with = |sentinel: &str, opt: &str| {
+            format!(
+                "#[x] {} struct S;",
+                runner(&format!(
+                    "{}, _announce_sentinel = \"{}\", {}",
+                    V, sentinel, opt
+                ))
+            )
+        };
+        for (opt, shown) in [
+            ("emit_item = false", "`emit_item=false`"),
+            ("mock = a::B", "`mock`"),
+        ] {
+            // A later announcement that takes the `Announce` impl away is one error, with
+            // the item (and its runner, so that nothing else follows).
+            let item = format!(
+                "#[x] {} struct S;",
+                runner(&format!("{}, _announce_sentinel = \"impl\"", V))
+            );
+            let out = made(opt, &[], &item);
+            assert!(out.starts_with("::core::compile_error!"), "{}", out);
+            assert!(
+                out.contains("mustbeonthefirstannouncementofanitem") && out.contains(shown),
+                "{}",
+                out
+            );
+            assert_eq!(out.matches("compile_error").count(), 1, "{}", out);
+            assert!(out.ends_with(&norm(&ts(&item))), "{}", out);
+            // The same when the runner that expands is the one that does it.
+            let out = norm(&run(ts(&format!("{}, {}", V, opt)), ts(&item)));
+            assert!(
+                out.contains("mustbeonthefirstannouncementofanitem"),
+                "{}",
+                out
+            );
+            assert!(out.ends_with(&norm(&ts(&item))), "{}", out);
+            // The first announcement has it already (no impl, so a macro for the sentinel).
+            let item = with("macro", opt);
+            let out = made("meta = a::x", &[], &item);
+            assert!(!out.contains("compile_error"), "{}", out);
+        }
+        // It is the same option when the runner that expands has it.
+        let out = made(
+            "meta = a::x",
+            &[],
+            &format!(
+                "#[x] {} struct S;",
+                runner(&format!(
+                    "{}, _announce_sentinel = \"macro\", mock = a::B",
+                    V
+                ))
+            ),
+        );
+        assert!(!out.contains("compile_error"), "{}", out);
     }
 
     // ---- the versions ----------------------------------------------------------------
@@ -1333,7 +1829,7 @@ mod tests {
             (format!("{} struct S;", A), &["m::a"]),
             // not emitted: through the runner as well
             (format!("{} {} struct S;", "#[::l::announce::announce(crate = ::l::announce, meta = m::a, emit_item = false)]", B), &["m::a", "m::b"]),
-            (format!("{} {} struct S;", A, "#[::l::announce::announce(emit_item = false, meta = m::b)]"), &["m::a", "m::b"]),
+            (format!("{} {} trait S {{}}", A, "#[::l::announce::announce(emit_item = false, meta = m::b)]"), &["m::a", "m::b"]),
         ];
         for (item, metas) in cases {
             let (steps, left) = expand(item);

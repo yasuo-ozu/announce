@@ -503,6 +503,40 @@ pub fn emit_announce(attr: TokenStream, item: TokenStream) -> TokenStream {
     TokenStream::from(quote! { #[::announce::announce(#attr)] #item })
 }
 
+/// An attribute macro of another crate that returns the item without its outer attributes,
+/// as a macro that rebuilds its input from the parsed fields does. It drops the runner that
+/// `#[announce]` has put last among the attributes, so nothing announces the item: the
+/// sentinel of the announcement fails at the definition.
+#[proc_macro_attribute]
+pub fn drop_attrs(_: TokenStream, item: TokenStream) -> TokenStream {
+    use proc_macro::TokenTree;
+    let mut tokens = item.into_iter().peekable();
+    // The attributes are `#` and a bracketed group, one after the other.
+    while matches!(tokens.peek(), Some(TokenTree::Punct(p)) if p.as_char() == '#') {
+        tokens.next();
+        tokens.next();
+    }
+    tokens.collect()
+}
+
+/// An attribute macro that puts a runner of another version of `announce` below the other
+/// attributes of the item, as a second `announce` crate in the build would.
+#[proc_macro_attribute]
+pub fn other_version(_: TokenStream, item: TokenStream) -> TokenStream {
+    use proc_macro::TokenTree;
+    let mut out = TokenStream::new();
+    let mut tokens = item.into_iter().peekable();
+    while matches!(tokens.peek(), Some(TokenTree::Punct(p)) if p.as_char() == '#') {
+        out.extend(tokens.next());
+        out.extend(tokens.next());
+    }
+    out.extend(TokenStream::from(quote! {
+        #[::announce::__private::_actually_run_announce(_announce_format_version = "7")]
+    }));
+    out.extend(tokens);
+    out
+}
+
 /// `#[late_announce(OPTIONS)]`: a macro that announces what it produces, wrongly: it adds
 /// `#[::announce::announce(OPTIONS)]` *below* the other attributes of the item, after
 /// the runner that `#[announce]` put there. That announcement is too late.

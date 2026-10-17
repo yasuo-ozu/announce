@@ -143,6 +143,23 @@ use proc_macro::TokenStream;
 ///   own travel in the runner and are united when announcements merge. `#[announce]` puts
 ///   the attributes its checks own right after the runner (rustc rejects an attribute that
 ///   nothing knows above a macro that has still to expand), and the runner removes them.
+/// - **A macro that drops the attributes of the item is an error at the definition.** A macro
+///   below `#[announce]` that returns the item without its outer attributes (one that rebuilds
+///   its input from the fields it parsed, say) drops the runner, and then nothing would
+///   announce the item. The announcement that puts the runner on the item also emits a
+///   *sentinel* after the item, which fails at the definition if the runner never runs: for a
+///   struct, enum or union without generic parameters, announced without `mock` and
+///   `emit_item = false`, a check that the item implements `Announce` (the error is that of
+///   `Announce`, "`S` is not announced", at the name of the item, though the item has an
+///   `#[announce]`: the macro removed it); for everything else the sentinel is a call of the
+///   trampoline, so the error is "cannot find macro `S`". An announcement that merges into
+///   a runner emits none, and nor does an item announced at once. Because the first
+///   announcement checks the `Announce` impl, `mock` and `emit_item = false` have to be on
+///   the first announcement of such a struct, enum or union: on a later one they are an error
+///   (no impl to find). Errors that the runner reports are reported at expansion, before the
+///   sentinel's, and the sentinel adds none of its own after a type error of the item or a
+///   version error from this `announce`; a version error reported by the other `announce`
+///   (which removes this runner) is followed by the sentinel's error.
 /// - **The format of the runner is versioned.** Its arguments start with the entry
 ///   `_announce_format_version = "1"`, which every `announce` that reads them checks
 ///   first, without reading the rest. If an item has runners of other versions (two versions

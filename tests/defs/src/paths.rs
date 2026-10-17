@@ -249,15 +249,17 @@ pub struct NotEmittedPassthrough(pub u8);
 #[::announce::announce(meta = paths::b)]
 pub struct NotEmittedBelow(pub u8);
 
+/// `emit_item = false` is on a later announcement of a trait here. For a struct, enum or
+/// union without generics it has to be on the first (see the UI test `merge_not_first`).
 #[::announce::announce(meta = paths::b)]
 #[::announce::announce(emit_item = false, meta = paths::a)]
-pub struct NotEmittedAbove(pub u8);
+pub trait NotEmittedAbove {}
 
 #[::announce::announce(meta = paths::a)]
 #[passthrough]
 #[::announce::announce(emit_item = false, meta = paths::b)]
 #[passthrough]
-pub struct NotEmittedBetween(pub u8);
+pub trait NotEmittedBetween {}
 
 /// A mock is compiled in a hidden module, and the item is not emitted.
 pub trait Real {

@@ -69,12 +69,15 @@
 //! [`announce`] goes the way of the attribute in this as well. If the item has other outer
 //! attributes, the output is the item with the hidden attribute
 //! `#[<crate path>::__private::_actually_run_announce(..)]`, the *runner*, as its last
-//! attribute, and nothing else. It holds the options (and the version of its encoding),
-//! and when it expands, after everything else on the item, it makes the trampoline. If the
-//! item has a runner already, because another announcement was expanded first, the options
-//! are merged into it. The output of a macro that calls [`announce`] must be an item that
-//! the compiler expands, so that the runner is expanded. An announcement with `mock` or
-//! `emit_item = false` is made at once. See [Several announcements on one
+//! attribute, and, after the item, a *sentinel* (an item that fails at the definition if the
+//! runner never runs, for example because a macro below returned the item without its
+//! attributes). The runner holds the options (and the version of its encoding), and when it
+//! expands, after everything else on the item, it makes the trampoline. If the item has a
+//! runner already, because another announcement was expanded first, the options are merged
+//! into it, with no sentinel. The output of a macro that calls [`announce`] must be an item
+//! (or items) that the compiler expands, so that the runner is expanded. An announcement
+//! with `mock` or `emit_item = false` goes the same way (the runner drops the item). See
+//! [Several announcements on one
 //! item](macro@crate::announce#several-announcements-on-one-item).
 //!
 //! ```
@@ -86,6 +89,8 @@
 //! let out = announce(attr, item).to_string();
 //! assert!(out.contains("__private ::_actually_run_announce"));
 //! assert!(out.contains("_announce_format_version = \"1\""));
+//! assert!(out.contains("_announce_sentinel = \"impl\""));
+//! assert!(out.contains("__announce_chk"));
 //! assert!(!out.contains("Capture"));
 //! ```
 //!

@@ -285,6 +285,61 @@ fn other_items_are_announced_in_the_same_way() {
 }
 
 #[test]
+fn the_trampoline_has_the_arm_of_the_sentinel() {
+    // The sentinel calls the trampoline with `@__announce_exists`, which expands to nothing,
+    // whatever the layout and the payload: a small item, a large one (held once), one with
+    // `$` in it, a module, and a trampoline that is renamed.
+    d::BareTwice! { @__announce_exists }
+    announce_test_defs::large::BigTrait! { @__announce_exists }
+    announce_test_defs::large::big_mod! { @__announce_exists }
+    announce_test_defs::kinds::with_macro! { @__announce_exists }
+    announce_test_defs::conflict::ParseAnnounce! { @__announce_exists }
+}
+
+#[test]
+#[allow(dead_code)]
+fn the_sentinel_works_in_the_body_of_a_function() {
+    use announce_test_derive::passthrough;
+    // The sentinel is a sibling of the item, also in a block: a struct, a generic struct
+    // (the call of its trampoline), a trait and a type alias.
+    #[::announce::announce]
+    #[passthrough]
+    struct Plain(u8);
+    #[::announce::announce]
+    #[passthrough]
+    struct Generic<T>(T);
+    #[::announce::announce]
+    #[passthrough]
+    trait Tr {
+        fn f(&self) -> u8;
+    }
+    #[::announce::announce(macro_name = AliasAnnounce)]
+    #[passthrough]
+    type Alias = [u8; 2];
+    #[::announce::announce(emit_item = false, macro_name = GoneAnnounce)]
+    #[passthrough]
+    struct Gone(u8);
+    #[cfg(any())]
+    #[::announce::announce]
+    #[passthrough]
+    struct CfgdOut(u8);
+    #[::announce::announce]
+    #[cfg(any())]
+    #[passthrough]
+    struct CfgdOutBelow(u8);
+    macro_rules! count {
+        ([$($l:tt)*] $($t:tt)*) => {
+            const N: &str = stringify!($($t)*);
+        };
+    }
+    Plain! { [Plain!, count!] }
+    assert!(norm(N).contains("structPlain"), "{}", N);
+    let _ = (Plain(0), Generic(0u8), Alias::default());
+    fn is<T: ?Sized + Announce>() {}
+    is::<Plain>();
+}
+
+#[test]
 fn owned_attributes_below_other_macros() {
     // The items compile: the attributes are the checks', and the runner removed them.
     let _ = (d::OwnedAfterPass(0), d::OwnersMixed(0));

@@ -28,6 +28,8 @@ pub(crate) enum Kind {
 pub(crate) struct Head {
     pub kind: Kind,
     pub ident: Ident,
+    /// A `<` follows the name: the item has generic parameters (lifetimes included).
+    pub generic: bool,
 }
 
 const UNSUPPORTED: &str =
@@ -155,7 +157,12 @@ pub(crate) fn head(tokens: &TokenStream) -> syn::Result<Head> {
             return Err(syn::Error::new_spanned(tokens, MOD_FILE));
         }
     }
-    Ok(Head { kind, ident })
+    let generic = is_punct(it.peek(), '<');
+    Ok(Head {
+        kind,
+        ident,
+        generic,
+    })
 }
 
 /// One outer attribute `#[..]` at the start of an item, as far as the scan reads it:
@@ -370,6 +377,24 @@ mod tests {
                 src,
                 e
             );
+        }
+    }
+
+    #[test]
+    fn generics_are_told_by_the_token_after_the_name() {
+        for (src, generic) in [
+            ("struct S;", false),
+            ("pub struct S { a: u8 }", false),
+            ("struct S(u8);", false),
+            ("struct S where u8: Copy;", false),
+            ("type S = Vec<u8>;", false),
+            ("struct S<T>(T);", true),
+            ("pub enum S<'a> { A(&'a u8) }", true),
+            ("union S<T: Copy> { a: T }", true),
+            ("trait S<T> {}", true),
+            ("#[a] type S<T> = Vec<T>;", true),
+        ] {
+            assert_eq!(head(&ts(src)).unwrap().generic, generic, "{}", src);
         }
     }
 

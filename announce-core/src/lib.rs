@@ -69,10 +69,12 @@ fn random_u64() -> u64 {
 /// item with the hidden attribute macro `#[<crate path>::__private::_actually_run_announce(..)]`
 /// (the *runner*) as its last attribute, which holds the options and generates the
 /// trampoline when it expands, after every other attribute macro on the item (and drops
-/// the item, with `mock` or `emit_item = false`). If the item has the runner already
-/// (another announcement was expanded first), the options are merged into it. An item
-/// with no other attribute that could expand (documentation and `repr` cannot) is
-/// announced at once. See [Several announcements on one
+/// the item, with `mock` or `emit_item = false`), and, after the item, a *sentinel* that
+/// fails at the definition if the runner never runs (a macro below that drops the attributes
+/// of the item). If the item has the runner already (another announcement was expanded
+/// first), the options are merged into it, with no sentinel. An item with no other attribute
+/// that could expand (documentation and `repr` cannot) is announced at once, with no runner
+/// and no sentinel. See [Several announcements on one
 /// item](https://docs.rs/announce/latest/announce/attr.announce.html#several-announcements-on-one-item).
 pub fn announce(attr: TokenStream, item: TokenStream) -> TokenStream {
     try_announce(attr, item).unwrap_or_else(|e| e.to_compile_error())
@@ -119,9 +121,9 @@ pub(crate) fn announce_now(
     // No other attribute that could expand (documentation, `repr`, .. and the attributes
     // that the checks own do not): there is nothing to wait for.
     if !runner::can_expand_after(&item, owned) {
-        return capture_output(opts, attr, item, random, owned);
+        return capture_output(opts, attr, item, random, owned, None);
     }
-    runner::announce(opts, &head.ident, item, owned)
+    runner::announce(opts, head, item, owned)
 }
 
 /// What an announcement expands to when it is made (see `runner`), once the attribute
@@ -132,12 +134,17 @@ pub(crate) fn announce_now(
 /// evaluated in this crate, then `remove` deletes the dummy. Without owned
 /// attributes the item is emitted here, as written. With owned attributes it
 /// is the derive that emits it, from its cfg-evaluated copy and without them.
+///
+/// `sentinel` is the kind of sentinel that the announcement emitted next to the item, if
+/// it did: the derive then emits a stand-in for what the sentinel needs if it fails, so
+/// that the error it reports is not followed by the one of the sentinel.
 pub(crate) fn capture_output(
     opts: &Options,
     attr: &TokenStream,
     item: TokenStream,
     random: u64,
     owned: &OwnedAttrs,
+    sentinel: Option<runner::Sentinel>,
 ) -> TokenStream {
     let krate = opts.krate();
     let cap = Ident::new(
@@ -148,10 +155,14 @@ pub(crate) fn capture_output(
     let emit_item = opts.mock.is_none() && opts.emit_item && owned.is_empty();
     let names = owned.names();
     let owned_arg = (!owned.is_empty()).then(|| quote! { [ #(#names),* ] ; });
+    let sentinel_arg = sentinel.map(|s| {
+        let word = Ident::new(s.capture_word(), Span::call_site());
+        quote! { #word ; }
+    });
     quote! {
         #(if emit_item) { #item }
         #[derive(#krate::__private::Capture)]
-        #[__announce(#random_lit; #owned_arg #attr)]
+        #[__announce(#random_lit; #sentinel_arg #owned_arg #attr)]
         #[#krate::__private::remove]
         #[allow(dead_code, non_camel_case_types)]
         enum #cap { V = { #item 0 } }
@@ -346,8 +357,25 @@ pub fn capture(input: TokenStream) -> syn::Result<TokenStream> {
         None => return Ok(TokenStream::new()),
     };
     let args = dummy.args;
-    let item: syn::Item = syn::parse2(tokens.clone())?;
-    t.subject(|| generate::ident_vis(&item).map_or_else(|_| String::new(), |(i, _)| i.to_string()));
+    let item: syn::Item = match syn::parse2(tokens.clone()) {
+        Ok(item) => item,
+        // The announcement has a sentinel: what it needs stands in for the trampoline.
+        Err(e) => match (args.sentinel, scan::head(&tokens)) {
+            (Some(sentinel), Ok(head)) => {
+                let mut out = e.to_compile_error();
+                out.extend(generate::sentinel_stub(
+                    sentinel,
+                    &head.ident,
+                    &args.opts,
+                    args.random,
+                ));
+                return Ok(out);
+            }
+            _ => return Err(e),
+        },
+    };
+    let ident = generate::ident_vis(&item).ok().map(|(i, _)| i);
+    t.subject(|| ident.as_ref().map_or_else(String::new, |i| i.to_string()));
     t.step("parse");
     let prep = generate::prepare(item, Some(tokens), &args.opts, &args.owned);
     t.step("strip");
@@ -357,6 +385,14 @@ pub fn capture(input: TokenStream) -> syn::Result<TokenStream> {
             Err(e) => {
                 let mut out = e.to_compile_error();
                 out.extend(generate::real_item(&prep, &args.opts, &args.owned));
+                if let (Some(sentinel), Some(ident)) = (args.sentinel, &ident) {
+                    out.extend(generate::sentinel_stub(
+                        sentinel,
+                        ident,
+                        &args.opts,
+                        args.random,
+                    ));
+                }
                 out
             }
         },
@@ -371,6 +407,11 @@ mod tests {
     fn norm(ts: &TokenStream) -> String {
         ts.to_string().split_whitespace().collect()
     }
+
+    /// The sentinel of a struct `S` without generics (in the crate `::l::announce`), as
+    /// printed: it stands after the item.
+    const CHK: &str = "#[allow(deprecated)]const_:()={fn__announce_chk<T:?::core::marker::Sized\
+                       +::l::announce::Announce>(){}let_=__announce_chk::<S>;};";
 
     fn ts(s: &str) -> TokenStream {
         s.parse().unwrap()
@@ -471,7 +512,11 @@ mod tests {
         ));
         assert_eq!(
             out,
-            "#[derive(Debug)]#[::l::announce::__private::_actually_run_announce(_announce_format_version=\"1\",crate=::l::announce)]pubstructS{puba:u8}"
+            [
+                "#[derive(Debug)]#[::l::announce::__private::_actually_run_announce(_announce_format_version=\"1\",_announce_sentinel=\"impl\",crate=::l::announce)]pubstructS{puba:u8}",
+                CHK
+            ]
+            .concat()
         );
     }
 
@@ -532,7 +577,9 @@ mod tests {
             ts(&format!("#[x] {}", item)),
         ));
         assert!(
-            out.contains("_actually_run_announce(_announce_format_version=\"1\",layout=single)"),
+            out.contains(
+                "_actually_run_announce(_announce_format_version=\"1\",_announce_sentinel=\"impl\",layout=single)"
+            ),
             "{}",
             out
         );
@@ -614,7 +661,11 @@ mod tests {
         )));
         assert_eq!(
             out,
-            "#[x]#[::l::announce::__private::_actually_run_announce(_announce_format_version=\"1\",crate=::l::announce,a::check)]pubstructS{puba:u8}"
+            [
+                "#[x]#[::l::announce::__private::_actually_run_announce(_announce_format_version=\"1\",_announce_sentinel=\"impl\",crate=::l::announce,a::check)]pubstructS{puba:u8}",
+                CHK
+            ]
+            .concat()
         );
     }
 
@@ -649,8 +700,12 @@ mod tests {
         )));
         assert_eq!(
             out,
-            "#[x]#[::l::announce::__private::_actually_run_announce(_announce_format_version=\"1\",_announce_owned(my_lib,other),crate=::l::announce,a::check)]\
-             #[my_lib(on_item)]pubstructS{#[my_lib(skip)]puba:u8}"
+            [
+                "#[x]#[::l::announce::__private::_actually_run_announce(_announce_format_version=\"1\",_announce_sentinel=\"impl\",_announce_owned(my_lib,other),crate=::l::announce,a::check)]\
+                 #[my_lib(on_item)]pubstructS{#[my_lib(skip)]puba:u8}",
+                CHK
+            ]
+            .concat()
         );
     }
 
@@ -818,7 +873,11 @@ mod tests {
         )));
         assert_eq!(
             runner,
-            "#[other]#[::l::announce::__private::_actually_run_announce(_announce_format_version=\"1\",_announce_owned(my_lib),crate=::l::announce,a::check)]#[my_lib(x)]pubstructS;"
+            [
+                "#[other]#[::l::announce::__private::_actually_run_announce(_announce_format_version=\"1\",_announce_sentinel=\"impl\",_announce_owned(my_lib),crate=::l::announce,a::check)]#[my_lib(x)]pubstructS;",
+                CHK
+            ]
+            .concat()
         );
         // The same, driven all the way.
         let (end, queries) = drive(
@@ -878,8 +937,9 @@ mod tests {
             // Another attribute: the runner, which holds the option and drops the item
             // when it expands; the macros below see the item until then.
             let out = norm(&announce(ts(&attr), ts("#[derive(Debug)] pub struct S;")));
+            // The item is not emitted, so the sentinel is the call of the trampoline.
             let want = format!(
-                "#[derive(Debug)]#[::l::announce::__private::_actually_run_announce(_announce_format_version=\"1\",crate=::l::announce,{})]pubstructS;",
+                "#[derive(Debug)]#[::l::announce::__private::_actually_run_announce(_announce_format_version=\"1\",_announce_sentinel=\"macro\",crate=::l::announce,{})]pubstructS;S!{{@__announce_exists}}",
                 opt.replace(' ', "")
             );
             assert_eq!(out, want);
@@ -914,8 +974,8 @@ mod tests {
                 "attrs(my_lib)",
             )));
             assert!(
-                end.ends_with("pubstructS;")
-                    && end.contains("_actually_run_announce(_announce_format_version=\"1\",_announce_owned(my_lib),"),
+                end.contains("pubstructS;S!{@__announce_exists}")
+                    && end.contains("_actually_run_announce(_announce_format_version=\"1\",_announce_sentinel=\"macro\",_announce_owned(my_lib),"),
                 "{}",
                 end
             );
@@ -1108,6 +1168,89 @@ mod tests {
             norm(&capture(derive_input(DUMMY_ARGS, "pub struct S { pub a: Local }")).unwrap());
         assert!(out.starts_with("::core::compile_error!"), "{}", out);
         assert!(!out.contains("pubstructS"), "{}", out);
+    }
+
+    #[test]
+    fn the_capture_arguments_read_the_sentinel() {
+        use runner::Sentinel;
+        let with: options::CaptureArgs =
+            syn::parse2(ts("5u64; sentinel_impl; [a]; crate = ::l::announce")).unwrap();
+        assert_eq!(with.sentinel, Some(Sentinel::Impl));
+        assert_eq!(with.owned.names().len(), 1);
+        let with: options::CaptureArgs = syn::parse2(ts("5u64; sentinel_macro; c::check")).unwrap();
+        assert_eq!(with.sentinel, Some(Sentinel::Macro));
+        assert_eq!(norm(&with.opts.to_token_stream()), "c::check");
+        let without: options::CaptureArgs = syn::parse2(ts("5u64; c::check")).unwrap();
+        assert_eq!(without.sentinel, None);
+        assert!(syn::parse2::<options::CaptureArgs>(ts("5u64; sentinel_cake; c::check")).is_err());
+        // The announcement writes the word into the dummy, the capture reads it.
+        let out = norm(&capture_output(
+            &Options::default(),
+            &TokenStream::new(),
+            ts("pub struct S;"),
+            5,
+            &OwnedAttrs::new(),
+            Some(runner::Sentinel::Macro),
+        ));
+        assert!(
+            out.contains("#[__announce(5u64;sentinel_macro;)]"),
+            "{}",
+            out
+        );
+    }
+
+    #[test]
+    fn capture_leaves_what_the_sentinel_needs_next_to_its_error() {
+        // The error is reported; the sentinel of the announcement is satisfied, so that it
+        // does not add an error about the same item.
+        let args = "7u64; sentinel_impl; crate = ::l::announce";
+        for body in ["pub struct S { pub a: Local }", "pub struct S { pub a: }"] {
+            let out = norm(&capture(derive_input(args, body)).unwrap());
+            assert!(
+                out.starts_with("::core::compile_error!"),
+                "{}: {}",
+                body,
+                out
+            );
+            assert!(
+                out.ends_with("impl::l::announce::AnnounceforS{}"),
+                "{}: {}",
+                body,
+                out
+            );
+        }
+        let args = "7u64; sentinel_macro; crate = ::l::announce, macro_name = N";
+        for body in [
+            "pub trait S { fn f(&self) -> Local; }",
+            "pub trait S { fn }",
+        ] {
+            let out = norm(&capture(derive_input(args, body)).unwrap());
+            assert!(
+                out.starts_with("::core::compile_error!"),
+                "{}: {}",
+                body,
+                out
+            );
+            assert!(
+                out.contains(
+                    "macro_rules!__announce_stub_0000000000000007{(@__announce_exists)=>{};}"
+                ) && out.ends_with("use__announce_stub_0000000000000007asN;"),
+                "{}: {}",
+                body,
+                out
+            );
+        }
+        // Without a sentinel there is nothing of the kind.
+        let out =
+            norm(&capture(derive_input(DUMMY_ARGS, "pub struct S { pub a: Local }")).unwrap());
+        assert!(
+            !out.contains("Announce") && !out.contains("__announce_exists"),
+            "{}",
+            out
+        );
+        // The item is `cfg`'d out: nothing, as its sentinel.
+        let args = "7u64; sentinel_macro; crate = ::l::announce";
+        assert!(capture(derive_input(args, "")).unwrap().is_empty());
     }
 
     #[test]
