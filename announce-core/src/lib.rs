@@ -410,8 +410,8 @@ mod tests {
 
     /// The sentinel of a struct `S` without generics (in the crate `::l::announce`), as
     /// printed: it stands after the item.
-    const CHK: &str = "#[allow(deprecated)]const_:()={fn__announce_chk<T:?::core::marker::Sized\
-                       +::l::announce::Announce>(){}let_=__announce_chk::<S>;};";
+    const CHK: &str = "#[allow(deprecated)]const_:()={trait__AnnounceSentinel{}\
+                       impl__AnnounceSentinelforSwhereS:::l::announce::Announce{}};";
 
     fn ts(s: &str) -> TokenStream {
         s.parse().unwrap()

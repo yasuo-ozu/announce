@@ -90,7 +90,7 @@
 //! assert!(out.contains("__private ::__announce_runner"));
 //! assert!(out.contains("__announce_format_version = \"1\""));
 //! assert!(out.contains("__announce_sentinel = \"impl\""));
-//! assert!(out.contains("__announce_chk"));
+//! assert!(out.contains("__AnnounceSentinel"));
 //! assert!(!out.contains("Capture"));
 //! ```
 //!

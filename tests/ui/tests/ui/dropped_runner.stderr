@@ -10,12 +10,10 @@ help: the trait `Announce` is not implemented for `S`
 7 | pub struct S(pub u8);
   | ^^^^^^^^^^^^
   = note: add `#[announce]` to the definition of `S`; for items of std and core, use the stand-ins of the `announce-std` crate
-note: required by a bound in `_::__announce_chk`
- --> tests/ui/dropped_runner.rs:5:1
+help: add `#![feature(trivial_bounds)]` to the crate attributes to enable
   |
-5 | #[::announce::announce(meta = my_lib::a)]
-  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `__announce_chk`
-  = note: this error originates in the attribute macro `::announce::announce` (in Nightly builds, run with -Z macro-backtrace for more info)
+5 + #![feature(trivial_bounds)]
+  |
 
 error[E0277]: `E` is not announced: its definition has no `#[announce]`
   --> tests/ui/dropped_runner.rs:11:10
@@ -29,9 +27,7 @@ help: the trait `Announce` is not implemented for `E`
 11 | pub enum E {
    | ^^^^^^^^^^
    = note: add `#[announce]` to the definition of `E`; for items of std and core, use the stand-ins of the `announce-std` crate
-note: required by a bound in `_::__announce_chk`
-  --> tests/ui/dropped_runner.rs:9:1
+help: add `#![feature(trivial_bounds)]` to the crate attributes to enable
    |
- 9 | #[::announce::announce]
-   | ^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `__announce_chk`
-   = note: this error originates in the attribute macro `::announce::announce` (in Nightly builds, run with -Z macro-backtrace for more info)
+ 5 + #![feature(trivial_bounds)]
+   |

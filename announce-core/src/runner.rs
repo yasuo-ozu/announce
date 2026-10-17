@@ -81,13 +81,17 @@
 //!
 //!   ```text
 //!   const _: () = {
-//!       fn __announce_chk<T: ?::core::marker::Sized + KRATE::Announce>() {}
-//!       let _ = __announce_chk::<S>;
+//!       trait __AnnounceSentinel {}
+//!       impl __AnnounceSentinel for S where S: KRATE::Announce {}
 //!   };
 //!   ```
 //!
 //!   (with `#[allow(deprecated)]`). If the runner is gone the error is that of `Announce`
-//!   (`on_unimplemented`), at the name of the item.
+//!   (`on_unimplemented`), at the name of the item. The bound is in the `where` clause of
+//!   an impl: rustc checks it (a bound on a type without generic parameters that does not
+//!   hold is E0277), and it is not a use of `S` for the dead-code lint, as naming the type
+//!   in the body of a function would be: a private announced struct that nothing uses
+//!   still warns "struct `S` is never constructed" (not "field `0` is never read").
 //! - `macro`, for everything else (generic structs, traits, type aliases, inline modules,
 //!   `mock`, `emit_item = false`): a call of the trampoline, `NAME! { @__announce_exists }`,
 //!   where `NAME` is the `macro_name`, else the name of the item, as a bare name (so it works
@@ -186,10 +190,12 @@ const SENTINEL_KEY: &str = "__announce_sentinel";
 /// at the definition if the runner never runs (a macro below `#[announce]` that returns
 /// the item without its attributes drops the runner, and then nothing is announced).
 ///
-/// - [`Sentinel::Impl`]: `const _: () = { fn __announce_chk<T: ?Sized + KRATE::Announce>() {}
-///   let _ = __announce_chk::<S>; };`. It needs the runner to implement `Announce` for a
-///   type that can be named without reading generics: a struct, enum or union without
-///   generic parameters, announced without `mock` and `emit_item = false`.
+/// - [`Sentinel::Impl`]: `const _: () = { trait __AnnounceSentinel {}
+///   impl __AnnounceSentinel for S where S: KRATE::Announce {} };`. It needs the runner to
+///   implement `Announce` for a type that can be named without reading generics: a struct,
+///   enum or union without generic parameters, announced without `mock` and
+///   `emit_item = false`. The bound is in a `where` clause so that the sentinel is not a use
+///   of `S` for the dead-code lint.
 /// - [`Sentinel::Macro`]: `NAME! { @__announce_exists }`, a call of the trampoline, which has
 ///   an arm for it. Everything else.
 ///
@@ -264,12 +270,15 @@ impl Sentinel {
             Sentinel::Impl => {
                 let krate = opts.krate();
                 let ident = &head.ident;
+                // The bound has the span of the name of the item, so that its error is
+                // reported there, not at the attribute.
+                let bound = respan(quote! { #krate::Announce }, ident.span());
                 quote! {
                     #cfgs
                     #[allow(deprecated)]
                     const _: () = {
-                        fn __announce_chk<T: ?::core::marker::Sized + #krate::Announce>() {}
-                        let _ = __announce_chk::<#ident>;
+                        trait __AnnounceSentinel {}
+                        impl __AnnounceSentinel for #ident where #ident: #bound {}
                     };
                 }
             }
@@ -282,6 +291,24 @@ impl Sentinel {
             }
         }
     }
+}
+
+/// The tokens with this span, but for `$crate` (its span is what tells the crate it names).
+fn respan(ts: TokenStream, span: Span) -> TokenStream {
+    ts.into_iter()
+        .map(|mut tt| {
+            match &mut tt {
+                TokenTree::Group(g) => {
+                    let mut ng = Group::new(g.delimiter(), respan(g.stream(), span));
+                    ng.set_span(span);
+                    *g = ng;
+                }
+                TokenTree::Ident(i) if i == "$crate" => {}
+                t => t.set_span(span),
+            }
+            tt
+        })
+        .collect()
 }
 
 /// An error at the announcement that is expanding, and the item as it was.
@@ -978,8 +1005,8 @@ mod tests {
     const V: &str = "__announce_format_version = \"1\"";
 
     /// The sentinel of a struct `S` without generics, as printed (after the item).
-    const CHK: &str = "#[allow(deprecated)]const_:()={fn__announce_chk<T:?::core::marker::Sized\
-                       +::l::announce::Announce>(){}let_=__announce_chk::<S>;};";
+    const CHK: &str = "#[allow(deprecated)]const_:()={trait__AnnounceSentinel{}\
+                       impl__AnnounceSentinelforSwhereS:::l::announce::Announce{}};";
 
     #[test]
     fn the_runner_is_put_last_with_the_version() {
@@ -1248,7 +1275,7 @@ mod tests {
             assert!(out.contains("__announce_sentinel=\"impl\""), "{}", out);
             // After the item, a sibling.
             assert!(out.ends_with(CHK), "{}", out);
-            assert_eq!(out.matches("__announce_chk").count(), 2, "{}", out);
+            assert_eq!(out.matches("__AnnounceSentinel").count(), 2, "{}", out);
             assert!(!out.contains("__announce_exists"), "{}", out);
         }
     }
@@ -1282,7 +1309,7 @@ mod tests {
                 item,
                 out
             );
-            assert!(!out.contains("__announce_chk"), "{}: {}", item, out);
+            assert!(!out.contains("__AnnounceSentinel"), "{}: {}", item, out);
         }
         // A raw name is called as it is written.
         let out = made("", &[], "#[x] trait r#match {}");
@@ -1320,7 +1347,7 @@ mod tests {
             assert!(
                 out.contains("__announce_runner(__announce_format_version=\"1\"")
                     && !out.contains("__announce_sentinel")
-                    && !out.contains("__announce_chk")
+                    && !out.contains("__AnnounceSentinel")
                     && !out.contains("__announce_exists"),
                 "{}: {}",
                 item,
@@ -1339,7 +1366,7 @@ mod tests {
         let out = made("meta = b::x", &[], &item);
         assert!(!out.contains("compile_error"), "{}", out);
         assert_eq!(out.matches("__announce_sentinel").count(), 1, "{}", out);
-        assert!(!out.contains("__announce_chk"), "{}", out);
+        assert!(!out.contains("__AnnounceSentinel"), "{}", out);
         // The runner that expands, merged into another one.
         let out = norm(&run(
             ts(&format!(
@@ -1353,11 +1380,11 @@ mod tests {
             "{}",
             out
         );
-        assert!(!out.contains("__announce_chk"), "{}", out);
+        assert!(!out.contains("__AnnounceSentinel"), "{}", out);
         // At once: no runner, no sentinel.
         let out = attribute("crate = ::l::announce", "/// d\npub struct S;");
         assert!(
-            !out.contains("__announce_sentinel") && !out.contains("__announce_chk"),
+            !out.contains("__announce_sentinel") && !out.contains("__AnnounceSentinel"),
             "{}",
             out
         );
