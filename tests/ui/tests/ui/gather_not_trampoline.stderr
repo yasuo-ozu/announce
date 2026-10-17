@@ -1,8 +1,8 @@
 error: announce: `forwards_only!` was fetched but did not provide a definition; is it an `#[announce]` trampoline?
   --> tests/ui/gather_not_trampoline.rs:10:11
    |
-10 |         $($n)? $(:: $ns)* ! { ($($o)*) [$($n)? $(:: $ns)* ! $($tail)*] $($r)* }
-   |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+10 |         $($n)? $(:: $ns)* ! { @announce_format "1" ($($o)*) [$($n)? $(:: $ns)* ! $($tail)*] $($r)* }
+   |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 ...
 14 | gathered! { [gathered!] (forwards_only) G }
    | ------------------------------------------- in this macro invocation

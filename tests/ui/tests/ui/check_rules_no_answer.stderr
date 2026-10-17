@@ -8,8 +8,8 @@ error: no rules expected `@`
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no rules expected this token in macro call
   |
 note: while trying to match `(`
- --> tests/ui/check_rules_no_answer.rs:4:6
+ --> tests/ui/check_rules_no_answer.rs:4:27
   |
-4 |     (($($args:tt)*), $($item:tt)*) => {};
-  |      ^
+4 |     (@announce_format "1" ($($args:tt)*), $($item:tt)*) => {};
+  |                           ^
   = note: this error originates in the attribute macro `announce::announce` (in Nightly builds, run with -Z macro-backtrace for more info)

@@ -129,7 +129,7 @@ pub mod vis {
 
     // Same-crate calls by relative, `self::`, `super::` and `crate::` paths.
     macro_rules! count {
-        ([$($l:tt)*] $($t:tt)*) => {
+        (@announce_format "1" [$($l:tt)*] $($t:tt)*) => {
             pub const SAME_CRATE: &str = stringify!($($t)*);
         };
     }
@@ -168,12 +168,12 @@ pub mod vis_single {
     }
 
     macro_rules! count {
-        ([$($l:tt)*] $($t:tt)*) => {
+        (@announce_format "1" [$($l:tt)*] $($t:tt)*) => {
             pub const SAME_CRATE: &str = stringify!($($t)*);
         };
     }
     macro_rules! count_bare {
-        ([$($l:tt)*] $($t:tt)*) => {
+        (@announce_format "1" [$($l:tt)*] $($t:tt)*) => {
             pub const BARE: &str = stringify!($($t)*);
         };
     }
@@ -276,7 +276,7 @@ macro_rules! via_dollar_crate {
 #[macro_export]
 #[doc(hidden)]
 macro_rules! dollar_crate_cb {
-    ([$($l:tt)*] $($t:tt)*) => {
+    (@announce_format "1" [$($l:tt)*] $($t:tt)*) => {
         pub const VIA_DOLLAR_CRATE: &str = stringify!($($t)*);
     };
 }

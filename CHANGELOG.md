@@ -102,6 +102,55 @@
   use them (flat_enum 0.2, for example) keep building; new code should call the
   functions. `announce::signature_only!` and the docs now use the functions.
 
+### Wire format
+
+- Every call that announce makes to the next element of a chain starts with
+  `@announce_format "1"`, the version of the wire format, so that a macro of yours (a
+  `macro_rules!` callback, check or transformer too) can tell that announce called it:
+  `(@announce_format "1" $($rest:tt)*) => { .. }`. It is the first thing in the call,
+  before `@__announce_self { .. }`, `@__announce_dollar { .. }`, `(OPTIONS)` and
+  `[LIST]`. It covers what the trampolines emit (to the next element and to
+  themselves, also in the dummy enum of a derive or attribute element), `Input::forward`,
+  `fetch`, `gather` and `forward_transformed`, `ContList::invoke`, `redirect` (which
+  moves the prefix of the payload to the front), the attribute query of the checks
+  (`@announce_format "1" @__announce_attrs [..] { STATE }`, also `Query::answer`) and the
+  call of a check at the definition (`@announce_format "1" (ARGS), ITEM`), the call of the
+  sentinel of the runner (`NAME! { @announce_format "1" @__announce_exists }`; the arm of the
+  trampoline and of the stand-in also takes the bare `NAME! { @__announce_exists }`), and
+  what `announce::helper::callback`, `transformer` and the macros `callback!` and
+  `transformer!` (which call them) emit. The version is
+  `announce::helper::ANNOUNCE_FORMAT`; `announce::helper::format_prefix()` writes the
+  prefix, and `Input::format` is the version a call came with.
+  - Everything announce parses accepts the prefix (`Input`, `Query`, `CheckInput`,
+    `CheckCall`, `check`, `finish!`, the trampolines), and a call without it, written by
+    hand (`S! { [S!, cb!] }`), keeps working: with no prefix there is no version, and
+    none is checked (no error, no warning). Only a version that is given and is not ours
+    is an error. A call with another version (`@announce_format "2"`) is one compile
+    error that names both versions; a trampoline, a `macro_rules!`, can only say which
+    version it takes.
+  - **Wire-format change.** A `macro_rules!` callback, check or transformer written
+    for 0.1.x matches the old shape (`([$($list:tt)*] ..)`, `(@__announce_attrs ..)`,
+    `(($($args:tt)*), $($item:tt)*)`) and does not match any more: put
+    `@announce_format "1"` before the old pattern (and in the calls it forwards), or
+    `$(@announce_format "1")?` to take both. The versions of announce in a chain must
+    match, in both directions. A trampoline made by 0.1.x has no arm for the prefix: a
+    call that this version makes to it (`Input::fetch` or `gather`, `ContList::invoke`,
+    `redirect`, a hand-written call with the prefix) reaches its catch-all, and rustc
+    reports `announce: invalid trampoline input; expected `Item! { [Item!, next!, ..]
+    .. }` ..` at the call. A callback or check that is built with the helpers of 0.1.x
+    cannot read the calls of this version either: `Input` fails with "expected square
+    brackets", and `check` with a `compile_error!` that says it expected
+    `@__announce_attrs`. Calls without the prefix from 0.1.x helpers into trampolines
+    of this version work (the prefix is optional there), but what those trampolines
+    call next has it.
+  - It is not `__announce_format_version`, the entry in the arguments of the runner
+    attribute: that one versions the encoding of the arguments of an attribute, which
+    the runners of two versions of announce compare when they meet on one item;
+    `@announce_format` versions the calls between macros. The runner is not a call of a
+    chain, so it has no `@announce_format`.
+  - A trampoline has 44 to 54 more tokens (925 to 969 for a struct with one field, 2063
+    to 2111 for a struct of 200 fields held once).
+
 ## 0.1.1
 
 - `no_std` definers: `announce::helper`, `announce::machinery` and

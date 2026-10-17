@@ -113,7 +113,7 @@
 //! let attr: TokenStream = "crate = ::my_lib::announce, ::my_lib::check".parse().unwrap();
 //! let item: TokenStream = "pub struct S { #[my_lib(skip)] pub a: u8 }".parse().unwrap();
 //! let out = announce(attr, item).to_string();
-//! assert!(out.starts_with(":: my_lib :: check ! { @ __announce_attrs"));
+//! assert!(out.starts_with(":: my_lib :: check ! { @ announce_format \"1\" @ __announce_attrs"));
 //! // The list starts with the macro that is called, and ends with `finish!`.
 //! assert!(out.contains("[:: my_lib :: check ! , :: my_lib :: announce :: __private :: finish !]"));
 //! ```

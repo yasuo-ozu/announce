@@ -23,7 +23,7 @@ use inner::Local;
 pub struct WithRepeater(pub Local);
 
 macro_rules! capture {
-    ([$($l:tt)*] $($t:tt)*) => { pub const OUT: &str = stringify!($($t)*); };
+    (@announce_format "1" [$($l:tt)*] $($t:tt)*) => { pub const OUT: &str = stringify!($($t)*); };
 }
 pub mod check {
     crate::Dotted! { [crate::Dotted!, capture!] }

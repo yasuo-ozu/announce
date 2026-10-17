@@ -16,18 +16,25 @@
 //! the order written, and ends with a hidden macro of `announce`, `finish!`:
 //!
 //! ```text
-//! a::check! { @__announce_attrs [ a::check!, b::check!, ::announce::__private::finish! ] { STATE } }
+//! a::check! { @announce_format "1" @__announce_attrs [ a::check!, b::check!, ::announce::__private::finish! ] { STATE } }
 //! ```
 //!
+//! Like every call that announce makes, it starts with the format prefix
+//! `@announce_format "1"` ([the wire format](crate::helper::Input#the-wire-format)).
 //! `STATE` is opaque to the checks. A check *answers* by dropping its own element
 //! (the head) and calling the next element with the rest of the list, which is now
 //! headed by the macro that is called. `STATE` is unchanged, followed by one
 //! `attrs(name, ..)` group if the check owns names:
 //!
 //! ```text
-//! b::check! { @__announce_attrs [ b::check!, ::announce::__private::finish! ] { STATE attrs(my_lib) } }
-//! ::announce::__private::finish! { @__announce_attrs [ ::announce::__private::finish! ] { STATE attrs(my_lib) } }
+//! b::check! { @announce_format "1" @__announce_attrs [ b::check!, ::announce::__private::finish! ] { STATE attrs(my_lib) } }
+//! ::announce::__private::finish! { @announce_format "1" @__announce_attrs [ ::announce::__private::finish! ] { STATE attrs(my_lib) } }
 //! ```
+//!
+//! A check that forwards the query writes the prefix again, as above
+//! ([`Query::answer`] does). The parsers of announce, and `finish!`, also take a query
+//! without the prefix, as a check written by hand may forward it; another version
+//! (`@announce_format "2"`) is an error that names both versions.
 //!
 //! `finish!` reads the names, rejects a reserved one ([`OwnedAttrs::check_names`]),
 //! and expands to what `#[announce]` expands to without checks, except that the item
@@ -37,7 +44,8 @@
 //!
 //! **Every check must answer**, also one that owns no attributes. A check that does
 //! not answer stops the chain: the item is not emitted, and rustc reports the call of
-//! that check. A `macro_rules!` check says "no rules expected the token `@`". A
+//! that check. A `macro_rules!` check says "no rules expected the token `@`" (when it
+//! has no arm for the query, or no arm for the prefix `@announce_format "1"`). A
 //! proc-macro check that parses [`CheckInput`](crate::helper::CheckInput) by hand says that
 //! it did not answer.
 //!
@@ -78,20 +86,24 @@
 //!
 //! ```text
 //! macro_rules! my_check {
-//!     (@__announce_attrs [ $($hp:ident)? $(:: $hs:ident)* ! , $($np:ident)? $(:: $ns:ident)* ! $(, $($rest:tt)*)? ] { $($state:tt)* }) => {
-//!         $($np)? $(:: $ns)* ! { @__announce_attrs [ $($np)? $(:: $ns)* ! $(, $($rest)*)? ] { $($state)* attrs(my_lib, other) } }
+//!     (@announce_format "1" @__announce_attrs [ $($hp:ident)? $(:: $hs:ident)* ! , $($np:ident)? $(:: $ns:ident)* ! $(, $($rest:tt)*)? ] { $($state:tt)* }) => {
+//!         $($np)? $(:: $ns)* ! { @announce_format "1" @__announce_attrs [ $($np)? $(:: $ns)* ! $(, $($rest)*)? ] { $($state)* attrs(my_lib, other) } }
 //!     };
-//!     (($($args:tt)*), $($item:tt)*) => { /* the check itself */ };
+//!     (@announce_format "1" ($($args:tt)*), $($item:tt)*) => { /* the check itself */ };
 //! }
 //! ```
+//!
+//! Both arms start with the prefix, because announce writes it in every call to a
+//! check. (A check that should also be callable by hand writes `$(@announce_format "1")?`
+//! instead.)
 //!
 //! The arm matches the head only to skip it (`$hp` and `$hs` are not used). A check
 //! that wants to see its own path in the head can write that path in the pattern
 //! instead (`[ crate::my_check ! , ..`).
 //!
-//! The check itself runs as `my_check! { (ARGS), ITEM }`. `ITEM` has the owned
-//! attributes, with `#[cfg]` and `#[cfg_attr]` evaluated. The check validates them
-//! and returns a `compile_error!` at the offending attribute.
+//! The check itself runs as `my_check! { @announce_format "1" (ARGS), ITEM }`. `ITEM`
+//! has the owned attributes, with `#[cfg]` and `#[cfg_attr]` evaluated. The check
+//! validates them and returns a `compile_error!` at the offending attribute.
 //!
 //! # What is matched
 //!
@@ -106,7 +118,7 @@
 //!
 //! [announce-checks]: https://docs.rs/announce/latest/announce/attr.announce.html#checks-and-attributes-of-your-own
 
-use crate::helper::{Cont, ContList};
+use crate::helper::{format_prefix, parse_format, Cont, ContList};
 use proc_macro2::{Ident, Span, TokenStream};
 use std::collections::HashSet;
 use syn::ext::IdentExt;
@@ -486,7 +498,10 @@ fn drop_marked_attributes(ts: TokenStream) -> TokenStream {
     out.into_iter().collect()
 }
 
-/// The query a check receives: `@__announce_attrs [ THIS!, NEXT!, .. ] { STATE }`.
+/// The query a check receives:
+/// `@announce_format "1" @__announce_attrs [ THIS!, NEXT!, .. ] { STATE }`. The prefix is
+/// optional when parsing (a query written by hand), and always written by
+/// [`answer`](Self::answer).
 ///
 /// Answer it with [`answer`](Self::answer). The [module docs](self#the-query) have
 /// the protocol. [`check`](crate::helper::check) does this for a proc-macro check.
@@ -501,6 +516,8 @@ pub struct Query {
 
 impl Parse for Query {
     fn parse(input: ParseStream) -> Result<Self> {
+        // `@announce_format "1"` comes first, unless the query was written by hand.
+        parse_format(input)?;
         input.parse::<Token![@]>()?;
         let tag: Ident = input.parse()?;
         if tag != QUERY_TAG {
@@ -526,8 +543,9 @@ impl Parse for Query {
 
 impl Query {
     /// The call that answers the query for a check that owns `owned`. It calls the
-    /// element after the head, with the list from there on and the state plus
-    /// `attrs(..)` (the state unchanged if `owned` is empty). A reserved name gives
+    /// element after the head, with the prefix `@announce_format "1"`, the list from
+    /// there on and the state plus `attrs(..)` (the state unchanged if `owned` is
+    /// empty). A reserved name gives
     /// a `compile_error!`, and so does a list that is empty or has no element after
     /// its head.
     pub fn answer(&self, owned: &OwnedAttrs) -> TokenStream {
@@ -552,13 +570,13 @@ impl Query {
             }
         };
         let rest: ContList = it.cloned().collect();
-        let state = &self.state;
-        quote! { #next { @__announce_attrs #rest { #state #owned } } }
+        let (format, state) = (format_prefix(), &self.state);
+        quote! { #next { #format @__announce_attrs #rest { #state #owned } } }
     }
 }
 
 /// What a proc-macro check receives: the attribute [`Query`], or its own input
-/// (`(ARGS), ITEM`).
+/// (`(ARGS), ITEM`). Both may start with the prefix `@announce_format "1"`.
 ///
 /// [`check`](crate::helper::check) parses this and answers the query for you.
 #[allow(clippy::large_enum_variant)]
@@ -571,7 +589,10 @@ pub enum CheckCall {
 
 impl Parse for CheckCall {
     fn parse(input: ParseStream) -> Result<Self> {
-        if input.peek(Token![@]) {
+        // Both forms may start with `@announce_format "1"`: look behind it.
+        let ahead = input.fork();
+        parse_format(&ahead)?;
+        if ahead.peek(Token![@]) {
             Ok(CheckCall::Query(input.parse()?))
         } else {
             Ok(CheckCall::Run(input.parse()?))
@@ -769,12 +790,12 @@ mod tests {
         let answered = q.answer(&OwnedAttrs::from_strs(&["a", "c"]));
         assert_eq!(
             s(&answered),
-            "b::check!{@__announce_attrs[b::check!,::announce::__private::finish!]{[1u64;attr(x){structS;}]attrs(a,c)}}"
+            "b::check!{@announce_format\"1\"@__announce_attrs[b::check!,::announce::__private::finish!]{[1u64;attr(x){structS;}]attrs(a,c)}}"
         );
         // Owning nothing: the state is passed on as it is.
         assert_eq!(
             s(q.answer(&OwnedAttrs::new())),
-            "b::check!{@__announce_attrs[b::check!,::announce::__private::finish!]{[1u64;attr(x){structS;}]}}"
+            "b::check!{@announce_format\"1\"@__announce_attrs[b::check!,::announce::__private::finish!]{[1u64;attr(x){structS;}]}}"
         );
         // The answer is a query again, headed by the macro it calls: the next check
         // answers it in the same way, and the last call is `finish!` with `[finish!]`.
@@ -782,7 +803,7 @@ mod tests {
         assert_eq!(s(&q2.list), "[b::check!,::announce::__private::finish!]");
         assert_eq!(
             s(q2.answer(&OwnedAttrs::from_strs(&["b"]))),
-            "::announce::__private::finish!{@__announce_attrs[::announce::__private::finish!]{[1u64;attr(x){structS;}]attrs(a,c)attrs(b)}}"
+            "::announce::__private::finish!{@announce_format\"1\"@__announce_attrs[::announce::__private::finish!]{[1u64;attr(x){structS;}]attrs(a,c)attrs(b)}}"
         );
         // Every path form of the head and of the next element is kept as written.
         let q: Query = syn::parse_quote! {
@@ -790,19 +811,19 @@ mod tests {
         };
         assert_eq!(
             s(q.answer(&OwnedAttrs::new())),
-            "::x::b!{@__announce_attrs[::x::b!,self::d!,e!,f::finish!]{st}}"
+            "::x::b!{@announce_format\"1\"@__announce_attrs[::x::b!,self::d!,e!,f::finish!]{st}}"
         );
         // The same check twice is a list like any other.
         let q: Query = syn::parse_quote! { @__announce_attrs [ a!, a!, f::finish! ] { st } };
         assert_eq!(
             s(q.answer(&OwnedAttrs::new())),
-            "a!{@__announce_attrs[a!,f::finish!]{st}}"
+            "a!{@announce_format\"1\"@__announce_attrs[a!,f::finish!]{st}}"
         );
         // The check before `finish!`.
         let q: Query = syn::parse_quote! { @__announce_attrs [ b!, f::finish! ] { st } };
         assert_eq!(
             s(q.answer(&OwnedAttrs::from_strs(&["a"]))),
-            "f::finish!{@__announce_attrs[f::finish!]{stattrs(a)}}"
+            "f::finish!{@announce_format\"1\"@__announce_attrs[f::finish!]{stattrs(a)}}"
         );
     }
 

@@ -10,7 +10,7 @@ use announce_test_derive::summary;
 type Rows = &'static [(&'static str, &'static str, &'static str)];
 
 macro_rules! capture {
-    ([$($l:tt)*] $($t:tt)*) => {
+    (@announce_format "1" [$($l:tt)*] $($t:tt)*) => {
         pub const OUT: &str = stringify!($($t)*);
     };
 }
@@ -328,7 +328,7 @@ fn the_sentinel_works_in_the_body_of_a_function() {
     #[passthrough]
     struct CfgdOutBelow(u8);
     macro_rules! count {
-        ([$($l:tt)*] $($t:tt)*) => {
+        (@announce_format "1" [$($l:tt)*] $($t:tt)*) => {
             const N: &str = stringify!($($t)*);
         };
     }

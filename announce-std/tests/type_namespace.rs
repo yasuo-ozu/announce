@@ -1,7 +1,7 @@
 fn takes_debug<T: announce_std::fmt::Debug>(_: T) {}
 
 macro_rules! got {
-    ([$($l:tt)*] $($p:ident)? $(:: $s:ident)* ! => [mock($($m:tt)*)] { $($item:tt)* }) => {
+    (@announce_format "1" [$($l:tt)*] $($p:ident)? $(:: $s:ident)* ! => [mock($($m:tt)*)] { $($item:tt)* }) => {
         const MOCK: &str = stringify!($($m)*);
     };
 }
@@ -15,7 +15,7 @@ fn derive_named_trait_in_type_namespace() {
 
 #[allow(unused_macros)]
 macro_rules! grab {
-    ([$($l:tt)*] $($p:ident)? $(:: $s:ident)* ! => [$($m:tt)*] { $($item:tt)* }) => {
+    (@announce_format "1" [$($l:tt)*] $($p:ident)? $(:: $s:ident)* ! => [$($m:tt)*] { $($item:tt)* }) => {
         pub const ITEM: &str = stringify!($($item)*);
     };
 }

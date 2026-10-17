@@ -6,7 +6,7 @@
 use announce_test_defs::docs as d;
 
 macro_rules! capture {
-    ([$($l:tt)*] $($t:tt)*) => {
+    (@announce_format "1" [$($l:tt)*] $($t:tt)*) => {
         pub const OUT: &str = stringify!($($t)*);
     };
 }

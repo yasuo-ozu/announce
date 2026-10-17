@@ -104,10 +104,10 @@ pub struct KeptWithDerive {
 #[macro_export]
 #[doc(hidden)]
 macro_rules! record_item {
-    (@__announce_attrs [ $($hp:ident)? $(:: $hs:ident)* ! , $($np:ident)? $(:: $ns:ident)* ! $(, $($rest:tt)*)? ] { $($state:tt)* }) => {
-        $($np)? $(:: $ns)* ! { @__announce_attrs [ $($np)? $(:: $ns)* ! $(, $($rest)*)? ] { $($state)* } }
+    (@announce_format "1" @__announce_attrs [ $($hp:ident)? $(:: $hs:ident)* ! , $($np:ident)? $(:: $ns:ident)* ! $(, $($rest:tt)*)? ] { $($state:tt)* }) => {
+        $($np)? $(:: $ns)* ! { @announce_format "1" @__announce_attrs [ $($np)? $(:: $ns)* ! $(, $($rest)*)? ] { $($state)* } }
     };
-    (($($args:tt)*), $($item:tt)*) => {
+    (@announce_format "1" ($($args:tt)*), $($item:tt)*) => {
         /// What the check received.
         pub const CHECKED: &str = stringify!($($item)*);
     };
