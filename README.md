@@ -45,14 +45,6 @@ show! {
 `META` lists what the definer attached (checks, `meta` entries). Callers and
 callbacks need no dependency on announce.
 
-For a struct, enum or union it also implements the
-[`Announce`](https://docs.rs/announce/latest/announce/trait.Announce.html) trait,
-so that a consumer can ask for a clear error when an item is not announced.
-
-An item that several attributes and macros announce, yours and those of the
-libraries you use, makes one trampoline, with the options of all of them
-([details](https://docs.rs/announce/latest/announce/attr.announce.html#several-announcements-on-one-item)).
-
 ## Calling a trampoline
 
 One callback can take many definitions. The list names the trampolines, then
