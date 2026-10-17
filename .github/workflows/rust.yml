@@ -56,8 +56,8 @@ jobs:
 
   msrv:
     # 1.57: announce, announce-core (with announce::helper), announce-macros,
-    # announce-std, announce without its default feature; 1.59: the whole workspace
-    # (a `repeater` needs 1.59).
+    # announce-std, the cross-crate tests with subcrate (tests/subcrate), announce
+    # without its default feature; 1.59: the whole workspace (a `repeater` needs 1.59).
     # tools/msrv.sh builds a scratch copy with an MSRV-compatible lock file.
 
     runs-on: ubuntu-latest

@@ -54,6 +54,7 @@ members = [
     "tests/machinery",
     "tests/machinery-lib",
     "tests/machinery-user",
+    "tests/subcrate",
 ]
 # A plain `cargo test` / `cargo build` in a workspace with a root package acts
 # on that package only; list every member (and the root, ".") to keep it
@@ -71,6 +72,7 @@ default-members = [
     "tests/machinery",
     "tests/machinery-lib",
     "tests/machinery-user",
+    "tests/subcrate",
 ]
 # `tests/ui` needs a newer rustc (trybuild); `tests/renamed-ws` is its own
 # workspace, because it tests a workspace-inherited rename (`ann-ws.workspace = true`).

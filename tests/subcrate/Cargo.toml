@@ -1,0 +1,22 @@
+[package]
+name = "announce-test-subcrate"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.57"
+publish = false
+build = "build.rs"
+
+# Cross-crate tests with real crate boundaries, written as inline `#[subcrate]`
+# modules in the test files (see src/lib.rs). `build.rs` builds the subcrates; the
+# dependencies below are the ones a subcrate links with `#[subcrate(::name)]`.
+[dependencies]
+announce = { path = "../.." }
+# Only the `#[subcrate]` attribute is needed here: the build helper, `subcrate::build`
+# (the default feature `build`), is a build-dependency.
+subcrate = { version = "0.1", default-features = false }
+proc-macro2 = "1"
+syn = { version = "2.0.25", features = ["full", "extra-traits"] }
+template-quote = "0.4"
+
+[build-dependencies]
+subcrate = "0.1"

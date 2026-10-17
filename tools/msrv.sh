@@ -1,8 +1,9 @@
 #!/bin/sh
 # Builds and tests announce on its minimum Rust versions, in a scratch copy:
 #   1.57   announce, announce-core (with `announce::helper`), announce-macros,
-#          announce-std and the tests without a `repeater` (derive, machinery*);
-#          announce without its default feature `proc-macro-api`
+#          announce-std and the tests without a `repeater` (derive, machinery*,
+#          subcrate: the cross-crate tests with `subcrate`); announce without its
+#          default feature `proc-macro-api`
 #   1.59   the whole workspace
 # Needs the rustup toolchains 1.57.0 and 1.59.0 (`rustup toolchain install
 # 1.57.0 --profile minimal`), and a stable cargo of 1.84 or newer. Set
@@ -42,7 +43,7 @@ run() {
 
 run 1.57.0 test -p announce -p announce-core -p announce-macros -p announce-std \
     -p announce-test-derive -p announce-test-machinery -p announce-test-machinery-lib \
-    -p announce-test-machinery-user
+    -p announce-test-machinery-user -p announce-test-subcrate
 run 1.57.0 build -p announce-std --no-default-features
 run 1.57.0 build -p announce --no-default-features
 run 1.59.0 test --workspace
