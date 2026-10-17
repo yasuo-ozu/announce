@@ -6,12 +6,11 @@
 //!
 //! - the attribute with its own name, and a renamed import of it, in every order and with
 //!   macros between;
-//! - the derive that the author writes, above and below the attribute, with helper
-//!   attributes;
+//! - derives of other traits, above and below the attribute, and the bare attribute;
 //! - checks that own attributes (on the item, in fields, in a `cfg_attr`), two
 //!   announcements with checks of their own, the query asked once for each;
 //! - the items that are not structs, and the other macros.
-#![allow(dead_code, deprecated)]
+#![allow(dead_code)]
 
 use announce::announce;
 use announce::announce as ann;
@@ -81,64 +80,55 @@ pub struct EmitAfterRenamed(pub u8);
 #[::announce::announce(meta = runner::c)]
 pub struct Names(pub u8);
 
-// ---- the derive that the author writes ---------------------------------------------
+// ---- derives of other traits, and the bare attribute ----------------------------------
 
-/// The attribute above the derive: the derive stands aside, the runner makes the
-/// trampoline.
+/// The attribute above the derive: it puts the runner below the derive.
 #[ann(meta = runner::a)]
-#[derive(::announce::Announce)]
+#[derive(Debug)]
 pub struct AttrThenDerive(pub u8);
 
 #[ann(meta = runner::a)]
-#[derive(::announce::Announce)]
-#[announce(meta = runner::h)]
-pub struct AttrThenDeriveHelper(pub u8);
+#[derive(Debug)]
+#[announce(meta = runner::b)]
+pub struct AttrThenDeriveBare(pub u8);
 
-/// The derive above the attribute, with a helper attribute in between: the derive stands
-/// aside, and the helper is merged.
-#[derive(::announce::Announce)]
-#[announce(meta = runner::h)]
+/// The derive above the attribute: the bare attribute expands first, and the attribute
+/// below it is merged into its runner.
+#[derive(Debug)]
+#[announce(meta = runner::b)]
 #[::announce::announce(meta = runner::a)]
 pub struct DeriveThenAttr(pub u8);
 
-/// Two attributes, the derive and two helpers.
+/// Two attributes, the derive and two bare attributes.
 #[::announce::announce(meta = runner::a)]
-#[derive(::announce::Announce)]
-#[announce(meta = runner::h1)]
-#[announce(meta = runner::h2)]
-#[::announce::announce(meta = runner::b)]
+#[derive(Debug)]
+#[announce(meta = runner::b1)]
+#[announce(meta = runner::b2)]
+#[::announce::announce(meta = runner::c)]
 pub struct DeriveAmong(pub u8);
 
-/// A check on the attribute below the derive, which owns an attribute of the item, and
-/// a helper attribute. The helper has to be taken over before the query: after it, it is
-/// out of the scope of the derive ("cannot find attribute `announce`").
-#[derive(::announce::Announce)]
-#[announce(meta = runner::h)]
+/// A check on the attribute below the bare one, which owns an attribute of the item: the
+/// bare attribute expands first and puts the runner below the owned attribute.
+#[derive(Debug)]
+#[announce(meta = runner::b)]
 #[::announce::announce(lib_check)]
 #[my_lib(x)]
-pub struct DeriveHelperCheck(pub u8);
+pub struct BareThenCheck(pub u8);
 
-/// The check of the helper and of the attribute is the same: it is run once, and asked
+/// The check of both is the same: it is asked once for each announcement, and listed
 /// once.
-#[derive(::announce::Announce)]
+#[derive(Debug)]
 #[announce(lib_check)]
 #[::announce::announce(lib_check)]
 #[my_lib(x)]
-pub struct DeriveHelperSameCheck(pub u8);
+pub struct SameCheckTwice(pub u8);
 
-/// A check that only the helper has: it is asked, with the other one, in one query.
-#[derive(::announce::Announce)]
-#[announce(other_check, tick(helper))]
-#[::announce::announce(lib_check, tick(attr))]
+/// Two announcements with a check of their own: they are asked, each once.
+#[derive(Debug)]
+#[announce(other_check, tick(first))]
+#[::announce::announce(lib_check, tick(second))]
 #[my_lib(x)]
-pub struct DeriveHelperOtherCheck(pub u8);
-
-/// Two derives of the author's: both stand aside for the attribute below.
-#[derive(::announce::Announce)]
-#[announce(meta = runner::h)]
-#[derive(::announce::Announce)]
-#[::announce::announce(meta = runner::a)]
-pub struct DeriveTwiceAndAttr(pub u8);
+pub struct TwoChecksAroundDerive(pub u8);
 
 // ---- checks that own attributes -----------------------------------------------------
 
@@ -218,8 +208,8 @@ pub struct RunQueriedAfterPass(pub u8);
 pub struct RunQueriedTwice(pub u8);
 
 #[ann(count_query, meta = runner::a)]
-#[derive(::announce::Announce)]
-#[announce(meta = runner::h)]
+#[derive(Debug)]
+#[announce(meta = runner::b)]
 pub struct RunQueriedWithDerive(pub u8);
 
 /// Each check runs once (`tick` leaves a constant: a second run would define it twice).

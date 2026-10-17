@@ -44,8 +44,7 @@ pub enum Layout {
     Direct,
 }
 
-/// The parsed arguments of `#[announce(..)]` or of the `#[announce(..)]`
-/// helper attribute of `#[derive(Announce)]`.
+/// The parsed arguments of `#[announce(..)]`.
 ///
 /// Parse it from the attribute's tokens with [`syn::parse2`]; the grammar and
 /// the meaning of every option are those of the `#[announce]` attribute
@@ -76,8 +75,8 @@ pub struct Options {
     /// `crate = path`: path to the `announce` crate in generated code. When it
     /// is `None`, [`Options::krate()`] looks the crate up in `Cargo.toml`.
     pub krate: Option<Path>,
-    /// `emit_item = false`: do not re-emit the item (for derives, whose input
-    /// already exists). Default `true`.
+    /// `emit_item = false`: do not re-emit the item (it is emitted by someone else).
+    /// Default `true`.
     pub emit_item: bool,
     /// `layout = auto | single | direct`: how the trampoline holds the item.
     /// Default `auto`: by the size of the item (advanced).
@@ -87,10 +86,7 @@ pub struct Options {
     /// `false`: they are removed there, which makes the trampoline smaller.
     /// The item that is compiled keeps its docs either way.
     pub docs: bool,
-    /// Set by `#[derive(Announce)]`: the item is emitted by the user and always
-    /// gets the `Announce` impl. Not an option.
-    pub(crate) derived: bool,
-    /// The option keys that were written (for derive-specific errors).
+    /// The option keys that were written (a value that is set is told from a default).
     pub(crate) given: Vec<String>,
     /// Checks: bare `path` / `path(args)` entries. They run at the definition.
     pub checks: Vec<Check>,
@@ -110,7 +106,6 @@ impl Default for Options {
             emit_item: true,
             layout: Layout::Auto,
             docs: false,
-            derived: false,
             given: Vec::new(),
             checks: Vec::new(),
             metas: Vec::new(),
@@ -236,8 +231,7 @@ impl Options {
     /// | `layout` | the one that is not `auto`; both and different is a conflict |
     /// | `emit_item` | the one that is set (written, or `false`); both and different is a conflict |
     ///
-    /// `derived` is not written by anyone: the target's stays. The written keys
-    /// (`given`) are united. The attributes that checks own are not an option: they
+    /// The written keys (`given`) are united. The attributes that checks own are not an option: they
     /// come from the checks' answers to the query (the runner carries them).
     pub(crate) fn merge(
         &self,
@@ -359,8 +353,7 @@ impl Parse for Options {
                                  use `macro_name = ..` to choose the public name"
                             } else {
                                 "`marker` was removed: the `Announce` impl follows the item \
-                                 (none with `emit_item = false` or `mock`); use `#[derive(Announce)]` \
-                                 to announce a struct, enum or union and implement it"
+                                 (none with `emit_item = false` or `mock`)"
                             },
                         ))
                     }

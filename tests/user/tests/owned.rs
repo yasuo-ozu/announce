@@ -370,25 +370,25 @@ fn an_item_with_dollar_passes_through_a_macro_rules_check() {
     assert_eq!(d::with_dollar_rules::twenty_four(), 24);
 }
 
-mod derived_check {
+mod checked_with_derive {
     use super::{owned_report, summary};
-    announce_test_defs::checks::DerivedChecked! { [announce_test_defs::checks::DerivedChecked!, summary!] ONE }
-    announce_test_defs::checks::DerivedChecked! { [announce_test_defs::checks::DerivedChecked!, owned_report!] TWO }
+    announce_test_defs::checks::CheckedWithDerive! { [announce_test_defs::checks::CheckedWithDerive!, summary!] ONE }
+    announce_test_defs::checks::CheckedWithDerive! { [announce_test_defs::checks::CheckedWithDerive!, owned_report!] TWO }
 }
 
 #[test]
-fn the_derive_form_runs_its_checks_through_the_query() {
-    let row = derived_check::ONE[0];
-    assert_eq!(row.2, "struct DerivedChecked");
+fn a_check_of_an_item_with_a_derive_runs_through_the_query() {
+    let row = checked_with_derive::ONE[0];
+    assert_eq!(row.2, "struct CheckedWithDerive");
     // The check is in META, and no attribute is owned.
     assert_eq!(
         norm(row.1),
-        "announce_test_derive::no_tuple(derived),$crate::info(1)"
+        "announce_test_derive::no_tuple(runner),$crate::info(1)"
     );
-    assert_eq!(derived_check::TWO, ["|0|0"]);
+    assert_eq!(checked_with_derive::TWO, ["|0|0"]);
     // The item is the user's, as written, with the `Announce` impl.
     fn assert_announced<T: announce::Announce>() {}
-    assert_announced::<announce_test_defs::checks::DerivedChecked>();
+    assert_announced::<announce_test_defs::checks::CheckedWithDerive>();
 }
 
 // REST: the tokens after the entries are the caller's. The protocol puts the owned
@@ -517,29 +517,33 @@ fn rest_is_unchanged_for_large_items_with_owned_attributes() {
 }
 
 #[test]
-fn rest_is_unchanged_on_the_derive_route_with_a_check() {
-    mod derived {
+fn rest_is_unchanged_for_an_item_with_a_derive_and_a_check() {
+    mod with_derive {
         use super::{d, rest_probe};
-        rest!(call_def d::DerivedOwned; [d::DerivedOwned!, rest_probe!]);
+        rest!(call_def d::OwnedWithDerive; [d::OwnedWithDerive!, rest_probe!]);
     }
     mod mixed {
         use super::{d, rest_probe};
-        rest!(call_def d::DerivedOwned; [d::DerivedOwned!, announce_test_defs::checks::DerivedChecked!, d::Fields!, rest_probe!]);
+        rest!(call_def d::OwnedWithDerive; [d::OwnedWithDerive!, announce_test_defs::checks::CheckedWithDerive!, d::Fields!, rest_probe!]);
     }
-    mod derived_empty {
+    mod with_derive_empty {
         use super::{d, rest_probe};
-        d::DerivedOwned! { [d::DerivedOwned!, rest_probe!] }
+        d::OwnedWithDerive! { [d::OwnedWithDerive!, rest_probe!] }
     }
-    // The derive sends the same query: the check's names are in META, and the item
-    // still has the attribute (a derive removes nothing).
-    assert_eq!(norm(derived::REST), passed());
-    assert_eq!(derived::ENTRIES, 1);
-    assert_eq!(derived::OWNED, ["rules"]);
-    assert_eq!(norm(derived::META[0]), "$crate::rules_check,attrs(rules)");
-    assert_eq!(derived_empty::REST, "");
-    assert_eq!(derived_empty::OWNED, ["rules"]);
-    assert_eq!(d::DerivedOwned { a: 1 }.a, 1);
-    // A derive with owned names, one without, and the attribute form, in one chain.
+    // The runner makes the trampoline: the check's names are in META, and the item
+    // is compiled without the attribute.
+    assert_eq!(norm(with_derive::REST), passed());
+    assert_eq!(with_derive::ENTRIES, 1);
+    assert_eq!(with_derive::OWNED, ["rules"]);
+    assert_eq!(
+        norm(with_derive::META[0]),
+        "$crate::rules_check,attrs(rules)"
+    );
+    assert_eq!(with_derive_empty::REST, "");
+    assert_eq!(with_derive_empty::OWNED, ["rules"]);
+    assert_eq!(d::OwnedWithDerive { a: 1 }.a, 1);
+    // An item with a derive and owned names, one without, and one with other owned
+    // names, in one chain.
     assert_eq!(norm(mixed::REST), passed());
     assert_eq!(mixed::ENTRIES, 3);
     assert_eq!(mixed::OWNED, ["rules", "", "my_lib"]);

@@ -1,10 +1,6 @@
 //! Definitions for the announce integration tests. The `x` feature is OFF here and
 //! ON in `announce-test-user`, to check that cfgs are evaluated in this crate.
 //!
-//! The definitions with a `#[derive(Announce)]` that the author writes are here on
-//! purpose, and so is the allowed warning: that derive is deprecated (it says to write
-//! `#[announce]` instead), and the tests are of the way it still works.
-#![allow(deprecated)]
 
 use announce::announce;
 
@@ -226,11 +222,11 @@ pub mod checks {
         pub a: u8,
     }
 
-    /// A check on the derive form: the derive sends the same query, and the
-    /// item stays as written.
-    #[derive(::announce::Announce, Debug)]
-    #[announce(announce_test_derive::no_tuple(derived), meta = crate::info(1))]
-    pub struct DerivedChecked {
+    /// A check on an item with a derive of another trait: the item goes through the
+    /// runner, which runs after the derive, and stays as written.
+    #[announce(announce_test_derive::no_tuple(runner), meta = crate::info(1))]
+    #[derive(Debug)]
+    pub struct CheckedWithDerive {
         pub a: u8,
         #[cfg(any())]
         pub gone: u8,
@@ -250,19 +246,20 @@ pub mod markers {
         type Out;
     }
 
-    /// The derive form: the item is emitted as written, options go in the
-    /// `#[announce(..)]` helper (with the `announce` attribute macro also in scope).
-    #[derive(::announce::Announce, Debug)]
+    /// An item with a derive of another trait, and options: the item is emitted as
+    /// written, the derive has run and is not in the payload.
     #[announce(meta = crate::info(1))]
-    pub struct Derived {
+    #[derive(Debug)]
+    pub struct WithDerive {
         pub a: u8,
         #[cfg(any())]
         pub gone: u8,
     }
 
-    /// Derive without options.
-    #[derive(::announce::Announce)]
-    pub enum DerivedEnum {
+    /// The same without options.
+    #[announce]
+    #[derive(Debug)]
+    pub enum WithDeriveEnum {
         A,
         B(u8),
     }
@@ -729,10 +726,10 @@ pub mod wrapper {
     }
 }
 
-/// Used across crates: a derived union.
-pub mod derived_union {
-    #[derive(::announce::Announce, Clone, Copy)]
-    #[announce(meta = crate::info(union))]
+/// Used across crates: a union with a derive of other traits.
+pub mod union_with_meta {
+    #[::announce::announce(meta = crate::info(union))]
+    #[derive(Clone, Copy)]
     pub union Raw {
         pub i: u32,
         pub f: f32,

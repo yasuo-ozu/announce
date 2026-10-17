@@ -84,17 +84,18 @@ pub mod kept_mod {
     pub struct Inside;
 }
 
-/// Doc of Derived.
-#[derive(announce::Announce)]
-pub struct Derived {
+/// Doc of WithDerive.
+#[announce]
+#[derive(Debug)]
+pub struct WithDerive {
     /// Doc of a.
     pub a: u8,
 }
 
-/// Doc of DerivedKept.
-#[derive(announce::Announce)]
+/// Doc of KeptWithDerive.
 #[announce(docs = true)]
-pub struct DerivedKept {
+#[derive(Debug)]
+pub struct KeptWithDerive {
     /// Doc of a.
     pub a: u8,
 }

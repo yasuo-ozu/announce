@@ -15,12 +15,11 @@
 //! ```
 //!
 //! ```text
-//! STATE := '[' RANDOM 'u64' ';' MODE '(' OPTIONS ')' '{' ITEM '}' ']'  ('attrs' '(' IDENT,* ')')*
-//! MODE  := 'attr' | 'derive' | 'run'
+//! STATE := '[' RANDOM 'u64' ';' 'attr' '(' OPTIONS ')' '{' ITEM '}' ']'  ('attrs' '(' IDENT,* ')')*
 //! ```
 //!
-//! The first group is written by `#[announce]` (or by the derive, or by the runner) and
-//! is only read by `finish`. The `attrs(..)` groups are what the checks add.
+//! The first group is written by `#[announce]` and is only read by `finish`. The
+//! `attrs(..)` groups are what the checks add.
 
 use crate::helper::{OwnedAttrs, Query};
 use crate::options::{Check, Options};
@@ -29,68 +28,43 @@ use syn::parse::{Parse, ParseStream};
 use syn::{Result, Token};
 use template_quote::quote;
 
-/// Which expansion started the query.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Mode {
-    /// `#[announce(..)]`: `finish` makes the announcement (the runner, or the
-    /// trampoline at once).
-    Attribute,
-    /// `#[derive(Announce)]`: the item is already there.
-    Derive,
-    /// The runner, which asks the checks of the helper attributes it has taken over:
-    /// `finish` generates the trampoline.
-    Run,
-}
-
-impl Mode {
-    fn word(self) -> &'static str {
-        match self {
-            Mode::Attribute => "attr",
-            Mode::Derive => "derive",
-            Mode::Run => "run",
-        }
-    }
-}
+/// The word that tags the state of the query that `#[announce]` starts.
+const TAG: &str = "attr";
 
 const STATE_ERROR: &str = "announce: the state of the attribute query was changed by a check. \
      A check must forward `{ STATE }` unchanged and may only append `attrs(name, ..)`; see the \
      `announce::helper::attrs` docs";
 
 /// The call of the first check, with the query: the expansion of
-/// `#[announce(a, b, ..)]` when there are checks, and of the derive. `ask`, the checks to
-/// ask, is not empty: it is `opts.checks` unless some of them were asked before, and
-/// `seed` is what they answered (it goes in the state as `attrs(..)`, like the answer of
-/// a check).
+/// `#[announce(a, b, ..)]` when there are checks. `ask`, the checks to ask, is not empty:
+/// it is `opts.checks`.
 ///
 /// The list is headed by the macro that is called, like a continuation list:
 /// `a! { @__announce_attrs [ a!, b!, KRATE::__private::finish! ] { STATE } }`.
 pub(crate) fn query(
     opts: &Options,
-    mode: Mode,
     attr: &TokenStream,
     item: &TokenStream,
     random: u64,
     ask: &[Check],
-    seed: &OwnedAttrs,
 ) -> TokenStream {
     let krate = opts.krate();
     let lit = syn::LitInt::new(&format!("{}u64", random), Span::call_site());
-    let mode = Ident::new(mode.word(), Span::call_site());
+    let tag = Ident::new(TAG, Span::call_site());
     let paths: Vec<&syn::Path> = ask.iter().map(|c| &c.path).collect();
-    // `ask` is not empty: with nothing to ask there is no query (`runner::run`).
+    // `ask` is not empty: with nothing to ask there is no query (`try_announce`).
     let first = paths.first().expect("a query needs a check");
     quote! {
         #first ! {
             @__announce_attrs
             [ #(#paths ! ,)* #krate::__private::finish! ]
-            { [ #lit ; #mode ( #attr ) { #item } ] #seed }
+            { [ #lit ; #tag ( #attr ) { #item } ] }
         }
     }
 }
 
 struct State {
     random: u64,
-    mode: Mode,
     attr: TokenStream,
     item: TokenStream,
     owned: OwnedAttrs,
@@ -102,13 +76,10 @@ impl Parse for State {
         syn::bracketed!(core in input);
         let lit: syn::LitInt = core.parse()?;
         core.parse::<Token![;]>()?;
-        let mode: Ident = core.parse()?;
-        let mode = match mode.to_string().as_str() {
-            "attr" => Mode::Attribute,
-            "derive" => Mode::Derive,
-            "run" => Mode::Run,
-            _ => return Err(syn::Error::new(mode.span(), STATE_ERROR)),
-        };
+        let tag: Ident = core.parse()?;
+        if tag != TAG {
+            return Err(syn::Error::new(tag.span(), STATE_ERROR));
+        }
         let attr;
         syn::parenthesized!(attr in core);
         let attr: TokenStream = attr.parse()?;
@@ -133,7 +104,6 @@ impl Parse for State {
         }
         Ok(State {
             random: lit.base10_parse()?,
-            mode,
             attr,
             item,
             owned,
@@ -142,17 +112,16 @@ impl Parse for State {
 }
 
 /// What the hidden macro `finish!` of the `announce` crate does: the end of the
-/// attribute query that `#[announce(check, ..)]` and the derives send through
-/// their checks (see [`crate::helper::attrs`] for the protocol).
+/// attribute query that `#[announce(check, ..)]` sends through its checks (see
+/// [`crate::helper::attrs`] for the protocol).
 ///
 /// `input` is the call's input, `@__announce_attrs [ finish! ] { STATE }` (the
 /// list is headed by the macro that is called, `finish!` itself, and has nothing
 /// else), where `STATE` is what `#[announce]` wrote and the checks added their
 /// `attrs(..)` to. The result is what `#[announce]` expands to without checks: the
 /// item with the runner (see `announce::announce`, "Several announcements on one item"),
-/// or the item and the capture dummy; for a derive, the trampoline and the other
-/// generated items. The item the compiler sees in the end has no attribute that a check
-/// owns; the payload and the checks do.
+/// or the item and the capture dummy. The item the compiler sees in the end has no
+/// attribute that a check owns; the payload and the checks do.
 ///
 /// A library does not call this: its query ends at the macro of the `announce`
 /// crate (`<crate path>::__private::finish!`, reached through the `crate = ..`
@@ -201,40 +170,18 @@ pub fn try_finish(input: TokenStream) -> Result<TokenStream> {
     state.owned.check_names()?;
     let opts: Options = syn::parse2(state.attr.clone())?;
     t.step("state");
-    match state.mode {
-        Mode::Attribute => {
-            // `#[announce]` checked the kind of the item before it started the
-            // query; a check could have damaged it since. Its syntax is checked
-            // by the capture derive.
-            let head = crate::scan::head(&state.item)?;
-            t.step("scan");
-            // The query is answered, so what the checks own is known: this is where
-            // the announcement is made (see `announce_now`).
-            Ok(crate::announce_now(
-                &opts,
-                &state.attr,
-                state.item,
-                state.random,
-                &state.owned,
-                &head,
-            ))
-        }
-        Mode::Run => {
-            // The runner has all it needs: the trampoline.
-            t.step("scan");
-            Ok(crate::capture_output(
-                &opts,
-                &state.attr,
-                state.item,
-                state.random,
-                &state.owned,
-            ))
-        }
-        Mode::Derive => {
-            let item: syn::Item = syn::parse2(state.item)?;
-            crate::generate::ident_vis(&item)?;
-            t.step("parse");
-            crate::finish_derive_now(item, opts, state.random, &state.owned, &mut t)
-        }
-    }
+    // `#[announce]` checked the kind of the item before it started the query; a check
+    // could have damaged it since. Its syntax is checked by the capture derive.
+    let head = crate::scan::head(&state.item)?;
+    t.step("scan");
+    // The query is answered, so what the checks own is known: this is where the
+    // announcement is made (see `announce_now`).
+    Ok(crate::announce_now(
+        &opts,
+        &state.attr,
+        state.item,
+        state.random,
+        &state.owned,
+        &head,
+    ))
 }

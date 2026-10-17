@@ -27,9 +27,9 @@ mod rows_a {
 mod rows_b {
     use super::{d, summary};
     d::AttrThenDerive! {
-        [d::AttrThenDerive!, d::AttrThenDeriveHelper!, d::DeriveThenAttr!, d::DeriveAmong!,
-         d::DeriveHelperCheck!, d::DeriveHelperSameCheck!, d::DeriveHelperOtherCheck!,
-         d::DeriveTwiceAndAttr!, d::OwnedAfterPass!, d::OwnersMixed!, d::TwoChecks!, d::TwoChecksEnum!, d::RecordsCfgAttr!,
+        [d::AttrThenDerive!, d::AttrThenDeriveBare!, d::DeriveThenAttr!, d::DeriveAmong!,
+         d::BareThenCheck!, d::SameCheckTwice!, d::TwoChecksAroundDerive!,
+         d::OwnedAfterPass!, d::OwnersMixed!, d::TwoChecks!, d::TwoChecksEnum!, d::RecordsCfgAttr!,
          d::RunQueriedOnce!, d::RunQueriedAfterPass!, d::RunQueriedTwice!, d::RunQueriedWithDerive!,
          d::Ticked!, d::TraitTwice!, d::TraitEmit!, d::twice_mod!, d::TwiceAlias!, summary!] ALL
     }
@@ -55,7 +55,7 @@ fn norm(s: &str) -> String {
 fn the_attribute_with_its_own_name_twice() {
     let rows = rows_a::ALL;
     assert_eq!(rows.len(), 10);
-    // The second `#[announce]` is a bare attribute: the first takes it over.
+    // The second `#[announce]` is merged into the runner that the first has put on the item.
     assert_eq!(meta(rows, "BareTwice"), "runner::b");
     assert_eq!(meta(rows, "BareTwiceEnum"), "runner::a,runner::b");
     assert_eq!(meta(rows, "BareTwiceUnion"), "runner::a,runner::b");
@@ -67,8 +67,8 @@ fn the_attribute_with_its_own_name_twice() {
 #[test]
 fn a_renamed_import_is_an_announcement_in_every_order() {
     let rows = rows_a::ALL;
-    // The renamed attribute is not taken over, it is merged into the runner: the entries
-    // of the announcement that expands first come first.
+    // The renamed attribute is merged into the runner: the entries of the announcement
+    // that expands first come first.
     assert_eq!(meta(rows, "RenamedTwice"), "runner::b");
     assert_eq!(meta(rows, "RenamedAfterPass"), "runner::a,runner::b");
     assert_eq!(meta(rows, "RenamedAmongPass"), "runner::a,runner::b");
@@ -84,7 +84,7 @@ fn a_renamed_import_is_an_announcement_in_every_order() {
         meta(rows, "EmitAfterRenamed"),
         "runner::a,runner::b,runner::e"
     );
-    // Under both names, with a derive of someone else; the bare one is taken over.
+    // Under both names, with a derive of someone else.
     assert_eq!(meta(rows, "Names"), "runner::a,runner::b,runner::c");
     is_announce::<d::RenamedTwice>();
     is_announce::<d::RenamedAfterPass>();
@@ -98,58 +98,59 @@ fn a_renamed_import_is_an_announcement_in_every_order() {
 }
 
 #[test]
-fn the_derive_that_the_author_writes_stands_aside() {
+fn derives_of_other_traits_and_the_bare_attribute() {
     let rows = rows_b::ALL;
     assert_eq!(meta(rows, "AttrThenDerive"), "runner::a");
-    // The helper attributes of the derive are taken over by the announcement.
-    assert_eq!(meta(rows, "AttrThenDeriveHelper"), "runner::a,runner::h");
-    assert_eq!(meta(rows, "DeriveThenAttr"), "runner::a,runner::h");
+    assert_eq!(meta(rows, "AttrThenDeriveBare"), "runner::a,runner::b");
+    // The bare attribute expands first, the attribute below it is merged into its runner.
+    assert_eq!(meta(rows, "DeriveThenAttr"), "runner::b,runner::a");
     assert_eq!(
         meta(rows, "DeriveAmong"),
-        "runner::a,runner::h1,runner::h2,runner::b"
+        "runner::a,runner::b1,runner::b2,runner::c"
     );
-    assert_eq!(meta(rows, "DeriveTwiceAndAttr"), "runner::a,runner::h");
     is_announce::<d::AttrThenDerive>();
-    is_announce::<d::AttrThenDeriveHelper>();
+    is_announce::<d::AttrThenDeriveBare>();
     is_announce::<d::DeriveThenAttr>();
     is_announce::<d::DeriveAmong>();
-    is_announce::<d::DeriveTwiceAndAttr>();
+    // The derives ran.
+    let _ = format!("{:?}", d::DeriveThenAttr(1));
 }
 
 #[test]
-fn a_derive_with_a_helper_and_an_attribute_with_a_check() {
-    // `#[derive(Announce)] #[announce(meta = ..)] #[::announce::announce(lib_check)]
-    // #[my_lib(x)]` did not compile: "cannot find attribute `announce`".
+fn a_bare_attribute_and_an_attribute_with_a_check() {
+    // `#[derive(Debug)] #[announce(meta = ..)] #[::announce::announce(lib_check)]
+    // #[my_lib(x)]`: the bare attribute expands first and puts the runner below the
+    // attribute with the check, which owns `my_lib`.
     let rows = rows_b::ALL;
-    let m = meta(rows, "DeriveHelperCheck");
+    let m = meta(rows, "BareThenCheck");
     assert!(
-        m.contains("lib_check") && m.contains("runner::h") && m.contains("attrs(my_lib)"),
+        m.contains("lib_check") && m.contains("runner::b") && m.contains("attrs(my_lib)"),
         "{}",
         m
     );
-    is_announce::<d::DeriveHelperCheck>();
-    let _ = d::DeriveHelperCheck(0);
-    // The check of the helper is the check of the attribute: asked once, listed once.
-    let m = meta(rows, "DeriveHelperSameCheck");
+    is_announce::<d::BareThenCheck>();
+    let _ = d::BareThenCheck(0);
+    // The same check twice: asked once for each announcement, listed once.
+    let m = meta(rows, "SameCheckTwice");
     assert_eq!(m.matches("lib_check").count(), 1, "{}", m);
     assert!(m.contains("attrs(my_lib)"), "{}", m);
-    is_announce::<d::DeriveHelperSameCheck>();
-    // Two checks, one of them the helper's, asked together; each runs once.
-    let m = meta(rows, "DeriveHelperOtherCheck");
+    is_announce::<d::SameCheckTwice>();
+    // Two checks of two announcements; each runs once.
+    let m = meta(rows, "TwoChecksAroundDerive");
     for name in [
         "lib_check",
         "other_check",
-        "tick(helper)",
-        "tick(attr)",
+        "tick(first)",
+        "tick(second)",
         "my_lib",
         "other",
         "tag",
     ] {
         assert!(m.contains(name), "{}: {}", name, m);
     }
-    assert_eq!(d::TICK_DERIVEHELPEROTHERCHECK_HELPER, 0);
-    assert_eq!(d::TICK_DERIVEHELPEROTHERCHECK_ATTR, 0);
-    is_announce::<d::DeriveHelperOtherCheck>();
+    assert_eq!(d::TICK_TWOCHECKSAROUNDDERIVE_FIRST, 0);
+    assert_eq!(d::TICK_TWOCHECKSAROUNDDERIVE_SECOND, 0);
+    is_announce::<d::TwoChecksAroundDerive>();
 }
 
 mod owned_after_pass {

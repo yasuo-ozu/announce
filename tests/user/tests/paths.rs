@@ -14,7 +14,9 @@ mod rows_foreign {
     paths::ForeignBelow! {
         [paths::ForeignBelow!, paths::ForeignAbove!, paths::ForeignBetween!, paths::ForeignTwice!,
          paths::ForeignWithOptions!, paths::bare::ForeignBare!, paths::bare::ForeignBareAbove!,
-         paths::bare::ForeignBareBetween!, paths::renamed::Twice!, paths::renamed::Thrice!,
+         paths::bare::ForeignBareBetween!, paths::bare::ForeignBareNoArgs!,
+         paths::bare::ForeignBareMeta!, paths::bare::ForeignBareNoArgsAbove!,
+         paths::bare::ForeignBareNoArgsBetween!, paths::renamed::Twice!, paths::renamed::Thrice!,
          paths::renamed::Mixed!, summary!] ALL
     }
 }
@@ -22,8 +24,8 @@ mod rows_foreign {
 mod rows_derives {
     use super::{paths, summary};
     paths::derives::AttrAbove! {
-        [paths::derives::AttrAbove!, paths::derives::AttrAboveHelper!, paths::derives::DeriveAbove!,
-         paths::derives::DeriveAboveHelper!, paths::derives::AttrAboveTwoHelpers!,
+        [paths::derives::AttrAbove!, paths::derives::AttrAboveBare!, paths::derives::DeriveAbove!,
+         paths::derives::DeriveAboveBare!, paths::derives::AttrAboveTwoBare!,
          paths::derives::TwoAttrsAbove!, paths::derives::TwoAttrsBelow!,
          paths::derives::DeriveBetween!, paths::derives::OtherDerives!, summary!] ALL
     }
@@ -102,7 +104,7 @@ fn an_attribute_of_another_crate_is_not_an_announcement() {
 #[test]
 fn a_bare_attribute_of_another_crate_is_not_an_announcement() {
     // `use announce_test_derive::announce; #[announce(level = 9)]`: a macro that is
-    // not ours is not taken over, not deleted, not given our options.
+    // not ours is not deleted, not given our options.
     let rows = rows_foreign::ALL;
     assert_eq!(paths::bare::FOREIGN_FOREIGNBARE_9, 9);
     assert_eq!(meta(rows, "ForeignBare"), "paths::a");
@@ -113,6 +115,29 @@ fn a_bare_attribute_of_another_crate_is_not_an_announcement() {
     is_announce::<paths::bare::ForeignBare>();
     is_announce::<paths::bare::ForeignBareAbove>();
     is_announce::<paths::bare::ForeignBareBetween>();
+}
+
+#[test]
+fn a_bare_attribute_of_another_crate_runs_next_to_ours() {
+    // `#[::announce::announce(meta = ..)] #[announce] struct S;` with a foreign macro
+    // imported as `announce`: the foreign macro runs, whatever its arguments (also ones
+    // that are options of ours), and the item is announced by ours alone.
+    let rows = rows_foreign::ALL;
+    assert_eq!(paths::bare::FOREIGN_FOREIGNBARENOARGS_ARGS, "");
+    assert_eq!(meta(rows, "ForeignBareNoArgs"), "paths::a");
+    assert_eq!(
+        paths::bare::FOREIGN_FOREIGNBAREMETA_ARGS,
+        "meta=paths::foreign"
+    );
+    assert_eq!(meta(rows, "ForeignBareMeta"), "paths::a");
+    assert_eq!(paths::bare::FOREIGN_FOREIGNBARENOARGSABOVE_ARGS, "");
+    assert_eq!(meta(rows, "ForeignBareNoArgsAbove"), "paths::a");
+    assert_eq!(paths::bare::FOREIGN_FOREIGNBARENOARGSBETWEEN_ARGS, "");
+    assert_eq!(meta(rows, "ForeignBareNoArgsBetween"), "paths::a,paths::b");
+    is_announce::<paths::bare::ForeignBareNoArgs>();
+    is_announce::<paths::bare::ForeignBareMeta>();
+    is_announce::<paths::bare::ForeignBareNoArgsAbove>();
+    is_announce::<paths::bare::ForeignBareNoArgsBetween>();
 }
 
 #[test]
@@ -135,30 +160,30 @@ fn a_renamed_import_is_an_announcement() {
 }
 
 #[test]
-fn derives_in_every_order() {
+fn derives_of_other_traits_in_every_order() {
     let rows = rows_derives::ALL;
     assert_eq!(rows.len(), 9);
     // The attribute is above the derive.
     assert_eq!(meta(rows, "AttrAbove"), "paths::a");
-    assert_eq!(meta(rows, "AttrAboveHelper"), "paths::a,paths::h");
+    assert_eq!(meta(rows, "AttrAboveBare"), "paths::a,paths::b");
     assert_eq!(
-        meta(rows, "AttrAboveTwoHelpers"),
-        "paths::a,paths::h1,paths::h2"
+        meta(rows, "AttrAboveTwoBare"),
+        "paths::a,paths::b1,paths::b2"
     );
     // The derive is above the attribute.
     assert_eq!(meta(rows, "DeriveAbove"), "paths::a");
-    assert_eq!(meta(rows, "DeriveAboveHelper"), "paths::a,paths::h");
-    // Two attributes and a derive.
-    // The first announcement takes the helper over, the second is merged into the runner.
-    assert_eq!(meta(rows, "TwoAttrsAbove"), "paths::a,paths::h,paths::b");
-    assert_eq!(meta(rows, "TwoAttrsBelow"), "paths::a,paths::h,paths::b");
-    assert_eq!(meta(rows, "DeriveBetween"), "paths::a,paths::h,paths::b");
+    assert_eq!(meta(rows, "DeriveAboveBare"), "paths::b,paths::a");
+    // Two attributes and a derive: the announcements are merged in the order they
+    // expand, from the top.
+    assert_eq!(meta(rows, "TwoAttrsAbove"), "paths::a,paths::b,paths::c");
+    assert_eq!(meta(rows, "TwoAttrsBelow"), "paths::c,paths::a,paths::b");
+    assert_eq!(meta(rows, "DeriveBetween"), "paths::a,paths::c,paths::b");
     assert_eq!(meta(rows, "OtherDerives"), "paths::a");
     is_announce::<paths::derives::AttrAbove>();
-    is_announce::<paths::derives::AttrAboveHelper>();
-    is_announce::<paths::derives::AttrAboveTwoHelpers>();
+    is_announce::<paths::derives::AttrAboveBare>();
+    is_announce::<paths::derives::AttrAboveTwoBare>();
     is_announce::<paths::derives::DeriveAbove>();
-    is_announce::<paths::derives::DeriveAboveHelper>();
+    is_announce::<paths::derives::DeriveAboveBare>();
     is_announce::<paths::derives::TwoAttrsAbove>();
     is_announce::<paths::derives::TwoAttrsBelow>();
     is_announce::<paths::derives::DeriveBetween>();

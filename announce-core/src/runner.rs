@@ -1,12 +1,11 @@
 //! Several announcements of one item: the runner.
 //!
-//! Downstream attribute and derive macros emit `#[announce(..)]` or
-//! `#[derive(Announce)]` on the items they produce. When two announcements apply to
-//! one item they must make one trampoline and one `Announce` impl, not two (the second
-//! would be E0252 and E0119). So the announcements are merged, and **one** attribute
-//! makes the trampoline: the *runner*, which stands last among the attributes of the
-//! item, and so expands after everything that is above it (rustc expands the attributes
-//! of an item from the top).
+//! Downstream attribute macros emit `#[announce(..)]` on the items they produce. When
+//! two announcements apply to one item they must make one trampoline and one `Announce`
+//! impl, not two (the second would be E0252 and E0119). So the announcements are merged,
+//! and **one** attribute makes the trampoline: the *runner*, which stands last among the
+//! attributes of the item, and so expands after everything that is above it (rustc
+//! expands the attributes of an item from the top).
 //!
 //! # The runner
 //!
@@ -40,26 +39,18 @@
 //!
 //! # `#[announce(ARGS)]`
 //!
-//! 1. Before anything else (before its query), it **takes over** the bare
-//!    `#[announce(..)]` attributes of the item whose arguments parse as options: it removes
-//!    them, and merges their options into its own ([`Options::merge`], its own options
-//!    first). They are the helper attributes of a `#[derive(Announce)]` that stood aside.
-//!    A helper attribute does not survive the query: the query hands the item over to
-//!    function-like macros, and what comes back is out of the scope of the derive's
-//!    helpers (`cannot find attribute announce`). Taken over, their checks join the one
-//!    query of this announcement. An attribute whose arguments do not parse as options
-//!    is not ours and stays.
-//! 2. If it has checks, it asks them which attributes they own (the query; it runs once
+//! 1. If it has checks, it asks them which attributes they own (the query; it runs once
 //!    for an announcement). See [`crate::finish`].
-//! 3. An item that has no other outer attribute that could expand has nothing to wait for:
+//! 2. An item that has no other outer attribute that could expand has nothing to wait for:
 //!    the trampoline is generated at once, and no runner is put on the item. Documentation
 //!    (`///` is the attribute `doc`), `#[repr(..)]` and the like cannot expand (see
 //!    [`INERT`]: built-in attributes that a bare name cannot make a macro of), and nor can
 //!    the attributes that the checks of this announcement own, which are stripped. This is
 //!    the common case of a plain item, and it takes one expansion. A `#[derive(..)]`, a
-//!    `#[cfg_attr(..)]` (which can expand to a macro), any other attribute, a bare
-//!    `#[announce(..)]` or an attribute with a path (`#[x::doc]`) makes the runner.
-//! 4. Otherwise the item comes back with the runner as its last attribute, or, if the
+//!    `#[cfg_attr(..)]` (which can expand to a macro), any other attribute (a bare
+//!    `#[announce]` too: it may be the macro of another crate) or an attribute with a path
+//!    (`#[x::doc]`) makes the runner.
+//! 3. Otherwise the item comes back with the runner as its last attribute, or, if the
 //!    item has one (the versions are checked first), with the options merged into it
 //!    (the runner is the target: its entries come first; options that differ are one
 //!    error with the item). Nothing else is emitted yet. The attributes that the checks
@@ -86,45 +77,31 @@
 //!    one and goes away: that one expands next;
 //! 2. reports an announcement that is still on the item. Everything above the runner has
 //!    expanded, so an attribute with a path that ends in `announce` (`::announce::announce`)
-//!    or a `#[derive(Announce)]` that is left was put there by a macro *below* the runner
-//!    (by appending it to its output, say): too late, it would make a second trampoline.
-//!    It is an error, and the attribute is removed (the options of a late announcement
-//!    are not merged). A renamed import (`#[ann]`) is not seen, and a late `#[ann]` makes
-//!    a second trampoline (E0252). A bare `#[announce(..)]` is a helper attribute, and
-//!    is taken over as below;
-//! 3. takes over the bare `#[announce(..)]` that are left. If they bring checks that nobody
-//!    has asked, those are asked (a query of mode `run`, with the answer that the runner
-//!    carries in the state); the others are answered in `_announce_owned`;
-//! 4. generates the trampoline and the `Announce` impl, with the merged options
+//!    that is left was put there by a macro *below* the runner (by appending it to its
+//!    output, say): too late, it would make a second trampoline. It is an error, and the
+//!    attribute is removed (the options of a late announcement are not merged). A bare
+//!    `#[announce]` is not seen (it is an attribute macro like any other, of this crate
+//!    or of another), and nor is a renamed import (`#[ann]`): a late one of those makes a
+//!    second trampoline (E0252);
+//! 3. generates the trampoline and the `Announce` impl, with the merged options
 //!    ([`crate::capture_output`]): the item without the attributes that the checks own
 //!    (they stay in the payload; without the item at all, with `mock` or
 //!    `emit_item = false`) and the hidden capture derive, which sees the item with every
 //!    nested `#[cfg]` evaluated.
 //!
-//! # The derive
-//!
-//! A user-written `#[derive(Announce)]` expands before the attribute macros below it, and
-//! cannot change the item. It emits nothing (and says to write `#[announce]`) when an
-//! announcement stands below it: a runner, an attribute whose path is `x::announce`, or
-//! another `#[derive(Announce)]`. That announcement takes its helper attributes over. The
-//! path of the attribute is read there and nowhere else, so the derive stands aside for an
-//! `#[x::announce]` of another crate (and then nothing announces the item), and it does not
-//! see an `#[ann]` (renamed import) below it, which makes a second trampoline (E0252).
-//!
 //! # Termination
 //!
 //! Every expansion of `#[announce]` removes that attribute from the item, and either puts
 //! a runner on the item (once: the next ones find it and merge into it), or generates at
-//! once. A takeover removes attributes. The runner expands once (it never puts a runner
+//! once. The runner expands once (it never puts a runner
 //! on the item, only merges into the last of several, and generates at last), and the
 //! queries are chains of calls of the checks that hand over to the next element of a
 //! list that gets shorter and end in `finish`. So there is no endless run. Macros of
 //! others can still add announcements (each of them is one more `#[announce]`); they do
 //! so by their own expansions, which the argument does not cover.
 
-use crate::finish;
 use crate::helper::OwnedAttrs;
-use crate::options::{Check, MergeConflict, Options};
+use crate::options::{MergeConflict, Options};
 use crate::scan::{self, Outer, OuterAttr};
 use proc_macro2::{Delimiter, Group, Ident, Span, TokenStream, TokenTree};
 use template_quote::{quote, ToTokens};
@@ -410,57 +387,6 @@ fn owns(a: &OuterAttr, owned: &OwnedAttrs) -> bool {
                 .map_or(false, |g| in_cfg_attr(g.stream(), owned)))
 }
 
-// ---- helper attributes ----------------------------------------------------------------
-
-/// The arguments of an announcement attribute: `None` for the form `path = ..`.
-fn options_of(a: &OuterAttr) -> Option<syn::Result<Options>> {
-    if a.eq {
-        return None;
-    }
-    Some(match &a.args {
-        None => Ok(Options::default()),
-        Some(g) => syn::parse2(g.stream()),
-    })
-}
-
-/// Takes the bare `#[announce(..)]` attributes of the item over: they are removed, and
-/// their options are merged into `opts` (the target: its entries come first). They are the
-/// helper attributes of a derive. An attribute whose arguments do not parse as options is
-/// left alone, as it is not ours. A conflict is one error, with the item as it was
-/// (`Err`).
-pub(crate) fn take_over(
-    opts: Options,
-    name: &Ident,
-    item: TokenStream,
-) -> Result<(Options, TokenStream), TokenStream> {
-    if !scan::starts_with_attr(&item) {
-        return Ok((opts, item));
-    }
-    let outer = scan::outer(&item);
-    let mut current = opts;
-    let mut removed: Vec<usize> = Vec::new();
-    for (k, a) in outer
-        .attrs
-        .iter()
-        .enumerate()
-        .filter(|(_, a)| a.is_bare("announce"))
-    {
-        if let Some(Ok(helper)) = options_of(a) {
-            current = current
-                .merge(&helper, name)
-                .map_err(|c| conflict(&c, &item))?;
-            removed.push(k);
-        }
-    }
-    if removed.is_empty() {
-        return Ok((current, item));
-    }
-    Ok((
-        current,
-        assemble(&outer, &removed, &[], &OwnedAttrs::new(), Run::None),
-    ))
-}
-
 // ---- #[announce(..)] ------------------------------------------------------------------
 
 /// The built-in attributes that no macro can be: the shortcut of `can_expand_after` skips them.
@@ -476,9 +402,9 @@ pub(crate) fn take_over(
 ///   describe the item to the compiler;
 /// - `allow`, `warn`, `deny`, `forbid` and `expect` set lint levels.
 ///
-/// Not in the list: `cfg` and `cfg_attr` (a `cfg_attr` can expand to a macro), `derive` (a
-/// `#[derive(Announce)]` needs the runner, and so do its helpers), the bare `announce`, and
-/// every attribute that is not built in.
+/// Not in the list: `cfg` and `cfg_attr` (a `cfg_attr` can expand to a macro), `derive`, and
+/// every attribute that is not built in (the bare `announce` too: it can be a macro of
+/// another crate).
 const INERT: &[&str] = &[
     "doc",
     "repr",
@@ -647,27 +573,17 @@ pub(crate) fn announce(
 // ---- the runner expands ---------------------------------------------------------------
 
 /// The message of the error for an announcement below the runner.
-const LATE: &str = "announce: this item has an `#[announce]` or a `#[derive(Announce)]` that \
-     expands after its announcements were run, so it makes a second trampoline: a macro of \
-     the item has put it below the other attributes of its output (for example by appending it \
-     to the attributes of the item). It is removed. Put it first among the attributes of the \
-     output (`quote! { #[announce(..)] #item }`)";
+const LATE: &str = "announce: this item has an `#[announce]` that expands after its \
+     announcements were run, so it makes a second trampoline: a macro of the item has put it \
+     below the other attributes of its output (for example by appending it to the attributes \
+     of the item). It is removed. Put it first among the attributes of the output \
+     (`quote! { #[announce(..)] #item }`)";
 
-/// An attribute that announces the item and is left below the runner.
+/// An attribute that announces the item and is left below the runner: a path that ends in
+/// `announce` and is qualified (`::announce::announce`, `x::announce`).
 fn is_late(a: &OuterAttr) -> bool {
-    fn mentions(ts: TokenStream, word: &str) -> bool {
-        ts.into_iter().any(|t| match t {
-            TokenTree::Ident(i) => i == word,
-            TokenTree::Group(g) => mentions(g.stream(), word),
-            _ => false,
-        })
-    }
     match a.segments.last() {
         Some(l) if l == "announce" => a.leading_colon || a.segments.len() > 1,
-        Some(l) if l == "derive" => a
-            .args
-            .as_ref()
-            .map_or(false, |g| mentions(g.stream(), "Announce")),
         _ => false,
     }
 }
@@ -703,7 +619,7 @@ pub(crate) fn run(args: TokenStream, item: TokenStream) -> TokenStream {
         Ok(h) => h,
         Err(e) => return error_with_item(e.to_string(), &item),
     };
-    let mut mine = match RunnerArgs::read(args) {
+    let mine = match RunnerArgs::read(args) {
         Ok(a) => a,
         Err(e) => return error_with_item(e.to_string(), &item),
     };
@@ -738,82 +654,16 @@ pub(crate) fn run(args: TokenStream, item: TokenStream) -> TokenStream {
         errors = syn::Error::new(Span::call_site(), LATE).to_compile_error();
         assemble(&outer, &late, &[], &OwnedAttrs::new(), Run::None)
     };
-    // The helper attributes that are left.
-    let (opts, item) = match take_over(mine.opts.clone(), &head.ident, item.clone()) {
-        Ok(x) => x,
-        Err(out) => {
-            errors.extend(out);
-            return errors;
-        }
-    };
-    // Only the checks that nobody has asked are asked.
-    let text = |c: &Check| c.to_token_stream().to_string();
-    let asked: Vec<String> = mine.opts.checks.iter().map(text).collect();
-    let ask: Vec<Check> = opts
-        .checks
-        .iter()
-        .filter(|c| !asked.contains(&text(c)))
-        .cloned()
-        .collect();
-    mine.opts = opts;
     let random = crate::random_u64();
     let attr = mine.opts.to_token_stream();
-    errors.extend(if ask.is_empty() {
-        crate::capture_output(&mine.opts, &attr, item, random, &mine.owned)
-    } else {
-        finish::query(
-            &mine.opts,
-            finish::Mode::Run,
-            &attr,
-            &item,
-            random,
-            &ask,
-            &mine.owned,
-        )
-    });
+    errors.extend(crate::capture_output(
+        &mine.opts,
+        &attr,
+        item,
+        random,
+        &mine.owned,
+    ));
     errors
-}
-
-// ---- the derive ------------------------------------------------------------------------
-
-/// Whether the attribute is a `#[derive(..)]` that lists `Announce`.
-pub(crate) fn derives_announce(a: &syn::Attribute) -> bool {
-    use syn::punctuated::Punctuated;
-    a.path().is_ident("derive")
-        && a.parse_args_with(Punctuated::<syn::Path, syn::Token![,]>::parse_terminated)
-            .map_or(false, |paths| {
-                paths
-                    .iter()
-                    .any(|p| p.segments.last().map_or(false, |s| s.ident == "Announce"))
-            })
-}
-
-/// For `#[derive(Announce)]`: whether an announcement is left to expand below it.
-///
-/// A derive expands before the attribute macros below it, and cannot change the item, so
-/// when the item has an announcement below it, the derive emits nothing: that announcement
-/// makes the trampoline, with the options of the helper attribute that is left in the item
-/// (it takes them over). An announcement is the runner (told by the last segment of its
-/// path), an attribute whose path is `x::announce` or `::announce`, or another derive that
-/// lists `Announce`. The path `announce` is read here and nowhere else (the runner is read
-/// by its name), so a derive stands aside for an `#[x::announce]` of another crate below it
-/// (and then nothing announces the item), and does not see `#[ann]`, a renamed import
-/// (which then makes a second trampoline).
-pub(crate) fn derive_defers(attrs: &[syn::Attribute]) -> bool {
-    attrs.iter().any(|a| {
-        let path = a.path();
-        let last = match path.segments.last() {
-            Some(l) => &l.ident,
-            None => return false,
-        };
-        if last == RUNNER {
-            return true;
-        }
-        if last == "announce" {
-            return path.leading_colon.is_some() || path.segments.len() > 1;
-        }
-        derives_announce(a)
-    })
 }
 
 #[cfg(test)]
@@ -995,8 +845,6 @@ mod tests {
             "#[doc = \"d\"] #[repr(C)] #[allow(dead_code)] #[must_use] #[deprecated] #[non_exhaustive] pub struct S;",
             "#[inline] #[cold] #[track_caller] #[no_mangle] #[automatically_derived] #[macro_use] #[warn(x)] #[deny(x)] #[forbid(x)] #[expect(x)] pub struct S;",
             "/// d\npub trait S {}",
-            // A bare `announce` is taken over, and nothing else is left.
-            "#[announce(meta = a::x)] /// d\npub struct S;",
         ] {
             let out = attribute(me, item);
             assert!(
@@ -1018,9 +866,9 @@ mod tests {
             "#[x::doc] pub struct S;",
             "#[::doc] pub struct S;",
             "#[other] pub struct S;",
-            // Not options of ours: it is not taken over, and it may expand.
+            // A bare `announce` may be the macro of another crate: it may expand.
+            "#[announce] pub struct S;",
             "#[announce(level = 2)] pub struct S;",
-            "#[derive(Announce)] pub struct S;",
             "/// d\n#[repr(C)] #[x] pub trait S {}",
             // The names of the attributes that are not in the list, or that only look alike.
             "#[docs] pub struct S;",
@@ -1268,53 +1116,6 @@ mod tests {
         );
     }
 
-    // ---- helper attributes -----------------------------------------------------------
-
-    fn taken(me: &str, item: &str) -> Result<(String, String), String> {
-        let name = scan::head(&ts(item)).unwrap().ident;
-        match take_over(opts(me), &name, ts(item)) {
-            Ok((o, i)) => Ok((norm(&o.to_token_stream()), norm(&i))),
-            Err(e) => Err(norm(&e)),
-        }
-    }
-
-    #[test]
-    fn a_bare_attribute_is_taken_over() {
-        // Its entries come after those of the announcement; the attribute is gone.
-        assert_eq!(
-            taken(
-                "meta = a::x",
-                "#[announce(meta = b::x)] #[doc = \"d\"] #[announce] struct S;"
-            )
-            .unwrap(),
-            (
-                "meta=a::x,meta=b::x".to_string(),
-                "#[doc=\"d\"]structS;".to_string()
-            )
-        );
-        // One that is not ours stays, with no error: not the path of another crate, not a
-        // name that contains it, not what does not parse as options.
-        let item = "#[announce(level = 2)] #[x::announce(meta = b::x)] #[::announce] #[announced] #[announce = 1] struct S;";
-        assert_eq!(
-            taken("meta = a::x", item).unwrap(),
-            ("meta=a::x".to_string(), norm(&ts(item)))
-        );
-        // Nothing to take: the item as it is.
-        assert_eq!(
-            taken("meta = a::x", "struct S;").unwrap(),
-            ("meta=a::x".to_string(), "structS;".to_string())
-        );
-        // A conflict is one error and the item as it was.
-        let item = "#[announce(macro_name = B)] struct S;";
-        let e = taken("macro_name = A", item).unwrap_err();
-        assert!(
-            e.starts_with("::core::compile_error!") && e.contains("(`B`and`A`)"),
-            "{}",
-            e
-        );
-        assert!(e.ends_with(&norm(&ts(item))), "{}", e);
-    }
-
     // ---- the runner expands -----------------------------------------------------------
 
     #[test]
@@ -1346,12 +1147,7 @@ mod tests {
 
     #[test]
     fn an_announcement_below_the_runner_is_an_error_and_is_removed() {
-        for late in [
-            "#[::announce::announce(meta = l::x)]",
-            "#[x::announce]",
-            "#[derive(Debug, ::announce::Announce)]",
-            "#[derive(Announce)]",
-        ] {
+        for late in ["#[::announce::announce(meta = l::x)]", "#[x::announce]"] {
             let out = norm(&run(
                 ts(&format!("{}, crate = ::l::announce", V)),
                 ts(&format!("#[x] {} {} pub struct S;", late, "#[y]")),
@@ -1382,19 +1178,23 @@ mod tests {
                 out
             );
         }
-        // What is not an announcement stays: other derives, other attributes of the crate,
-        // a bare `announce` (a helper, taken over), a renamed import (not seen).
+        // What is not a qualified announcement stays: other derives (also one that lists
+        // `Announce`), other attributes of the crate, a bare `announce` (it is the macro
+        // of another crate, or rustc reports it), a renamed import (not seen).
         let out = norm(&run(
             ts(V),
-            ts("#[derive(Debug)] #[x::announced] #[ann] #[announce(meta = h::x)] pub struct S;"),
+            ts("#[derive(Debug, Announce)] #[x::announced] #[ann] #[announce(meta = h::x)] pub struct S;"),
         ));
         assert!(!out.contains("compile_error"), "{}", out);
         assert!(
-            out.contains("#[derive(Debug)]") && out.contains("#[ann]"),
+            out.contains("#[derive(Debug,Announce)]")
+                && out.contains("#[ann]")
+                && out.contains("#[announce(meta=h::x)]"),
             "{}",
             out
         );
-        assert!(out.contains("meta=h::x"), "{}", out);
+        // The bare attribute is not taken over: it is on the item and on its copy.
+        assert_eq!(out.matches("#[announce(meta=h::x)]").count(), 2, "{}", out);
     }
 
     #[test]
@@ -1417,18 +1217,16 @@ mod tests {
 
     /// A stand-in for rustc: the first attribute from the top that is a macro is
     /// expanded, until none is left. Macros: `::l::announce::announce(..)` (the real
-    /// function; a bare `#[announce(..)]` is the helper of a derive, and is inert), the
-    /// runner, `#[derive(..)]` (the real derive if it lists `Announce`, whose output is
-    /// collected; the derive of the capture is inert, the others are removed), `emit(x)`
-    /// (announces what it produces: the attribute in front of the item), `pass` (returns
-    /// its input), `late(x)` (adds the announcement *below* all the attributes) and
-    /// `dup(n)` (announces and leaves `dup(n-1)` to expand next).
+    /// function; a bare `#[announce(..)]` is the macro of another crate, and is inert),
+    /// the runner, `#[derive(..)]` (the derive of the capture is inert, the others are
+    /// removed), `emit(x)` (announces what it produces: the attribute in front of the
+    /// item), `pass` (returns its input), `late(x)` (adds the announcement *below* all the
+    /// attributes) and `dup(n)` (announces and leaves `dup(n-1)` to expand next).
     ///
-    /// Returns the outputs of the derives, the number of expansions, and the item that is
-    /// left.
-    fn expand(item: &str) -> (Vec<String>, usize, String) {
+    /// Returns the number of expansions, and the item that is left.
+    fn expand(item: &str) -> (usize, String) {
         let mut item = ts(item);
-        let (mut outputs, mut steps) = (Vec::new(), 0);
+        let mut steps = 0;
         loop {
             let o = scan::outer(&item);
             let next = o.attrs.iter().position(|a| {
@@ -1445,7 +1243,7 @@ mod tests {
             });
             let k = match next {
                 Some(k) => k,
-                None => return (outputs, steps, norm(&item)),
+                None => return (steps, norm(&item)),
             };
             steps += 1;
             assert!(steps < 100, "no end: {}", norm(&item));
@@ -1461,12 +1259,7 @@ mod tests {
             item = match name.as_str() {
                 "announce" => crate::announce(args, rest),
                 "_actually_run_announce" => crate::run_announce(args, rest),
-                "derive" => {
-                    if norm(&args).contains("Announce") {
-                        outputs.push(norm(&crate::derive_entry(rest.clone())));
-                    }
-                    rest
-                }
+                "derive" => rest,
                 "emit" => {
                     let mut out = ts(&format!(
                         "#[::l::announce::announce(crate = ::l::announce, meta = m::{})]",
@@ -1510,32 +1303,14 @@ mod tests {
     const B: &str = "#[::l::announce::announce(meta = m::b)]";
     const C: &str = "#[::l::announce::announce(meta = m::c)]";
 
-    /// The trampoline, from the outputs of the derives and the item that is left: exactly
-    /// one, and the metas of it.
-    fn trampoline(outputs: &[String], left: &str) -> String {
-        let all: Vec<&String> = outputs
-            .iter()
-            .chain(
-                std::iter::once(&left.to_string())
-                    .map(|_| &outputs[0])
-                    .take(0),
-            )
-            .collect();
-        let _ = all;
-        let mut made = outputs
-            .iter()
-            .filter(|o| o.contains("macro_rules!"))
-            .count();
-        // The capture dummy is the trampoline of an attribute: the derive runs later.
-        made += left
+    /// The trampoline, from the item that is left: exactly one capture dummy, which the
+    /// capture derive turns into the trampoline later.
+    fn trampoline(left: &str) -> String {
+        let made = left
             .matches("derive(::l::announce::__private::Capture)")
             .count();
-        assert_eq!(made, 1, "{:?} {}", outputs, left);
-        outputs
-            .iter()
-            .find(|o| o.contains("macro_rules!"))
-            .cloned()
-            .unwrap_or_else(|| left.to_string())
+        assert_eq!(made, 1, "{}", left);
+        left.to_string()
     }
 
     #[test]
@@ -1556,22 +1331,13 @@ mod tests {
             (format!("#[derive(Debug)] {} #[derive(Clone)] struct S;", A), &["m::a"]),
             // no other attribute: at once
             (format!("{} struct S;", A), &["m::a"]),
-            // the derive that the user wrote, above and below the attribute
-            (format!("#[derive(::l::announce::Announce)] #[announce(meta = m::h)] {} struct S;", A), &["m::a", "m::h"]),
-            (format!("{} #[derive(::l::announce::Announce)] struct S;", A), &["m::a"]),
-            (
-                format!("{} #[derive(::l::announce::Announce)] #[announce(meta = m::h)] {} struct S;", A, B),
-                &["m::a", "m::h", "m::b"],
-            ),
-            // a bare `announce` is taken over by the attribute above it
-            (format!("{} #[announce(meta = m::b)] #[announce(meta = m::c)] struct S;", A), &["m::a", "m::b", "m::c"]),
             // not emitted: through the runner as well
             (format!("{} {} struct S;", "#[::l::announce::announce(crate = ::l::announce, meta = m::a, emit_item = false)]", B), &["m::a", "m::b"]),
             (format!("{} {} struct S;", A, "#[::l::announce::announce(emit_item = false, meta = m::b)]"), &["m::a", "m::b"]),
         ];
         for (item, metas) in cases {
-            let (outputs, steps, left) = expand(item);
-            let made = trampoline(&outputs, &left);
+            let (steps, left) = expand(item);
+            let made = trampoline(&left);
             let positions: Vec<usize> = metas
                 .iter()
                 .map(|m| made.find(m).unwrap_or_else(|| panic!("{}: {}", m, made)))
@@ -1597,8 +1363,8 @@ mod tests {
     #[test]
     fn the_number_of_expansions_grows_with_the_announcements() {
         for n in 1..=8u32 {
-            let (outputs, steps, left) = expand(&format!("#[dup({})] struct S;", n));
-            trampoline(&outputs, &left);
+            let (steps, left) = expand(&format!("#[dup({})] struct S;", n));
+            trampoline(&left);
             // `dup` and its announcement for each, the last `dup(0)`, and the runner.
             assert_eq!(steps, 2 * n as usize + 2, "{}", n);
         }
@@ -1606,7 +1372,7 @@ mod tests {
 
     #[test]
     fn an_announcement_after_the_runner_is_an_error_and_the_trampoline_is_made_once() {
-        let (outputs, _, left) = expand(&format!("{} #[x] #[late(l)] struct S;", A));
+        let (_, left) = expand(&format!("{} #[x] #[late(l)] struct S;", A));
         // The runner expanded first (the announcement is added after it): it reports
         // the late one and removes it.
         assert!(left.starts_with("::core::compile_error!"), "{}", left);
@@ -1618,6 +1384,5 @@ mod tests {
             "{}",
             left
         );
-        assert!(outputs.is_empty());
     }
 }

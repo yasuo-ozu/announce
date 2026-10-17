@@ -39,13 +39,13 @@ mod kept_mod {
     use super::d;
     d::kept_mod! { [d::kept_mod!, capture!] }
 }
-mod derived {
+mod with_derive {
     use super::d;
-    d::Derived! { [d::Derived!, capture!] }
+    d::WithDerive! { [d::WithDerive!, capture!] }
 }
-mod derived_kept {
+mod kept_with_derive {
     use super::d;
-    d::DerivedKept! { [d::DerivedKept!, capture!] }
+    d::KeptWithDerive! { [d::KeptWithDerive!, capture!] }
 }
 mod owned {
     use super::d;
@@ -156,20 +156,25 @@ fn docs_true_keeps_the_docs() {
 }
 
 #[test]
-fn derive_announce_strips_docs_unless_asked() {
-    let out = norm(derived::OUT);
+fn an_item_with_a_derive_strips_docs_unless_asked() {
+    // The runner makes the trampoline of an item with a derive: the same payload.
+    let out = norm(with_derive::OUT);
     assert!(has_no_docs(&out), "{}", out);
-    assert!(out.ends_with("{pubstructDerived{puba:u8,}}"), "{}", out);
-    // The helper attribute `#[announce(docs = true)]` is not in the payload either.
-    let out = norm(derived_kept::OUT);
+    assert!(out.ends_with("{pubstructWithDerive{puba:u8,}}"), "{}", out);
+    assert!(!out.contains("#[derive"), "{}", out);
+    let out = norm(kept_with_derive::OUT);
     assert!(
         out.ends_with(
-            "{#[doc=\"DocofDerivedKept.\"]pubstructDerivedKept{#[doc=\"Docofa.\"]puba:u8,}}"
+            "{#[doc=\"DocofKeptWithDerive.\"]pubstructKeptWithDerive{#[doc=\"Docofa.\"]puba:u8,}}"
         ),
         "{}",
         out
     );
-    assert!(!out.contains("#[announce"), "{}", out);
+    assert!(
+        !out.contains("#[announce") && !out.contains("#[derive"),
+        "{}",
+        out
+    );
 }
 
 #[test]
@@ -202,7 +207,7 @@ fn the_emitted_items_keep_their_docs() {
     assert_eq!(d::Kept { k: 1 }.k, 1);
     let _ = (
         d::kept_mod::Inside,
-        d::Derived { a: 1 },
-        d::DerivedKept { a: 1 },
+        d::WithDerive { a: 1 },
+        d::KeptWithDerive { a: 1 },
     );
 }

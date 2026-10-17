@@ -6,7 +6,7 @@
 //! - other crates' attributes that are called `announce` are not announcements, and keep
 //!   working next to ours;
 //! - a renamed import (`use announce::announce as ann`) is an announcement;
-//! - derives, in the orders that work;
+//! - derives of other traits, above and below the attributes;
 //! - checks that own attributes, next to other announcements, asked once;
 //! - items that are not emitted (`emit_item = false`, `mock`);
 //! - macros that announce what they produce.
@@ -49,13 +49,34 @@ pub struct ForeignTwice(pub u8);
 #[announce_test_derive::announce(level = 8)]
 pub struct ForeignWithOptions(pub u8);
 
-/// The foreign attribute imported, and written as the bare `#[announce(level = N)]`.
+/// The foreign attribute imported, and written as the bare `#[announce(level = N)]`,
+/// `#[announce]` or `#[announce(meta = ..)]`.
 pub mod bare {
     use announce_test_derive::announce;
 
     #[::announce::announce(meta = paths::a)]
     #[announce(level = 9)]
     pub struct ForeignBare(pub u8);
+
+    /// A bare `#[announce]` with no arguments, and one with arguments that are options of
+    /// ours (`meta = ..`): rustc expands the macro that the name means here, which is
+    /// the foreign one. `#[announce]` neither takes it over nor deletes it.
+    #[::announce::announce(meta = paths::a)]
+    #[announce]
+    pub struct ForeignBareNoArgs(pub u8);
+
+    #[::announce::announce(meta = paths::a)]
+    #[announce(meta = paths::foreign)]
+    pub struct ForeignBareMeta(pub u8);
+
+    #[announce]
+    #[::announce::announce(meta = paths::a)]
+    pub struct ForeignBareNoArgsAbove(pub u8);
+
+    #[::announce::announce(meta = paths::a)]
+    #[announce]
+    #[::announce::announce(meta = paths::b)]
+    pub struct ForeignBareNoArgsBetween(pub u8);
 
     #[announce(level = 10)]
     #[::announce::announce(meta = paths::a)]
@@ -89,67 +110,65 @@ pub mod renamed {
     pub struct Mixed(pub u8);
 }
 
-// ---- derives ------------------------------------------------------------------
+// ---- derives of other traits --------------------------------------------------
 //
-// A derive stands aside for an announcement below it whose path is qualified, and the
-// announcement takes its helper attributes over.
+// The first attribute that expands puts the runner below the derives, and the others
+// are merged into it, wherever they stand.
 
 pub mod derives {
-    // Imported, so that `#[announce(..)]` is the attribute macro as well as the helper of
-    // the derive (which only the helper is, below it).
+    // Imported, so that the bare `#[announce(..)]` is the attribute macro.
     #[allow(unused_imports)]
     use announce::announce;
 
-    /// The attribute is above the derive: it puts the runner on the item, which the derive
-    /// sees.
+    /// The attribute is above the derive: it puts the runner on the item, below the derive.
     #[::announce::announce(meta = paths::a)]
-    #[derive(::announce::Announce)]
+    #[derive(Debug)]
     pub struct AttrAbove(pub u8);
 
     #[::announce::announce(meta = paths::a)]
-    #[derive(::announce::Announce, Debug)]
-    #[announce(meta = paths::h)]
-    pub struct AttrAboveHelper(pub u8);
+    #[derive(Debug)]
+    #[announce(meta = paths::b)]
+    pub struct AttrAboveBare(pub u8);
 
     /// The derive is above the attribute.
-    #[derive(::announce::Announce)]
+    #[derive(Debug)]
     #[::announce::announce(meta = paths::a)]
     pub struct DeriveAbove(pub u8);
 
-    #[derive(::announce::Announce)]
-    #[announce(meta = paths::h)]
+    #[derive(Debug)]
+    #[announce(meta = paths::b)]
     #[::announce::announce(meta = paths::a)]
-    pub struct DeriveAboveHelper(pub u8);
+    pub struct DeriveAboveBare(pub u8);
 
-    /// Two helpers of the derive, and an attribute above it.
+    /// Two bare attributes below the derive, and an attribute above it.
     #[::announce::announce(meta = paths::a)]
-    #[derive(::announce::Announce)]
-    #[announce(meta = paths::h1)]
-    #[announce(meta = paths::h2)]
-    pub struct AttrAboveTwoHelpers(pub u8);
+    #[derive(Debug)]
+    #[announce(meta = paths::b1)]
+    #[announce(meta = paths::b2)]
+    pub struct AttrAboveTwoBare(pub u8);
 
     /// Two attributes and a derive, in the three places.
     #[::announce::announce(meta = paths::a)]
     #[::announce::announce(meta = paths::b)]
-    #[derive(::announce::Announce)]
-    #[announce(meta = paths::h)]
+    #[derive(Debug)]
+    #[announce(meta = paths::c)]
     pub struct TwoAttrsAbove(pub u8);
 
-    #[derive(::announce::Announce)]
-    #[announce(meta = paths::h)]
+    #[derive(Debug)]
+    #[announce(meta = paths::c)]
     #[::announce::announce(meta = paths::a)]
     #[::announce::announce(meta = paths::b)]
     pub struct TwoAttrsBelow(pub u8);
 
     #[::announce::announce(meta = paths::a)]
-    #[derive(::announce::Announce)]
-    #[announce(meta = paths::h)]
+    #[derive(Debug)]
+    #[announce(meta = paths::c)]
     #[::announce::announce(meta = paths::b)]
     pub struct DeriveBetween(pub u8);
 
-    /// A derive of another trait next to ours.
+    /// Several derives next to ours.
     #[::announce::announce(meta = paths::a)]
-    #[derive(Clone, ::announce::Announce, Debug)]
+    #[derive(Clone, Debug)]
     pub struct OtherDerives(pub u8);
 }
 
@@ -200,8 +219,8 @@ pub struct QueriedOnceNoAttributes(pub u8);
 pub struct QueriedTwice(pub u8);
 
 #[::announce::announce(count_query)]
-#[derive(::announce::Announce)]
-#[announce(meta = paths::h)]
+#[derive(Debug)]
+#[::announce::announce(meta = paths::b)]
 pub struct QueriedWithDerive(pub u8);
 
 #[emit_announce(count_query)]

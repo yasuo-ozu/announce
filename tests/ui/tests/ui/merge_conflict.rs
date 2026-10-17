@@ -12,29 +12,18 @@ pub struct Attrs(pub u8);
 #[announce::announce(macro_name = ParseAlt)]
 pub trait Parse {}
 
-// With a derive, the other value is in its helper attribute.
+// With a derive of another trait between them.
 #[announce::announce(layout = single)]
-#[derive(announce::Announce)]
-#[announce(layout = direct)]
+#[derive(Debug)]
+#[announce::announce(layout = direct)]
 pub struct WithDerive(pub u8);
 
-// Two helper attributes of one derive are merged as well.
-#[derive(announce::Announce)]
-#[announce(macro_name = A)]
-#[announce(macro_name = A, meta = my_lib::info)]
-#[announce(macro_name = B)]
-pub struct Helpers(pub u8);
-
-#[derive(announce::Announce)]
-#[announce(meta = my_lib::info)]
-#[announce(macro_name = HelperAlt)]
-pub struct UnsetHelper(pub u8);
+// Three announcements: the third disagrees with the merge of the first two.
+#[announce::announce(macro_name = C)]
+#[announce::announce(macro_name = C, meta = my_lib::info)]
+#[announce::announce(macro_name = D)]
+pub struct Three(pub u8);
 
 fn main() {
-    let _ = (
-        Attrs(0),
-        WithDerive(0),
-        Helpers(0),
-        UnsetHelper(0),
-    );
+    let _ = (Attrs(0), WithDerive(0), Three(0));
 }

@@ -5,7 +5,6 @@
 
 pub use announce_macros::announce;
 pub use announce_macros::define_repeater;
-pub use announce_macros::Announce;
 
 pub use announce_macros::signature_only;
 
@@ -29,9 +28,9 @@ pub use announce_macros::signature_only;
 #[cfg_attr(
     announce_diagnostic,
     diagnostic::on_unimplemented(
-        message = "`{Self}` is not marked `#[announce]`",
-        label = "no `#[announce]` trampoline for this item",
-        note = "add `#[announce]` to its definition; for std/core items use the `announce-std` crate"
+        message = "`{Self}` is not announced: its definition has no `#[announce]`",
+        label = "not announced, so it has no trampoline to call",
+        note = "add `#[announce]` to the definition of `{Self}`; for items of std and core, use the stand-ins of the `announce-std` crate"
     )
 )]
 pub trait Announce {}

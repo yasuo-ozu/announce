@@ -13,19 +13,19 @@ mod rows_a {
     merge::AttrAttr! {
         [merge::AttrAttr!, merge::ThreeAttrs!, merge::BareBelow!, merge::NoOptions!,
          merge::AttrAttrEnum!, merge::AttrAttrTrait!, merge::Renamed!,
-         merge::AttrAboveDerive!, merge::AttrAboveDeriveNoHelper!, merge::TwoAttrsAboveDerive!,
-         merge::AttrBelowDerive!, merge::AttrBelowDeriveNoHelper!,
-         merge::AttrBelowDeriveAmongOthers!, merge::DeriveTwice!, summary!] ALL
+         merge::AttrAboveDerive!, merge::AttrAboveDeriveAlone!, merge::TwoAttrsAboveDerive!,
+         merge::AttrBelowDerive!, merge::AttrBelowDeriveAlone!,
+         merge::AttrBelowDeriveAmongOthers!, summary!] ALL
     }
 }
 
 mod rows_b {
     use super::{merge, summary};
     merge::EmitIntoAttr! {
-        [merge::EmitIntoAttr!, merge::EmitIntoDerive!, merge::EmitDeriveIntoAttr!,
+        [merge::EmitIntoAttr!, merge::EmitAroundDerive!,
          merge::BothDefer!, merge::DeferOnce!, merge::Between!, merge::ChainFive!,
          merge::ChainThenAttr!, merge::Ticked!,
-         merge::TickedWaiting!, merge::TickedBothDefer!, merge::TickedDerive!,
+         merge::TickedWaiting!, merge::TickedBothDefer!, merge::TickedAroundDerive!,
          merge::OwnedOnItem!, summary!] ALL
     }
 }
@@ -45,7 +45,7 @@ fn is_announce<T: Announce>() {}
 #[test]
 fn attribute_and_attribute() {
     let rows = rows_a::ALL;
-    assert_eq!(rows.len(), 14);
+    assert_eq!(rows.len(), 13);
     // The announcements are merged in the order they expand: the entries of the first
     // come first, for every kind of item.
     assert_eq!(meta(rows, "AttrAttr"), "merge::a,merge::b");
@@ -85,53 +85,47 @@ fn options_are_merged_and_the_names_are_kept() {
 }
 
 #[test]
-fn attribute_above_a_derive_takes_its_helper_over() {
+fn attributes_above_a_derive_of_another_trait() {
     let rows = rows_a::ALL;
+    // The first attribute puts the runner below the derive; the others merge into it,
+    // also the bare `#[announce]` below the derive (it is the macro `announce`).
     assert_eq!(meta(rows, "AttrAboveDerive"), "merge::a,merge::b");
-    assert_eq!(meta(rows, "AttrAboveDeriveNoHelper"), "merge::a");
-    // The first attribute takes the helper `c` of the derive over (it expands first),
-    // and the second is merged into the runner that the first has put on the item.
+    assert_eq!(meta(rows, "AttrAboveDeriveAlone"), "merge::a");
     assert_eq!(
         meta(rows, "TwoAttrsAboveDerive"),
-        "merge::a,merge::c,merge::b"
+        "merge::a,merge::b,merge::c"
     );
     is_announce::<merge::AttrAboveDerive>();
-    is_announce::<merge::AttrAboveDeriveNoHelper>();
+    is_announce::<merge::AttrAboveDeriveAlone>();
     is_announce::<merge::TwoAttrsAboveDerive>();
 }
 
 #[test]
-fn attribute_below_a_derive_is_the_one_that_announces() {
+fn attributes_below_a_derive_of_another_trait() {
     let rows = rows_a::ALL;
-    assert_eq!(meta(rows, "AttrBelowDerive"), "merge::a,merge::b");
-    assert_eq!(meta(rows, "AttrBelowDeriveNoHelper"), "merge::a");
+    // The attribute that expands first is the target: the first from the top.
+    assert_eq!(meta(rows, "AttrBelowDerive"), "merge::b,merge::a");
+    assert_eq!(meta(rows, "AttrBelowDeriveAlone"), "merge::a");
     assert_eq!(
         meta(rows, "AttrBelowDeriveAmongOthers"),
-        "merge::a,merge::b"
+        "merge::b,merge::a"
     );
     is_announce::<merge::AttrBelowDerive>();
-    is_announce::<merge::AttrBelowDeriveNoHelper>();
+    is_announce::<merge::AttrBelowDeriveAlone>();
     is_announce::<merge::AttrBelowDeriveAmongOthers>();
-}
-
-#[test]
-fn two_derives_announce_once() {
-    assert_eq!(meta(rows_a::ALL, "DeriveTwice"), "merge::a");
-    is_announce::<merge::DeriveTwice>();
+    // The derives ran.
+    let _ = format!("{:?}", merge::AttrBelowDerive(1));
+    let _ = merge::AttrBelowDeriveAmongOthers(1).clone() == merge::AttrBelowDeriveAmongOthers(1);
 }
 
 #[test]
 fn a_macro_that_announces_into_a_pending_announcement() {
     let rows = rows_b::ALL;
-    assert_eq!(rows.len(), 13);
+    assert_eq!(rows.len(), 12);
     assert_eq!(meta(rows, "EmitIntoAttr"), "merge::a,merge::b");
-    assert_eq!(meta(rows, "EmitIntoDerive"), "merge::a,merge::b");
-    // The derive form puts the options in a helper attribute, and the user's attribute
-    // after it is a second helper of the same derive: they are one announcement.
-    assert_eq!(meta(rows, "EmitDeriveIntoAttr"), "merge::a,merge::b");
+    assert_eq!(meta(rows, "EmitAroundDerive"), "merge::a,merge::b");
     is_announce::<merge::EmitIntoAttr>();
-    is_announce::<merge::EmitIntoDerive>();
-    is_announce::<merge::EmitDeriveIntoAttr>();
+    is_announce::<merge::EmitAroundDerive>();
 }
 
 #[test]
@@ -158,10 +152,11 @@ fn macros_that_keep_announcing_end() {
         meta(rows, "ChainFive"),
         "merge::step(5),merge::step(4),merge::step(3),merge::step(2),merge::step(1)"
     );
-    // With attributes of the user's around.
+    // With an attribute of the user's below: it expands after the macros above it, the
+    // chain included.
     assert_eq!(
         meta(rows, "ChainThenAttr"),
-        "merge::step(3),merge::a,merge::step(2),merge::step(1)"
+        "merge::step(3),merge::step(2),merge::step(1),merge::a"
     );
     is_announce::<merge::ChainFive>();
     is_announce::<merge::ChainThenAttr>();
@@ -177,8 +172,8 @@ fn checks_run_once_each() {
     assert_eq!(merge::TICK_TICKEDWAITING_WAITING, 0);
     assert_eq!(merge::TICK_TICKEDBOTHDEFER_FIRST, 0);
     assert_eq!(merge::TICK_TICKEDBOTHDEFER_SECOND, 0);
-    assert_eq!(merge::TICK_TICKEDDERIVE_HELPER, 0);
-    assert_eq!(merge::TICK_TICKEDDERIVE_ATTR, 0);
+    assert_eq!(merge::TICK_TICKEDAROUNDDERIVE_FIRST, 0);
+    assert_eq!(merge::TICK_TICKEDAROUNDDERIVE_SECOND, 0);
     let rows = rows_b::ALL;
     // A check is listed in META like a `meta` entry, the target's first, the
     // duplicate once.
@@ -191,15 +186,15 @@ fn checks_run_once_each() {
     assert!(meta(rows, "TickedWaiting").contains("tick(waiting)"));
     let m = meta(rows, "TickedBothDefer");
     assert!(m.find("tick(first)").unwrap() < m.find("tick(second)").unwrap());
-    let m = meta(rows, "TickedDerive");
+    let m = meta(rows, "TickedAroundDerive");
     assert!(
-        m.contains("tick(helper)") && m.contains("tick(attr)"),
+        m.find("tick(first)").unwrap() < m.find("tick(second)").unwrap(),
         "{}",
         m
     );
     is_announce::<merge::Ticked>();
     is_announce::<merge::TickedBothDefer>();
-    is_announce::<merge::TickedDerive>();
+    is_announce::<merge::TickedAroundDerive>();
 }
 
 #[test]

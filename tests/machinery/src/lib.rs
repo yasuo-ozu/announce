@@ -64,42 +64,9 @@ pub fn pair(input: TokenStream) -> TokenStream {
     out.into()
 }
 
-/// `#[derive(Tracked)]` with `#[tracked(OPTIONS)]`: announces the struct, enum or
-/// union, with options built in code (`derive_announce_with`).
-#[proc_macro_derive(Tracked, attributes(tracked, field_attr))]
-pub fn derive_tracked(input: TokenStream) -> TokenStream {
-    let mut item: syn::DeriveInput = match syn::parse(input) {
-        Ok(i) => i,
-        Err(e) => return e.to_compile_error().into(),
-    };
-    let mut opts = Options::default();
-    for a in item.attrs.iter().filter(|a| a.path().is_ident("tracked")) {
-        if let syn::Meta::List(l) = &a.meta {
-            opts = match syn::parse2(l.tokens.clone()) {
-                Ok(o) => o,
-                Err(e) => return e.to_compile_error().into(),
-            };
-        }
-    }
-    item.attrs.retain(|a| !a.path().is_ident("tracked"));
-    opts.krate.get_or_insert_with(facade);
-    match machinery::derive_announce_with(opts, quote! { #item }) {
-        Ok(ts) => ts.into(),
-        Err(e) => e.to_compile_error().into(),
-    }
-}
-
-/// `#[derive(Plain)]` with the `#[announce(..)]` helper attribute of
-/// `#[derive(Announce)]` (`derive_announce`). The options must hold `crate = ..`,
-/// as the library's users do not depend on `announce`.
-#[proc_macro_derive(Plain, attributes(announce, field_attr))]
-pub fn derive_plain(input: TokenStream) -> TokenStream {
-    machinery::derive_announce(input.into()).into()
-}
-
 /// A check of the library that owns the attribute `field_attr` and rejects
-/// `#[field_attr(bad)]`. It is used by `#[tracked(..)]`, `#[derive(Tracked)]`
-/// and `#[derive(Plain)]`: the machinery sends the same query as `#[announce]`.
+/// `#[field_attr(bad)]`. It is used by `#[tracked(..)]` and by `#[announce(..)]`: the
+/// machinery sends the same query as `#[announce]`.
 #[proc_macro]
 pub fn owner(input: TokenStream) -> TokenStream {
     announce::helper::check(input.into(), &["field_attr"], |ci| {

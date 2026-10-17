@@ -4,7 +4,7 @@
 
 - Several announcements of one item make one trampoline, one `Announce` impl and one
   `META`, instead of failing with E0252 and E0119. It works for every kind of item, for
-  `#[announce]`, `#[derive(Announce)]` and macros that announce what they produce.
+  `#[announce]` and macros that announce what they produce.
 - The first `#[announce]` on an item puts a hidden attribute macro, the runner
   (`announce::__private::_actually_run_announce`), last among its attributes; the other
   announcements merge their options into it; the runner makes the trampoline when it
@@ -25,15 +25,10 @@
 - The runner is told by its name, never by the path `announce`: attributes of other crates
   that are named `announce` (`#[metrics::announce(level = 2)]`) are not touched, and a
   renamed import (`use announce::announce as ann; #[ann]`) is an announcement.
-- The bare `#[announce(..)]` attributes of an item (the helper attributes of a
-  `#[derive(Announce)]`) are taken over before the query of the checks, so that their
-  checks join its one query. `#[derive(Announce)] #[announce(meta = x::y)]
-  #[announce::announce(my_lib::check)] #[my_lib(x)] struct S;` failed with "cannot find
-  attribute `announce`".
 - The query of the checks runs once for an announcement, also when announcements merge.
-- An `#[announce]` or a `#[derive(Announce)]` that a macro appends below the runner is one
-  error, and is removed, instead of a second trampoline. A renamed import put there is not
-  seen.
+- An `#[announce]` with a qualified path (`#[::announce::announce]`, `#[x::announce]`) that a
+  macro appends below the runner is one error, and is removed, instead of a second
+  trampoline. A bare or renamed import put there is not seen.
 - The arguments of the runner carry the version of their encoding
   (`_announce_format_version`). An item announced by two versions of the `announce` crate
   that disagree is one error that lists the versions.
@@ -43,16 +38,25 @@
   that implements a trait for the item fails with "cannot find type", where 0.1 dropped it
   silently with the item.
 - An attribute that a check owns can be in an item-level `#[cfg_attr(.., my_lib(..))]`.
-- `#[derive(Announce)]` that the author writes is deprecated: it warns, at the name of the
-  item, and says to write `#[announce]`. It still works. `announce::machinery::derive_announce`
-  and `derive_announce_with` do not warn. It stands aside, and emits nothing, if the runner,
-  an `x::announce` attribute or another derive of `Announce` is below it; the announcement
-  takes its helper attributes over. A renamed import below it is not seen
-  (`#[derive(Announce)] #[ann]` is E0252).
-- `#[derive(Announce)]` merges several `#[announce(..)]` helper attributes instead of
-  rejecting the second ("only one helper attribute is allowed"), and reports the options
-  that a derive cannot take (`mock`, `emit_item`) and the ones that are not options even
-  when it stands aside.
+- Removed: `#[derive(Announce)]` and `announce::machinery::derive_announce`,
+  `try_derive_announce` and `derive_announce_with`. Write `#[announce]` instead, with the
+  options as its arguments (the options of the helper attribute `#[announce(..)]`). A
+  derive of a library cannot announce the item it is on any more, because a derive cannot
+  change its item: the library asks its users for `#[announce]`, or provides an attribute
+  macro that emits it. The trait `Announce` stays.
+- A bare `#[announce]` is an attribute macro like any other, which rustc expands: ours if
+  it is imported from `announce`, a foreign one if that is what the name means (it runs, as
+  in `#[::announce::announce(..)] #[announce] struct S;`). `#[announce]` neither reads nor
+  removes the other attributes of the item. Announcements merge in the order rustc expands
+  them.
+- `#[announce] #[cfg(..)]` with the cfg false emits nothing: the trampoline goes with the
+  item (0.1 emitted a trampoline for a missing item).
+- An `#[announce]` of announce 0.1 on the same item as one of this version is not merged
+  (0.1 has no runner): it makes a second trampoline (E0252). Use one version of `announce`
+  in every crate.
+- The message of the error for an item that is not announced (`diagnostic::on_unimplemented`
+  of `Announce`, Rust 1.78 and later) is clearer: "`T` is not announced: its definition has
+  no `#[announce]`".
 
 ## 0.1.1
 

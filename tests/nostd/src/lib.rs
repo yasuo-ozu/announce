@@ -5,8 +5,6 @@
 //!
 //! `tests/nostd.rs` calls the trampolines from a crate with std.
 #![no_std]
-// The derive that the author writes is deprecated; `Derived` below is a test of it.
-#![allow(deprecated)]
 
 use announce::announce;
 
@@ -50,8 +48,10 @@ pub mod inner {
     }
 }
 
-#[derive(announce::Announce)]
-pub struct Derived {
+/// A derive next to `#[announce]`: the item goes through the runner.
+#[announce]
+#[derive(Clone, Debug)]
+pub struct WithDerive {
     pub x: i32,
 }
 

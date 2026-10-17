@@ -1,5 +1,5 @@
-//! Proc macros used by the announce tests: an announce-aware derive, a proc-macro
-//! callback, a trampoline starter and a definition-side check.
+//! Proc macros used by the announce tests: announce-aware derives and attributes, a
+//! proc-macro callback, a trampoline starter and a definition-side check.
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
@@ -257,14 +257,6 @@ pub fn head_probe(input: TokenStream) -> TokenStream {
     }
 }
 
-/// Declares the attribute `rules` and does nothing else. A `#[derive(Announce)]`
-/// cannot remove attributes from its item, so an item that has `#[rules(..)]` in it
-/// needs a derive that declares them (the check is `announce_test_defs::rules_check`).
-#[proc_macro_derive(Rules, attributes(rules))]
-pub fn derive_rules(_: TokenStream) -> TokenStream {
-    TokenStream::new()
-}
-
 /// A check written the way checks were before the attribute query existed: it
 /// parses `CheckInput` and does not answer the query.
 #[proc_macro]
@@ -285,7 +277,9 @@ pub fn check_marker(input: TokenStream) -> TokenStream {
     announce::helper::check_type(&syn::parse_quote!(::announce), &ty).into()
 }
 
-/// A derive that announces its own input via `#[announce(emit_item = false)]`.
+/// A derive of a library that emits a trampoline of a copy of its input, with
+/// `#[announce(emit_item = false)]`: the item it is on is not announced by it, and the
+/// copy is not emitted.
 #[proc_macro_derive(Announced)]
 pub fn derive_announced(input: TokenStream) -> TokenStream {
     let input: TokenStream2 = input.into();
@@ -509,21 +503,9 @@ pub fn emit_announce(attr: TokenStream, item: TokenStream) -> TokenStream {
     TokenStream::from(quote! { #[::announce::announce(#attr)] #item })
 }
 
-/// `#[emit_derive_announce(OPTIONS)]`: the same with the derive form, which puts the
-/// options in the helper attribute.
-#[proc_macro_attribute]
-pub fn emit_derive_announce(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let (attr, item): (TokenStream2, TokenStream2) = (attr.into(), item.into());
-    TokenStream::from(quote! {
-        #[derive(::announce::Announce)]
-        #[announce(#attr)]
-        #item
-    })
-}
-
 /// `#[late_announce(OPTIONS)]`: a macro that announces what it produces, wrongly: it adds
 /// `#[::announce::announce(OPTIONS)]` *below* the other attributes of the item, after
-/// the derive that `#[announce]` put there. That announcement is too late.
+/// the runner that `#[announce]` put there. That announcement is too late.
 #[proc_macro_attribute]
 pub fn late_announce(attr: TokenStream, item: TokenStream) -> TokenStream {
     let attr: TokenStream2 = attr.into();
@@ -533,19 +515,6 @@ pub fn late_announce(attr: TokenStream, item: TokenStream) -> TokenStream {
     };
     item.attrs
         .push(syn::parse_quote!(#[::announce::announce(#attr)]));
-    TokenStream::from(quote! { #item })
-}
-
-/// `#[late_derive_announce]`: the same with the derive: it adds `#[derive(Announce)]` below
-/// the other attributes of the item.
-#[proc_macro_attribute]
-pub fn late_derive_announce(_: TokenStream, item: TokenStream) -> TokenStream {
-    let mut item: syn::DeriveInput = match syn::parse(item) {
-        Ok(i) => i,
-        Err(e) => return e.to_compile_error().into(),
-    };
-    item.attrs
-        .push(syn::parse_quote!(#[derive(::announce::Announce)]));
     TokenStream::from(quote! { #item })
 }
 
@@ -602,48 +571,46 @@ pub fn tick(input: TokenStream) -> TokenStream {
 // ---- announcements are told by their flag, not by their path (tests/defs/src/flag.rs) ----
 
 /// An attribute macro of another crate that happens to be called `announce`, like
-/// `#[metrics::announce(level = 2)]`. `#[announce(level = N)]` returns the item and a
-/// constant `FOREIGN_LEVEL_<ITEM>: u32 = N` next to it. `#[announce]` must never take it
-/// for an announcement: not by the path `announce_test_derive::announce`, nor when it
-/// is imported and written as the bare `#[announce(level = 2)]`.
+/// `#[metrics::announce(level = 2)]`. It returns the item and a constant next to it:
+/// `#[announce(level = N)]` makes `FOREIGN_<ITEM>_<N>: u32 = N`, and any other arguments
+/// (also none, or `meta = path`, which are arguments of ours as well) make
+/// `FOREIGN_<ITEM>_ARGS: &str`, the arguments without spaces. `#[announce]` must never
+/// take it for an announcement or swallow it: not by the path
+/// `announce_test_derive::announce`, nor when it is imported and written as the bare
+/// `#[announce(level = 2)]`, `#[announce]` or `#[announce(meta = path)]`.
 #[proc_macro_attribute]
 pub fn announce(attr: TokenStream, item: TokenStream) -> TokenStream {
-    struct Level(syn::LitInt);
-    impl syn::parse::Parse for Level {
-        fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
-            let key: syn::Ident = input.parse()?;
-            if key != "level" {
-                return Err(syn::Error::new(
-                    key.span(),
-                    "this is not the announce attribute of the `announce` crate: expected \
-                     `level = N`",
-                ));
-            }
-            input.parse::<syn::Token![=]>()?;
-            Ok(Level(input.parse()?))
-        }
-    }
-    let level: Level = match syn::parse(attr) {
-        Ok(l) => l,
-        Err(e) => return e.to_compile_error().into(),
-    };
+    let attr: TokenStream2 = attr.into();
     let item: TokenStream2 = item.into();
     let parsed: syn::DeriveInput = match syn::parse2(item.clone()) {
         Ok(i) => i,
         Err(e) => return e.to_compile_error().into(),
     };
-    let level = level.0;
-    let id = syn::Ident::new(
-        &format!(
-            "FOREIGN_{}_{}",
-            parsed.ident.to_string().to_uppercase(),
-            level.base10_digits()
-        ),
-        proc_macro2::Span::call_site(),
-    );
+    let name = parsed.ident.to_string().to_uppercase();
+    let span = proc_macro2::Span::call_site();
+    let tokens: Vec<proc_macro2::TokenTree> = attr.clone().into_iter().collect();
+    let level = match tokens.as_slice() {
+        [proc_macro2::TokenTree::Ident(key), proc_macro2::TokenTree::Punct(eq), proc_macro2::TokenTree::Literal(lit)]
+            if key == "level" && eq.as_char() == '=' =>
+        {
+            syn::parse2::<syn::LitInt>(quote! { #lit }).ok()
+        }
+        _ => None,
+    };
+    let konst = match level {
+        Some(level) => {
+            let id = syn::Ident::new(&format!("FOREIGN_{}_{}", name, level.base10_digits()), span);
+            quote! { pub const #id: u32 = #level; }
+        }
+        None => {
+            let id = syn::Ident::new(&format!("FOREIGN_{}_ARGS", name), span);
+            let args: String = attr.to_string().split_whitespace().collect();
+            quote! { pub const #id: &str = #args; }
+        }
+    };
     TokenStream::from(quote! {
         #item
-        pub const #id: u32 = #level;
+        #konst
     })
 }
 
@@ -654,7 +621,7 @@ thread_local! {
 }
 
 /// The name of the item in the state of an attribute query
-/// (`[RANDOM; MODE (OPTIONS) { ITEM }] attrs(..)*`): the identifier after the first
+/// (`[RANDOM; attr (OPTIONS) { ITEM }] attrs(..)*`): the identifier after the first
 /// `struct`, `enum`, `union` or `trait` in it.
 fn queried_item(state: &TokenStream2) -> String {
     use proc_macro2::TokenTree;

@@ -27,7 +27,7 @@ fn the_rewritten_item_is_announced() {
 
 mod chain {
     use super::{lib, summary};
-    lib::Point! { [lib::Point!, lib::NamedAnnounce!, lib::Left!, lib::Right!, lib::Derived!, lib::PlainAnnounce!, summary!] ALL }
+    lib::Point! { [lib::Point!, lib::NamedAnnounce!, lib::Left!, lib::Right!, lib::PlainAnnounce!, summary!] ALL }
 }
 
 #[test]
@@ -41,7 +41,6 @@ fn definitions_chain_into_one_callback() {
             "struct Named",
             "struct Left",
             "struct Right",
-            "struct Derived",
             "struct PlainStruct"
         ]
     );
@@ -50,8 +49,7 @@ fn definitions_chain_into_one_callback() {
     assert_eq!(metas[1], "test_lib::info(1)");
     assert_eq!(metas[2], "test_lib::pair(Left)");
     assert_eq!(metas[3], "test_lib::pair(Right)");
-    assert_eq!(metas[4], "test_lib::derived");
-    assert_eq!(metas[5], "");
+    assert_eq!(metas[4], "");
 }
 
 #[test]
@@ -61,7 +59,6 @@ fn the_announce_impl_resolves_through_the_facade() {
     assert_announced::<lib::Named>();
     assert_announced::<lib::Left>();
     assert_announced::<lib::Right>();
-    assert_announced::<lib::Derived>();
     assert_announced::<lib::PlainStruct>();
     // The item is emitted as written (and rewritten) by the macro.
     let p = lib::Point {
@@ -74,14 +71,14 @@ fn the_announce_impl_resolves_through_the_facade() {
 
 mod owned {
     use super::{lib, summary};
-    lib::OwnedAnnounce! { [lib::OwnedAnnounce!, lib::OwnedDerivedAnnounce!, lib::OwnedPlainAnnounce!, summary!] ALL }
+    lib::OwnedAnnounce! { [lib::OwnedAnnounce!, lib::OwnedPlainAnnounce!, summary!] ALL }
 }
 
 #[test]
 fn checks_that_own_attributes_work_through_the_machinery() {
     let rows = owned::ALL;
-    assert_eq!(rows.len(), 3);
-    for (row, name) in rows.iter().zip(["Owned", "OwnedDerived", "OwnedPlain"]) {
+    assert_eq!(rows.len(), 2);
+    for (row, name) in rows.iter().zip(["Owned", "OwnedPlain"]) {
         assert_eq!(row.2, format!("struct {}", name), "{:?}", row);
         // The check, and the names it owns.
         assert_eq!(
@@ -91,15 +88,13 @@ fn checks_that_own_attributes_work_through_the_machinery() {
             row
         );
     }
-    // The attribute route emits the item without the attribute.
+    // The item is emitted without the attribute.
     let o = lib::Owned {
         x: 1,
         y: 2,
         tracked: true,
     };
     assert_eq!(o.x + o.y, 3);
-    // The derive route keeps the attribute: the derive declares it.
-    assert_eq!(lib::OwnedDerived { y: 4 }.y, 4);
     assert_eq!(lib::OwnedPlain(5).0, 5);
 }
 
@@ -109,10 +104,6 @@ mod docs {
     pub mod kept {
         use super::lib;
         lib::DocsKeptAnnounce! { [lib::DocsKeptAnnounce!, capture!] }
-    }
-    pub mod derived {
-        use super::lib;
-        lib::DocsDerivedAnnounce! { [lib::DocsDerivedAnnounce!, capture!] }
     }
     pub mod plain {
         use super::lib;
@@ -138,14 +129,6 @@ fn docs_are_removed_from_the_payload_unless_asked() {
     let out = norm(docs::kept::OUT);
     assert!(
         out.contains("#[doc=\"DocofDocsKept.\"]pubstructDocsKept{#[doc=\"Docofx.\"]pubx:u8,"),
-        "{}",
-        out
-    );
-    let out = norm(docs::derived::OUT);
-    assert!(
-        out.contains(
-            "#[doc=\"DocofDocsDerived.\"]pubstructDocsDerived{#[doc=\"Docofx.\"]pubx:u8,}"
-        ),
         "{}",
         out
     );

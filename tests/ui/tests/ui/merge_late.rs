@@ -7,12 +7,6 @@
 #[announce_test_derive::late_announce(meta = my_lib::late)]
 pub struct Late(pub u8);
 
-// The same with a derive that is put below the others.
-#[announce::announce(meta = my_lib::first)]
-#[announce_test_derive::passthrough]
-#[announce_test_derive::late_derive_announce]
-pub struct LateDerive(pub u8);
-
 fn main() {
-    let _ = (Late(0), LateDerive(0));
+    let _ = Late(0);
 }

@@ -1,14 +1,12 @@
-//! Items with several announcements: `#[announce]` attributes, derives, and macros
-//! that announce what they produce. Each of them must make one trampoline and one
+//! Items with several announcements: `#[announce]` attributes, next to derives of other
+//! traits, and macros that announce what they produce. Each of them must make one trampoline and one
 //! `Announce` impl, whose META holds the entries of all announcements
 //! (`tests/user/tests/merge.rs` reads it). Nothing here may be an error.
 
 #![allow(dead_code)]
 
 use announce::announce;
-use announce_test_derive::{
-    chain, emit_announce, emit_derive_announce, passthrough, record_attrs, summary, tick,
-};
+use announce_test_derive::{chain, emit_announce, passthrough, record_attrs, summary, tick};
 
 // ---- attribute and attribute -----------------------------------------------
 
@@ -49,49 +47,40 @@ pub trait AttrAttrTrait {
 #[::announce::announce(macro_name = Renamed, layout = single, docs = true, meta = merge::b)]
 pub struct DifferentOptions(pub String);
 
-// ---- attribute above and below a derive ------------------------------------
+// ---- attributes around a derive of another trait ---------------------------
 
 #[::announce::announce(meta = merge::a)]
-#[derive(::announce::Announce, Debug)]
+#[derive(Debug)]
 #[announce(meta = merge::b)]
 pub struct AttrAboveDerive(pub u8);
 
-/// The derive has no helper attribute yet: it is made.
 #[::announce::announce(meta = merge::a)]
-#[derive(::announce::Announce)]
-pub struct AttrAboveDeriveNoHelper(pub u8);
+#[derive(Debug)]
+pub struct AttrAboveDeriveAlone(pub u8);
 
 #[::announce::announce(meta = merge::a)]
 #[::announce::announce(meta = merge::b)]
-#[derive(::announce::Announce)]
+#[derive(Debug)]
 #[announce(meta = merge::c)]
 pub struct TwoAttrsAboveDerive(pub u8);
 
-/// The derive expands first and sees the attribute below it: it leaves the
-/// announcement to the attribute, which finds the helper.
-#[derive(::announce::Announce)]
+/// The derive expands first, and the attributes below it announce.
+#[derive(Debug)]
 #[announce(meta = merge::b)]
 #[::announce::announce(meta = merge::a)]
 pub struct AttrBelowDerive(pub u8);
 
-#[derive(::announce::Announce, Debug)]
+#[derive(Debug)]
 #[::announce::announce(meta = merge::a)]
-pub struct AttrBelowDeriveNoHelper(pub u8);
+pub struct AttrBelowDeriveAlone(pub u8);
 
-/// The same, with the attribute below some other attribute.
-#[derive(::announce::Announce)]
+/// The same, with the attributes among other derives.
+#[derive(Clone)]
 #[announce(meta = merge::b)]
 #[derive(Debug)]
 #[::announce::announce(meta = merge::a)]
-#[derive(Clone)]
+#[derive(PartialEq)]
 pub struct AttrBelowDeriveAmongOthers(pub u8);
-
-/// Two derives: the first leaves the announcement to the last (rustfmt would join
-/// two derives that follow each other).
-#[derive(::announce::Announce)]
-#[announce(meta = merge::a)]
-#[derive(::announce::Announce)]
-pub struct DeriveTwice(pub u8);
 
 // ---- macros that announce what they produce --------------------------------
 
@@ -100,13 +89,9 @@ pub struct DeriveTwice(pub u8);
 pub struct EmitIntoAttr(pub u8);
 
 #[emit_announce(meta = merge::a)]
-#[derive(::announce::Announce)]
+#[derive(Debug)]
 #[announce(meta = merge::b)]
-pub struct EmitIntoDerive(pub u8);
-
-#[emit_derive_announce(meta = merge::a)]
-#[announce(meta = merge::b)]
-pub struct EmitDeriveIntoAttr(pub u8);
+pub struct EmitAroundDerive(pub u8);
 
 /// `emit_announce` expands first, and its announcement puts the runner below the second
 /// `emit_announce` (which announces as well, into the runner).
@@ -152,10 +137,10 @@ pub struct TickedWaiting(pub u8);
 #[emit_announce(tick(second))]
 pub struct TickedBothDefer(pub u8);
 
-#[derive(::announce::Announce)]
-#[announce(tick(helper))]
-#[::announce::announce(tick(attr))]
-pub struct TickedDerive(pub u8);
+#[announce(tick(first))]
+#[derive(Debug)]
+#[::announce::announce(tick(second))]
+pub struct TickedAroundDerive(pub u8);
 
 /// An attribute that a check owns stays below `#[announce]`: the runner is below
 /// `passthrough`, the owned attribute follows the runner, and the runner removes it.
@@ -182,7 +167,7 @@ mod hidden {
     pub(super) struct Super(pub u8);
 
     #[::announce::announce(meta = merge::a)]
-    #[derive(::announce::Announce)]
+    #[derive(Debug)]
     #[announce(meta = merge::b)]
     pub(in crate::merge) struct InPath(pub u8);
 

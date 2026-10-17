@@ -1,6 +1,4 @@
 //! Uses announce only as `ann` (renamed in Cargo.toml).
-// `DerivedExplicit` tests the derive that the author writes, which is deprecated.
-#![allow(deprecated)]
 
 pub mod inner {
     pub struct Local(pub u8);
@@ -39,9 +37,18 @@ pub trait ExplicitTrait {
     fn f(&self) -> u8;
 }
 
-#[derive(ann::Announce)]
-#[announce(crate = ::ann, meta = info(2))]
-pub struct DerivedExplicit {
+/// With a derive of another trait, the item goes through the runner, which names the
+/// renamed dependency (`::ann::__private::_actually_run_announce`).
+#[ann::announce(crate = ::ann, meta = info(2))]
+#[derive(Debug)]
+pub struct ExplicitWithDerive {
+    pub a: u8,
+}
+
+/// The same without `crate = ..`: the path is read from `Cargo.toml`.
+#[ann::announce(meta = info(3))]
+#[derive(Debug)]
+pub struct RenamedWithDerive {
     pub a: u8,
 }
 

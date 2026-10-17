@@ -174,8 +174,6 @@ pub(crate) struct OuterAttr {
     path_len: usize,
     /// The delimited group after the path, if there is one.
     pub args: Option<Group>,
-    /// The attribute has the form `path = ..`.
-    pub eq: bool,
 }
 
 impl OuterAttr {
@@ -243,17 +241,17 @@ fn parse_attr(at: usize, group: &Group) -> OuterAttr {
         }
     }
     let path_len = i;
-    let (mut args, mut eq) = (None, false);
+    let mut args = None;
     match inner.get(path_len) {
+        // `path`, or `path = ..`.
         None => {}
+        Some(TokenTree::Punct(p)) if p.as_char() == '=' => {}
         Some(TokenTree::Group(g)) if inner.len() == path_len + 1 => args = Some(g.clone()),
-        Some(TokenTree::Punct(p)) if p.as_char() == '=' => eq = true,
         _ => dirty = true,
     }
     if dirty || segments.is_empty() {
         segments.clear();
         args = None;
-        eq = false;
     }
     OuterAttr {
         at,
@@ -262,7 +260,6 @@ fn parse_attr(at: usize, group: &Group) -> OuterAttr {
         inner,
         path_len,
         args,
-        eq,
     }
 }
 

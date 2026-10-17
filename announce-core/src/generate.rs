@@ -498,11 +498,10 @@ fn trait_is_simple_dyn(t: &syn::ItemTrait) -> bool {
 /// The `Announce` impl, if `generate` writes one. Its generics are those of the
 /// item, without the attributes of the parameters.
 fn marker_impl(item: &Item, opts: &Options) -> TokenStream {
-    // `#[derive(Announce)]` always implements it. `emit_item = false` means
-    // the item is emitted (and its `Announce` impl owned) by someone else, so
-    // a second announcement cannot conflict with it. A mock is a
+    // `emit_item = false` means the item is emitted (and its `Announce` impl owned) by
+    // someone else, so a second announcement cannot conflict with it. A mock is a
     // stand-in, not the real item.
-    if opts.mock.is_some() || !(opts.derived || opts.emit_item) {
+    if opts.mock.is_some() || !opts.emit_item {
         return TokenStream::new();
     }
     match item {
@@ -894,9 +893,9 @@ fn trampoline_with(
 }
 
 /// Whether `generate` emits the real item itself: when something is removed from
-/// it, the derive emits it instead of `#[announce]`.
+/// it, the capture derive emits it instead of `#[announce]`.
 fn emits_real_item(opts: &Options, owned: &OwnedAttrs) -> bool {
-    !owned.is_empty() && opts.emit_item && opts.mock.is_none() && !opts.derived
+    !owned.is_empty() && opts.emit_item && opts.mock.is_none()
 }
 
 /// What stands in for `generate` when it fails: the real item, if `generate`
@@ -937,20 +936,8 @@ pub fn generate(
     random: u64,
     owned: &OwnedAttrs,
 ) -> Result<TokenStream> {
-    generate_timed(item, opts, random, owned, &mut Timer::off())
-}
-
-/// [`generate`], with the steps timed by `t`.
-pub(crate) fn generate_timed(
-    item: Item,
-    opts: &Options,
-    random: u64,
-    owned: &OwnedAttrs,
-    t: &mut Timer,
-) -> Result<TokenStream> {
     let prep = prepare(item, None, opts, owned);
-    t.step("strip");
-    emit(&prep, opts, random, owned, t)
+    emit(&prep, opts, random, owned, &mut Timer::off())
 }
 
 /// [`generate`] for a [`Prepared`] item. The steps are timed by `t` (the caller
@@ -1541,29 +1528,13 @@ mod tests {
         // `emit_item = false`: nothing is emitted for rustc at all.
         let out = generate_for("emit_item = false", &["my_lib"], item.clone());
         assert!(out.starts_with("#[doc(hidden)]"), "{}", out);
-        // A derive does not emit its input either.
-        let opts = Options {
-            derived: true,
-            emit_item: false,
-            ..Options::default()
-        };
-        let out = squash(
-            generate(
-                syn::parse2(item).unwrap(),
-                &opts,
-                3,
-                &OwnedAttrs::from_strs(&["my_lib"]),
-            )
-            .unwrap(),
-        );
-        assert!(out.starts_with("#[doc(hidden)]"), "{}", out);
     }
 
     #[test]
     fn a_failed_generate_still_gives_the_real_item() {
         let owned = OwnedAttrs::from_strs(&["my_lib"]);
         let opts = Options::default();
-        // With owned names the derive would have emitted the item.
+        // With owned names the capture derive emits the item.
         let item2: Item =
             syn::parse2(quote! { pub struct S { #[my_lib] #[cfg(a)] pub a: u8 } }).unwrap();
         let out = squash(real_item_on_error(item2.clone(), &opts, &owned));

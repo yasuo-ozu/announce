@@ -15,41 +15,17 @@ error: announce: this item is announced twice with different trampoline names (`
    = note: this error originates in the attribute macro `announce::announce` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 error: announce: this announcement sets `layout = direct`, but another announcement of the same item sets `layout = single`. The announcements of one item are merged into one trampoline, so they must agree: remove one of them or make them equal
-  --> tests/ui/merge_conflict.rs:16:1
+  --> tests/ui/merge_conflict.rs:18:1
    |
-16 | #[announce::announce(layout = single)]
+18 | #[announce::announce(layout = direct)]
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    |
    = note: this error originates in the attribute macro `announce::announce` (in Nightly builds, run with -Z macro-backtrace for more info)
 
-error: announce: this item is announced twice with different trampoline names (`B` and `A`). One item has one trampoline, so use the same `macro_name` (or none) in every announcement
-  --> tests/ui/merge_conflict.rs:25:1
+error: announce: this item is announced twice with different trampoline names (`D` and `C`). One item has one trampoline, so use the same `macro_name` (or none) in every announcement
+  --> tests/ui/merge_conflict.rs:24:1
    |
-25 | #[announce(macro_name = B)]
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-error: announce: this item is announced twice with different trampoline names (`HelperAlt` and `UnsetHelper`). One item has one trampoline, so use the same `macro_name` (or none) in every announcement
-  --> tests/ui/merge_conflict.rs:30:1
+24 | #[announce::announce(macro_name = D)]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    |
-30 | #[announce(macro_name = HelperAlt)]
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-warning: use of deprecated unit struct `_::DeriveAnnounce`: write `#[announce]` on the item instead of `#[derive(Announce)]`, with the options of the helper attribute `#[announce(..)]` as its arguments (several announcements of one item are merged either way)
-  --> tests/ui/merge_conflict.rs:19:12
-   |
-19 | pub struct WithDerive(pub u8);
-   |            ^^^^^^^^^^
-   |
-   = note: `#[warn(deprecated)]` on by default
-
-warning: use of deprecated unit struct `_::DeriveAnnounce`: write `#[announce]` on the item instead of `#[derive(Announce)]`, with the options of the helper attribute `#[announce(..)]` as its arguments (several announcements of one item are merged either way)
-  --> tests/ui/merge_conflict.rs:26:12
-   |
-26 | pub struct Helpers(pub u8);
-   |            ^^^^^^^
-
-warning: use of deprecated unit struct `_::DeriveAnnounce`: write `#[announce]` on the item instead of `#[derive(Announce)]`, with the options of the helper attribute `#[announce(..)]` as its arguments (several announcements of one item are merged either way)
-  --> tests/ui/merge_conflict.rs:31:12
-   |
-31 | pub struct UnsetHelper(pub u8);
-   |            ^^^^^^^^^^^
+   = note: this error originates in the attribute macro `announce::announce` (in Nightly builds, run with -Z macro-backtrace for more info)
