@@ -207,7 +207,7 @@ use proc_macro::TokenStream;
 /// - A transformer is a list element right after the definition. It rewrites the
 ///   entry and forwards to the rest, as in `[Item!, ::announce::signature_only!, cb!]`
 ///   (see [`signature_only!`](macro@signature_only), or write your own with
-///   `announce::helper::transformer!`). The caller chooses transformers, never the
+///   `announce::helper::transformer`). The caller chooses transformers, never the
 ///   definition.
 /// - The call works in any other position too: statement, expression, type and
 ///   pattern, also for items containing `$`.
@@ -569,61 +569,63 @@ pub fn remove(_attr: TokenStream, _item: TokenStream) -> TokenStream {
     TokenStream::new()
 }
 
-announce_core::helper::transformer! {
-    /// Transformer that strips the newest entry's item down to signatures.
-    ///
-    /// Put it in the list right after the definition. The callback then gets the
-    /// definition with the function bodies replaced, not the code itself.
-    ///
-    /// ```text
-    /// Item! { [Item!, ::announce::signature_only!, cb!] REST }
-    /// ```
-    ///
-    /// For a trait `Greet` and a module `util`, the callback gets the second form
-    /// instead of the first:
-    ///
-    /// ```text
-    /// // before
-    /// pub trait Greet {
-    ///     fn name(&self) -> u32;
-    ///     fn hi(&self) -> u32 { 42 }
-    /// }
-    /// pub mod util {
-    ///     pub fn plain() -> u32 { 7 }
-    ///     pub const fn zero() -> u32 { 0 }
-    ///     pub fn evens() -> impl Iterator<Item = u32> { (0..4).step_by(2) }
-    /// }
-    ///
-    /// // after
-    /// pub trait Greet {
-    ///     fn name(&self) -> u32;
-    ///     fn hi(&self) -> u32 { ::core::unimplemented!() }
-    /// }
-    /// pub mod util {
-    ///     pub fn plain() -> u32 { ::core::unimplemented!() }
-    ///     pub const fn zero() -> u32 { 0 }                                   // kept: const fn
-    ///     pub fn evens() -> impl Iterator<Item = u32> { (0..4).step_by(2) } // kept: impl Trait
-    /// }
-    /// ```
-    ///
-    /// The rules:
-    ///
-    /// - Provided trait methods, fns in modules (also nested ones) and methods in impl
-    ///   blocks get the body `{ ::core::unimplemented!() }`.
-    /// - Required trait methods stay as they are, so a callback can still tell them from
-    ///   provided ones.
-    /// - The body of a `const fn` and of a fn that returns `impl Trait` is kept, because a
-    ///   placeholder would not compile there if the callback emits the item.
-    /// - Structs, enums, unions and type aliases are unchanged.
-    ///
-    /// To write your own transformer, use `announce::helper::transformer!`. The function
-    /// `announce::helper::signature_only` does this rewrite on a `syn::Item`.
-    pub fn signature_only(entry) {
+/// Transformer that strips the newest entry's item down to signatures.
+///
+/// Put it in the list right after the definition. The callback then gets the
+/// definition with the function bodies replaced, not the code itself.
+///
+/// ```text
+/// Item! { [Item!, ::announce::signature_only!, cb!] REST }
+/// ```
+///
+/// For a trait `Greet` and a module `util`, the callback gets the second form
+/// instead of the first:
+///
+/// ```text
+/// // before
+/// pub trait Greet {
+///     fn name(&self) -> u32;
+///     fn hi(&self) -> u32 { 42 }
+/// }
+/// pub mod util {
+///     pub fn plain() -> u32 { 7 }
+///     pub const fn zero() -> u32 { 0 }
+///     pub fn evens() -> impl Iterator<Item = u32> { (0..4).step_by(2) }
+/// }
+///
+/// // after
+/// pub trait Greet {
+///     fn name(&self) -> u32;
+///     fn hi(&self) -> u32 { ::core::unimplemented!() }
+/// }
+/// pub mod util {
+///     pub fn plain() -> u32 { ::core::unimplemented!() }
+///     pub const fn zero() -> u32 { 0 }                                   // kept: const fn
+///     pub fn evens() -> impl Iterator<Item = u32> { (0..4).step_by(2) } // kept: impl Trait
+/// }
+/// ```
+///
+/// The rules:
+///
+/// - Provided trait methods, fns in modules (also nested ones) and methods in impl
+///   blocks get the body `{ ::core::unimplemented!() }`.
+/// - Required trait methods stay as they are, so a callback can still tell them from
+///   provided ones.
+/// - The body of a `const fn` and of a fn that returns `impl Trait` is kept, because a
+///   placeholder would not compile there if the callback emits the item.
+/// - Structs, enums, unions and type aliases are unchanged.
+///
+/// To write your own transformer, use `announce::helper::transformer`. The function
+/// `announce::helper::signature_only` does this rewrite on a `syn::Item`.
+#[proc_macro]
+pub fn signature_only(input: TokenStream) -> TokenStream {
+    announce_core::helper::transformer(input.into(), |mut entry| {
         let mut item: syn::Item = syn::parse2(entry.item.clone())?;
         announce_core::helper::signature_only(&mut item);
         entry.item = template_quote::ToTokens::to_token_stream(&item);
         Ok(entry)
-    }
+    })
+    .into()
 }
 
 #[doc(hidden)]

@@ -2,13 +2,16 @@
 //! `announce::helper::*`, from a crate that depends on `announce` alone (this one:
 //! `announce-core`, which holds the code, is not a dependency here).
 //!
-//! The macros `callback!` and `transformer!` define `#[proc_macro]` functions, so
-//! they can only be expanded in a proc-macro crate. `tests/derive` does that, also
-//! with `announce` as its only link to the code. Here their paths are resolved.
+//! The functions `callback` and `transformer` take and return `proc_macro2` streams, so
+//! they are called here directly. The macros `callback!` and `transformer!` of the same
+//! names (kept for compatibility) define `#[proc_macro]` functions, so they can only be
+//! expanded in a proc-macro crate. `tests/derive` does that, also with `announce` as its
+//! only link to the code. Here their paths are resolved.
 #![cfg(feature = "proc-macro-api")]
 
 use announce::helper::{
     // Functions.
+    callback,
     check,
     check_trait,
     check_type,
@@ -18,6 +21,7 @@ use announce::helper::{
     redirect,
     remove_attributes,
     signature_only,
+    transformer,
     // Types.
     CheckCall,
     CheckInput,
@@ -34,11 +38,11 @@ use announce::helper::{
 };
 // Modules.
 use announce::helper::{attrs, leak, type_leak};
-// Macros (defined with `#[macro_export]` in `announce-core`, re-exported by `helper`).
-// They are not expanded here (they emit `#[proc_macro]`); the import fails to compile
-// if either path does not resolve.
-#[allow(unused_imports)]
-use announce::helper::{callback, transformer};
+// The names `callback` and `transformer` above are also the macros (defined with
+// `#[macro_export]` in `announce-core`, re-exported by `helper`): a function and a macro
+// of one name are in different namespaces, so one `use` imports both. The macros are not
+// expanded here (they emit `#[proc_macro]`); `callback!` and `transformer!` are tested in
+// `tests/user` through `tests/derive`.
 
 use proc_macro2::TokenStream;
 use template_quote::ToTokens;
@@ -115,6 +119,47 @@ fn input_entries_and_conts() {
 
     let id = gensym("__x_");
     assert!(id.to_string().starts_with("__x_"));
+}
+
+#[test]
+fn callback_and_transformer_run_closures() {
+    // `callback` parses an `Input`, runs the closure and turns errors into `compile_error!`.
+    let run = |input: TokenStream| {
+        callback(input, |input: Input| {
+            let name: syn::Ident = input.rest_as()?;
+            let n = input.entries.len();
+            Ok(template_quote::quote!(const #name: usize = #n;))
+        })
+    };
+    let out = run(syn::parse_quote! { [cb!] a::S! => [] { struct S; } N });
+    assert_eq!(squash(out), "constN:usize=1usize;");
+    assert!(squash(run(syn::parse_quote! { [cb!] 1 })).starts_with("::core::compile_error!"));
+    assert!(squash(run(syn::parse_quote! { not a callback })).contains("compile_error"));
+
+    // `transformer` hands over the newest entry and forwards the result.
+    let run = |input: TokenStream| {
+        transformer(input, |mut entry: Entry| {
+            entry.meta.push(syn::parse_quote!(seen));
+            Ok(entry)
+        })
+    };
+    let out = squash(run(
+        syn::parse_quote! { [t!, cb!] b::T! => [] { struct T; } a::S! => [] { struct S; } REST },
+    ));
+    assert!(out.starts_with("cb!"), "{}", out);
+    assert!(out.contains("[seen]{structT;}"), "{}", out);
+    assert!(out.contains("structS;"), "{}", out);
+    assert!(squash(run(syn::parse_quote! { [t!, cb!] REST })).contains("compile_error"));
+    assert!(squash(run(
+        syn::parse_quote! { [t!] a::S! => [] { struct S; } REST }
+    ))
+    .contains("compile_error"));
+    // An error of the closure is reported, not forwarded.
+    let err = transformer(
+        syn::parse_quote! { [t!, cb!] a::S! => [] { struct S; } REST },
+        |_| Err(syn::Error::new(proc_macro2::Span::call_site(), "refused")),
+    );
+    assert!(squash(err).contains("refused"));
 }
 
 #[test]

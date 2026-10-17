@@ -1,12 +1,12 @@
 //! Helpers for proc-macro crates that use [`announce`](https://docs.rs/announce)
 //! trampolines: `announce::helper`.
 //!
-//! - Receive definitions: [`callback!`] defines a callback that parses its [`Input`].
+//! - Receive definitions: [`callback()`] runs a callback that parses its [`Input`].
 //!   [`Input::gather`] asks for more definitions. [`Input::forward`] continues the
 //!   chain.
 //! - Start a chain: [`ContList::invoke`] calls a trampoline from a proc macro.
 //! - Redirect: [`redirect`] forwards a derive or attribute to a renamed trampoline.
-//! - Transform: [`transformer!`] defines a list element that rewrites the newest
+//! - Transform: [`transformer()`] runs a list element that rewrites the newest
 //!   entry.
 //! - Check a definition: [`check`] runs a check: it answers the query and parses its
 //!   [`CheckInput`].
@@ -34,15 +34,19 @@ mod typeleak;
 
 pub use attrs::{remove_attributes, CheckCall, OwnedAttrs, Query};
 pub use kv::KvArgs;
-pub use transformer::signature_only;
+pub use transformer::{signature_only, transformer};
 /// The version of `type-leak` that [`TypeLeak`] uses. Name it through this crate,
 /// so there is never a second, incompatible copy.
 pub use type_leak;
 pub use typeleak::TypeLeak;
 
-// The macros are `#[macro_export]`ed, so they live at the crate root of
-// `announce-core`; this makes them `announce::helper::callback!` and
-// `announce::helper::transformer!`. Their `$crate` paths point at this module.
+// The macros `callback!` and `transformer!` (kept for compatibility; the functions of
+// the same names are the API) are `#[macro_export]`ed, so they live at the crate root
+// of `announce-core`; this makes them `announce::helper::callback!` and
+// `announce::helper::transformer!`. A macro and a function of one name do not clash:
+// they are in different namespaces. The macros are thin wrappers that call the
+// functions through their `$crate` paths, which point at this module.
+#[doc(hidden)]
 pub use crate::{callback, transformer};
 
 use proc_macro2::{Ident, Span, TokenStream};
@@ -888,9 +892,95 @@ pub mod __private {
     pub use syn;
 }
 
-/// Defines a `#[proc_macro]` callback that parses its [`Input`] and turns
-/// `syn::Error`s into compile errors. The body returns
-/// `syn::Result<proc_macro2::TokenStream>`.
+/// Runs a callback: the body of a `#[proc_macro]` that receives definitions from
+/// trampolines.
+///
+/// - `input` is the input of the proc macro, the tokens a trampoline sends. It is
+///   parsed as an [`Input`]; see there for the shape.
+/// - `f` is the callback itself. It gets the parsed [`Input`] by value and returns the
+///   tokens to emit, or a `syn::Error`.
+///
+/// A `syn::Error` (the input does not parse as an [`Input`], or `f` fails) becomes a
+/// `compile_error!` in the result, so the result can be returned from the proc macro
+/// as it is.
+///
+/// In a proc-macro crate this is a `#[proc_macro]` function. The example is run as a
+/// doctest, which cannot define a proc macro: it has no attribute, and `proc_macro`
+/// stands for `proc_macro2`.
+///
+/// ```
+/// # use announce_core as announce;
+/// # use announce::helper::{Cont, Entry, Input};
+/// # use proc_macro2 as proc_macro;
+/// # fn needed(_: &Input) -> syn::Result<Vec<Cont>> {
+/// #     Ok(vec![Cont::bang(syn::parse_quote!(a::Get))])
+/// # }
+/// # fn generate(entries: Vec<&Entry>) -> syn::Result<proc_macro::TokenStream> {
+/// #     let n = entries.len();
+/// #     Ok(template_quote::quote!(const COUNT: usize = #n;))
+/// # }
+/// /// Receives trait definitions.
+/// pub fn my_callback(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+///     announce::helper::callback(input.into(), |input| {
+///         // `input` is an `announce::helper::Input`.
+///         let entries = match input.gather(needed(&input)?) {
+///             announce::helper::Gather::Ready(e) => e,
+///             announce::helper::Gather::Fetch(ts) => return Ok(ts),
+///         };
+///         generate(entries)
+///     })
+///     .into()
+/// }
+/// #
+/// # // `a::Get!` is there: `generate` runs.
+/// # let out = my_callback(syn::parse_quote! { [cb!] a::Get! => [] { trait Get {} } });
+/// # assert_eq!(out.to_string(), "const COUNT : usize = 1usize ;");
+/// # // It is missing: the callback fetches it and is called again.
+/// # let out = my_callback(syn::parse_quote! { [cb!] }).to_string();
+/// # assert!(out.starts_with("a :: Get !") && out.contains("cb !"), "{}", out);
+/// ```
+///
+/// The function can be tested with `proc_macro2` streams, because it does not use the
+/// `proc_macro` crate:
+///
+/// ```
+/// # use announce_core as announce;
+/// use announce::helper::callback;
+/// use proc_macro2::TokenStream;
+/// use template_quote::quote;
+///
+/// let run = |input: TokenStream| {
+///     callback(input, |input| {
+///         let name: syn::Ident = input.rest_as()?;
+///         let n = input.entries.len();
+///         Ok(quote!(const #name: usize = #n;))
+///     })
+///     .to_string()
+/// };
+/// // One definition, then the caller's tokens.
+/// let out = run(syn::parse_quote! { [cb!] a::S! => [] { struct S; } COUNT });
+/// assert_eq!(out, "const COUNT : usize = 1usize ;");
+/// // Input that is not a callback input, and an error of the callback.
+/// assert!(run(syn::parse_quote! { not a callback input }).contains("compile_error"));
+/// assert!(run(syn::parse_quote! { [cb!] 1 + 1 }).contains("compile_error"));
+/// ```
+///
+/// The macro `callback!` (`announce::helper::callback! { pub fn name(input) { .. } }`)
+/// does the same and defines the `#[proc_macro]` function too. It is kept for
+/// compatibility; write the function above instead.
+pub fn callback(input: TokenStream, f: impl FnOnce(Input) -> Result<TokenStream>) -> TokenStream {
+    syn::parse2::<Input>(input)
+        .and_then(f)
+        .unwrap_or_else(|e| e.to_compile_error())
+}
+
+/// Defines a `#[proc_macro]` callback: the same as the function [`callback()`], in
+/// the form of a macro.
+///
+/// **Kept for compatibility; prefer the function [`callback()`]**, called from a
+/// `#[proc_macro]` function you write yourself. This macro is a thin wrapper that
+/// defines that function: the body returns `syn::Result<proc_macro2::TokenStream>`
+/// and gets the [`Input`] by value, as `input`.
 ///
 /// ```ignore
 /// announce::helper::callback! {
@@ -905,23 +995,51 @@ pub mod __private {
 /// }
 /// ```
 ///
+/// is the same as
+///
+/// ```
+/// # use announce_core as announce;
+/// # use announce::helper::{Cont, Entry, Input};
+/// # use proc_macro2 as proc_macro; // a doctest cannot define a `#[proc_macro]`
+/// # fn needed(_: &Input) -> syn::Result<Vec<Cont>> {
+/// #     Ok(vec![Cont::bang(syn::parse_quote!(a::Get))])
+/// # }
+/// # fn generate(entries: Vec<&Entry>) -> syn::Result<proc_macro::TokenStream> {
+/// #     let n = entries.len();
+/// #     Ok(template_quote::quote!(const COUNT: usize = #n;))
+/// # }
+/// /// Receives trait definitions.
+/// pub fn my_callback(ts: proc_macro::TokenStream) -> proc_macro::TokenStream {
+///     announce::helper::callback(ts.into(), |input| {
+///         let entries = match input.gather(needed(&input)?) {
+///             announce::helper::Gather::Ready(e) => e,
+///             announce::helper::Gather::Fetch(ts) => return Ok(ts),
+///         };
+///         generate(entries)
+///     })
+///     .into()
+/// }
+/// #
+/// # let out = my_callback(syn::parse_quote! { [cb!] a::Get! => [] { trait Get {} } });
+/// # assert_eq!(out.to_string(), "const COUNT : usize = 1usize ;");
+/// ```
+///
 /// The facade crate must re-export the callback (e.g. under `__private`) so
 /// that generated code can name it.
+#[doc(hidden)]
 #[macro_export]
 macro_rules! callback {
     ($(#[$m:meta])* $vis:vis fn $name:ident ($input:ident) $body:block) => {
         $(#[$m])*
         #[proc_macro]
         $vis fn $name(__announce_ts: ::proc_macro::TokenStream) -> ::proc_macro::TokenStream {
-            let __announce_run = |__announce_ts: ::proc_macro::TokenStream|
-             -> $crate::helper::__private::syn::Result<$crate::helper::__private::proc_macro2::TokenStream> {
-                let $input: $crate::helper::Input = $crate::helper::__private::syn::parse(__announce_ts)?;
-                $body
-            };
-            match __announce_run(__announce_ts) {
-                ::core::result::Result::Ok(ts) => ts.into(),
-                ::core::result::Result::Err(e) => e.to_compile_error().into(),
-            }
+            ::core::convert::Into::into($crate::helper::callback(
+                ::core::convert::Into::into(__announce_ts),
+                |$input: $crate::helper::Input|
+                 -> $crate::helper::__private::syn::Result<$crate::helper::__private::proc_macro2::TokenStream> {
+                    $body
+                },
+            ))
         }
     };
 }
@@ -945,7 +1063,7 @@ macro_rules! callback {
 /// For the check's own input, the result is what `f` returns. A `syn::Error` (the
 /// input does not parse, a name in `attributes` is not an identifier or is reserved
 /// ([`OwnedAttrs::check_names`]), or `f` fails) becomes a `compile_error!`, like in
-/// [`callback!`]. So the result can be returned from the proc macro as it is.
+/// [`callback()`]. So the result can be returned from the proc macro as it is.
 ///
 /// ```ignore
 /// /// Rejects `#[my_lib(bad)]` and tuple structs.
