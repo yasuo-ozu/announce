@@ -495,7 +495,7 @@ announce::helper::callback! {
 // ---- several announcements of one item (tests/defs/src/merge.rs) ----
 
 /// An attribute macro that returns its input as it is. `#[announce]` cannot know
-/// that, so it moves below it (see the module `merge` of the definitions).
+/// that, so the runner waits for it (see the module `merge` of the definitions).
 #[proc_macro_attribute]
 pub fn passthrough(_: TokenStream, item: TokenStream) -> TokenStream {
     item
@@ -519,6 +519,34 @@ pub fn emit_derive_announce(attr: TokenStream, item: TokenStream) -> TokenStream
         #[announce(#attr)]
         #item
     })
+}
+
+/// `#[late_announce(OPTIONS)]`: a macro that announces what it produces, wrongly: it adds
+/// `#[::announce::announce(OPTIONS)]` *below* the other attributes of the item, after
+/// the derive that `#[announce]` put there. That announcement is too late.
+#[proc_macro_attribute]
+pub fn late_announce(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let attr: TokenStream2 = attr.into();
+    let mut item: syn::DeriveInput = match syn::parse(item) {
+        Ok(i) => i,
+        Err(e) => return e.to_compile_error().into(),
+    };
+    item.attrs
+        .push(syn::parse_quote!(#[::announce::announce(#attr)]));
+    TokenStream::from(quote! { #item })
+}
+
+/// `#[late_derive_announce]`: the same with the derive: it adds `#[derive(Announce)]` below
+/// the other attributes of the item.
+#[proc_macro_attribute]
+pub fn late_derive_announce(_: TokenStream, item: TokenStream) -> TokenStream {
+    let mut item: syn::DeriveInput = match syn::parse(item) {
+        Ok(i) => i,
+        Err(e) => return e.to_compile_error().into(),
+    };
+    item.attrs
+        .push(syn::parse_quote!(#[derive(::announce::Announce)]));
+    TokenStream::from(quote! { #item })
 }
 
 /// `#[chain(N)]`: a macro that runs `N` times, each time announcing the item with

@@ -11,3 +11,23 @@ error: unknown announce option; expected one of `macro_name`, `mock`, `repeater`
    |
 13 | #[announce(macro_nam = X)]
    |            ^^^^^^^^^
+
+warning: use of deprecated unit struct `_::DeriveAnnounce`: write `#[announce]` on the item instead of `#[derive(Announce)]`, with the options of the helper attribute `#[announce(..)]` as its arguments (several announcements of one item are merged either way)
+ --> tests/ui/derive_helper_errors.rs:7:11
+  |
+7 | pub union Mocked {
+  |           ^^^^^^
+  |
+  = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated unit struct `_::DeriveAnnounce`: write `#[announce]` on the item instead of `#[derive(Announce)]`, with the options of the helper attribute `#[announce(..)]` as its arguments (several announcements of one item are merged either way)
+  --> tests/ui/derive_helper_errors.rs:14:10
+   |
+14 | pub enum Unknown {
+   |          ^^^^^^^
+
+warning: use of deprecated unit struct `_::DeriveAnnounce`: write `#[announce]` on the item instead of `#[derive(Announce)]`, with the options of the helper attribute `#[announce(..)]` as its arguments (several announcements of one item are merged either way)
+  --> tests/ui/derive_helper_errors.rs:22:12
+   |
+22 | pub struct Fine(pub u8);
+   |            ^^^^

@@ -108,13 +108,13 @@ pub struct EmitIntoDerive(pub u8);
 #[announce(meta = merge::b)]
 pub struct EmitDeriveIntoAttr(pub u8);
 
-/// `emit_announce` expands first, and its announcement moves below the second
-/// `emit_announce` (which announces as well, and moves behind it): they fold.
+/// `emit_announce` expands first, and its announcement puts the runner below the second
+/// `emit_announce` (which announces as well, into the runner).
 #[emit_announce(meta = merge::a)]
 #[emit_announce(meta = merge::b)]
 pub struct BothDefer(pub u8);
 
-/// An announcement that moves below a macro that does not announce.
+/// An announcement whose runner waits for a macro that does not announce.
 #[emit_announce(meta = merge::a)]
 #[derive(Debug)]
 #[passthrough]
@@ -129,11 +129,6 @@ pub struct Between(pub u8);
 /// Five macros that announce one after the other.
 #[chain(5)]
 pub struct ChainFive(pub u8);
-
-/// With the flag set by hand, an announcement does not move, whatever is left below.
-#[announce(meta = merge::a, __announce_deferred)]
-#[passthrough]
-pub struct MarkedNeverWaits(pub u8);
 
 #[chain(3)]
 #[announce(meta = merge::a)]
@@ -162,8 +157,8 @@ pub struct TickedBothDefer(pub u8);
 #[::announce::announce(tick(attr))]
 pub struct TickedDerive(pub u8);
 
-/// An attribute that a check owns stays below `#[announce]`, which removes it: the
-/// announcement moves below `passthrough` and the owned attribute follows it.
+/// An attribute that a check owns stays below `#[announce]`: the runner is below
+/// `passthrough`, the owned attribute follows the runner, and the runner removes it.
 #[emit_announce(record_attrs)]
 #[my_lib(on_the_item)]
 #[passthrough]

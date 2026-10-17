@@ -2,39 +2,57 @@
 
 ## Unreleased
 
-- Several announcements on one item are merged into one trampoline, one `Announce`
-  impl and one `META`, instead of failing with E0252 and E0119. `#[announce]` now
-  moves itself below the other attributes of the item the first time it expands (the
-  item comes back with `#[announce(.., __announce_deferred)]` as its last attribute),
-  so it announces the item as it is after the other attribute macros on it have
-  expanded; a `#[derive(..)]` below `#[announce]` has run by then and is not in what
-  callbacks receive. An item with no outer attribute is announced at once, and
-  an announcement with `emit_item = false` or `mock` does not move (the macros below it
-  never see the item). The moved announcement makes the trampoline, after it has taken
-  over the bare `#[announce(..)]` helper attributes of a derive, or it merges into
-  another moved announcement below it (checks and `meta` are united, `allow_primitive`,
-  `allow_std_prelude` and `docs` are OR-ed, `crate` is the target's, and a `mock`,
-  `repeater`, `layout` or `emit_item` that differs is one error). An announcement is told
-  by the mark `__announce_deferred`, never by its path: attributes of other crates that
-  are named `announce` (`#[metrics::announce(level = 2)]`) are not touched, and a renamed
-  import (`use announce::announce as ann; #[ann]`) is an announcement. The mark carries
-  the answer of the query of the checks (`__announce_deferred(attrs(my_lib))`), so the
-  query runs once for an announcement. `#[derive(Announce)]` leaves the announcement to
-  an announcement below it that has the mark or the path `x::announce` (the derive is
-  the one place that goes by the path: a derive above an `#[x::announce]` of another
-  crate stands aside). A macro that announces what it produces must put its attribute
-  first; one appended below the others is expanded after the moved announcement.
+- Several announcements of one item make one trampoline, one `Announce` impl and one
+  `META`, instead of failing with E0252 and E0119. It works for every kind of item, for
+  `#[announce]`, `#[derive(Announce)]` and macros that announce what they produce.
+- The first `#[announce]` on an item puts a hidden attribute macro, the runner
+  (`announce::__private::_actually_run_announce`), last among its attributes; the other
+  announcements merge their options into it; the runner makes the trampoline when it
+  expands, after every other macro on the item. So callbacks see the item after the other
+  attribute macros have run, and without the derives that have expanded.
   `announce::machinery::announce` does the same.
-- `#[derive(Announce)]` merges several `#[announce(..)]` helper attributes instead of
-  rejecting the second ("only one helper attribute is allowed").
+- An item that has no other attribute that could expand is announced at once, with no
+  runner: one expansion, as before. `///` documentation, `#[repr(..)]`, `#[allow(..)]` and
+  the other built-in attributes that a macro cannot be do not count, and nor do the
+  attributes that the checks of the announcement own.
+- Merging: checks and `meta` entries are united (the first announcement's first),
+  `allow_primitive`, `allow_std_prelude` and `docs` are OR-ed, `crate` is the first's, and
+  a `mock`, `repeater`, `layout` or `emit_item` that differs is one error with the item.
 - Announcements of one item merge only if they give the same trampoline name: the
-  `macro_name`, else the name of the item. Announcing one item twice under different
-  names (`#[announce] #[announce(macro_name = ParseAlt)] trait Parse {}`) failed in 0.1
-  with E0119 (two `Announce` impls), although the docs of `macro_name` suggested it. It
-  is now one error at the attribute that was expanded, and the item is kept. An announcement without `macro_name` is named after
-  the item, so it does not merge with one that renames the trampoline. Use the same
-  `macro_name` (or none) in every announcement; announce a copy (see `emit_item`) for a
-  second name.
+  `macro_name`, else the name of the item. `#[announce] #[announce(macro_name = ParseAlt)]
+  trait Parse {}` failed in 0.1 with E0119, although the docs of `macro_name` suggested it;
+  it is now one error at the attribute that was expanded, and the item is kept.
+- The runner is told by its name, never by the path `announce`: attributes of other crates
+  that are named `announce` (`#[metrics::announce(level = 2)]`) are not touched, and a
+  renamed import (`use announce::announce as ann; #[ann]`) is an announcement.
+- The bare `#[announce(..)]` attributes of an item (the helper attributes of a
+  `#[derive(Announce)]`) are taken over before the query of the checks, so that their
+  checks join its one query. `#[derive(Announce)] #[announce(meta = x::y)]
+  #[announce::announce(my_lib::check)] #[my_lib(x)] struct S;` failed with "cannot find
+  attribute `announce`".
+- The query of the checks runs once for an announcement, also when announcements merge.
+- An `#[announce]` or a `#[derive(Announce)]` that a macro appends below the runner is one
+  error, and is removed, instead of a second trampoline. A renamed import put there is not
+  seen.
+- The arguments of the runner carry the version of their encoding
+  (`_announce_format_version`). An item announced by two versions of the `announce` crate
+  that disagree is one error that lists the versions.
+- Behaviour change: `mock = ..` and `emit_item = false` are options like the others. The
+  announcement goes through the runner, and announcements below it are merged (they were
+  lost). The macros below it now expand on the item before the runner drops it: a derive
+  that implements a trait for the item fails with "cannot find type", where 0.1 dropped it
+  silently with the item.
+- An attribute that a check owns can be in an item-level `#[cfg_attr(.., my_lib(..))]`.
+- `#[derive(Announce)]` that the author writes is deprecated: it warns, at the name of the
+  item, and says to write `#[announce]`. It still works. `announce::machinery::derive_announce`
+  and `derive_announce_with` do not warn. It stands aside, and emits nothing, if the runner,
+  an `x::announce` attribute or another derive of `Announce` is below it; the announcement
+  takes its helper attributes over. A renamed import below it is not seen
+  (`#[derive(Announce)] #[ann]` is E0252).
+- `#[derive(Announce)]` merges several `#[announce(..)]` helper attributes instead of
+  rejecting the second ("only one helper attribute is allowed"), and reports the options
+  that a derive cannot take (`mock`, `emit_item`) and the ones that are not options even
+  when it stands aside.
 
 ## 0.1.1
 

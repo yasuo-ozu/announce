@@ -70,7 +70,9 @@ use proc_macro::TokenStream;
 /// - `allow_std_prelude = bool`: bare std prelude names (`String`, `Vec<u8>`,
 ///   `Option<T>`, `Clone`, ...) need no repeater. Default: `false`.
 /// - `emit_item = bool`: with `false`, emit only the trampoline, not the item.
-///   Default: `true`. Its main use is in [Inline modules](#inline-modules).
+///   Default: `true`. Its main use is in [Inline modules](#inline-modules). The item is
+///   dropped last, so the macros on it expand first: see
+///   [Several announcements on one item](#several-announcements-on-one-item).
 /// - `layout = auto | single | direct` (advanced): how the trampoline holds the
 ///   item. Default: `auto`. See [Size and recursion](#size-and-recursion).
 /// - `docs = bool`: with `true`, the item that callbacks and checks receive keeps
@@ -91,62 +93,87 @@ use proc_macro::TokenStream;
 /// An item can be announced by more than one: your `#[announce]` and the
 /// `#[announce(..)]` or `#[derive(Announce)]` that a macro of a library puts on the
 /// items it produces. They are **merged**: one trampoline, one `Announce` impl, and
-/// one `META` with what all of them attached.
+/// one `META` with what all of them attached. This works for every kind of item.
 ///
-/// - **`#[announce]` moves itself below the other attributes.** The first time it
-///   expands it emits the item and nothing else, with itself as the last outer
-///   attribute, marked with the internal option `__announce_deferred`. So it announces
-///   the item as it is after the other attribute macros on it have expanded, and a macro
-///   that announces what it produces (`#[a] #[announce] item`, where `a` emits
-///   `#[announce(..)]`) is merged. A `#[derive(..)]` below `#[announce]` has
-///   expanded then as well: rustc has taken it off the item, so it is not in what
-///   callbacks receive. There are two exceptions. An item with no outer attribute has
-///   nothing to wait for, and is announced at once. An announcement with `emit_item =
-///   false` or `mock` stays where it is (it is re-emitted as the first attribute, marked):
-///   the item is not emitted, and a derive below would implement a trait for an item that
-///   the announcement removes. Announcements below it are not merged then, so put the
-///   other announcements of such an item above it.
-/// - **A moved announcement is told by its mark, never by its path.** The one that has
-///   moved first takes over the bare `#[announce(..)]` attributes that are left (the
-///   helper attributes of a `#[derive(Announce)]`; one that is not options of
-///   `#[announce]` is left alone); then, if another attribute below it has the mark, it
-///   is merged into that one (its entries first, the target is the one that moved last),
-///   and otherwise it makes the trampoline. Any other attribute that is called `announce`
-///   (`#[metrics::announce(level = 2)]` of another crate) is not an announcement, and is
-///   not touched. A renamed import (`use announce::announce as ann; #[ann] #[ann(..)]`)
-///   works.
-/// - Merging options: checks and `meta` entries are united, the target's first,
-///   without duplicates. `allow_primitive`, `allow_std_prelude` and `docs` are on if any
-///   of them is on (`allow_primitive` is off only if all say so). `crate` is the
-///   target's, else the other's: two paths to `announce` do not conflict. `mock`,
-///   `repeater`, `layout` and `emit_item` take the value that is set; two values that
-///   differ are an error at the attribute that was expanded, and the item is kept.
+/// - **The runner makes the trampoline, last.** The first time `#[announce]` expands it
+///   emits the item and nothing else, with the hidden attribute
+///   `#[announce::__private::_actually_run_announce(..)]`, the *runner*, as the last
+///   of its attributes. The runner holds the options. It expands after every other
+///   attribute macro and derive on the item (rustc expands the attributes from the top),
+///   and then it makes the trampoline. So the item is announced as it is after the other
+///   macros have run, and a macro that announces what it produces (`#[a] #[announce]
+///   item`, where `a` emits `#[announce(..)]`) is merged. A `#[derive(..)]` has expanded
+///   by then as well: rustc has taken it off the item, so it is not in what callbacks
+///   receive. A later `#[announce(..)]` finds the runner, and merges its options into it.
+/// - **One expansion for a plain item.** An item that has no outer attribute that could
+///   expand after `#[announce]` is announced at once, with no runner. `///` documentation
+///   (the attribute `doc`), `#[repr(..)]` and the other built-in attributes that no
+///   macro can be (`allow`, `warn`, `deny`, `forbid`, `expect`, `must_use`, `deprecated`,
+///   `non_exhaustive`, `inline`, `cold`, `track_caller`, `no_mangle`, `automatically_derived`
+///   and `macro_use`, written as one name) do not count, and nor do the attributes that
+///   the checks of this announcement own. A `#[derive(..)]`, a `#[cfg_attr(..)]`, any other
+///   attribute and a path such as `#[x::doc]` do.
+/// - **The bare `#[announce(..)]` attributes are taken over.** Before its query,
+///   `#[announce]` removes the attributes `#[announce(..)]` (the bare name) that are left
+///   on the item and whose arguments are options, and merges their options into its own
+///   (its own come first), so that their checks join its one query. They are the helper
+///   attributes of a `#[derive(Announce)]` that stood aside. The runner takes over those
+///   that are still there when it expands. An attribute that is called `announce` and
+///   does not parse as options (`#[announce(level = 2)]` of another crate) is not touched.
+/// - The runner is found by its name, never by the path `announce`: an attribute of
+///   another crate that is named `announce`, with a path (`#[metrics::announce(level = 2)]`),
+///   is never taken for an announcement, and a renamed import
+///   (`use announce::announce as ann; #[ann] #[ann(..)]`) is one.
+/// - Merging options: checks and `meta` entries are united, the first announcement's
+///   first, without duplicates. `allow_primitive`, `allow_std_prelude` and `docs` are on if
+///   any of them is on (`allow_primitive` is off only if all say so). `crate` is the
+///   first announcement's, else the other's: two paths to `announce` do not conflict.
+///   `mock`, `repeater`, `layout` and `emit_item` take the value that is set; two values
+///   that differ are an error at the attribute that was expanded, and the item is kept.
 /// - One item has one trampoline, so the announcements must agree on its name: the
 ///   `macro_name`, else the name of the item. They merge only if these names are equal
 ///   (the explicit `macro_name` is kept). `#[announce] #[announce(macro_name = ParseAlt)]
 ///   pub trait Parse {}` is an error, not a trampoline `ParseAlt` with `Parse!` gone:
 ///   use the same `macro_name` (or none) in every announcement. Announce a copy for a
 ///   second name (see `emit_item` under "Inline modules").
-/// - Checks are asked once for an announcement: the answer to the query (the attribute
-///   names they own) goes with the mark, `__announce_deferred(attrs(my_lib))`, and is
-///   united when announcements merge. The attributes that checks own stand below the
-///   announcement, as rustc needs them to.
-/// - **A derive expands before the attribute macros below it, and cannot change the
-///   item.** `#[derive(Announce)]` emits nothing when an announcement stands below it,
-///   and the attribute makes the trampoline, with the derive's helper attributes. An
-///   announcement is seen there by its mark, and by its path as well, `x::announce` or
-///   another derive that lists `Announce`, because an attribute that has not moved yet
-///   has no mark. The path is not matched anywhere else, so the risk is only here: a
-///   derive above an `#[x::announce]` of another crate stands aside, and then nothing
-///   announces the item. A derive above `#[announce]` (`#[derive(Announce)] #[announce]`)
-///   works: the attribute moves below it and the derive sees the mark. A renamed import
-///   (`#[ann]`) below a derive is not seen by its path: write the path, or put the derive
-///   below.
+/// - **`mock` and `emit_item = false`** are options like the others: the announcement
+///   goes the same way, and the runner drops the item when the merged options say so (the
+///   value that is set wins over the one that is not). So announcements below such an
+///   announcement are merged, not lost. The macros below it expand on the item first, and
+///   a derive that implements a trait for the item you drop fails (`cannot find type`),
+///   where it was silently dropped with the item before.
+/// - Checks are asked once for an announcement. The names of the attributes that they
+///   own travel in the runner and are united when announcements merge. `#[announce]` puts
+///   the attributes its checks own right after the runner (rustc rejects an attribute that
+///   nothing knows above a macro that has still to expand), and the runner removes them.
+/// - **The format of the runner is versioned.** Its arguments start with the entry
+///   `_announce_format_version = "1"`, which every `announce` that reads them checks
+///   first, without reading the rest. If an item has runners of other versions (two versions
+///   of the `announce` crate announce it), that is one compile error that lists the
+///   versions and tells to use one version in every crate (`cargo tree -i announce`
+///   shows them).
 /// - A macro that announces what it produces puts the attribute first among the
 ///   attributes of its output (`quote! { #[announce::announce(..)] #item }`). One that
-///   adds it below the others (`item.attrs.push(..)`) is expanded after the moved
-///   announcement, which has made the trampoline by then: a second trampoline (E0252
-///   and E0119).
+///   adds it below the others (`item.attrs.push(..)`) is expanded after the runner, which
+///   sees it, reports it as an error and removes it, where it would make a second
+///   trampoline (E0252 and E0119). It sees an `#[x::announce]` and a `#[derive(Announce)]`.
+///   A renamed import (`#[ann]`) put there is not seen, and does make a second trampoline.
+///
+/// ## `#[derive(Announce)]`
+///
+/// A `#[derive(Announce)]` that you write is **deprecated**: it warns, and says to write
+/// `#[announce]` (with the options of the helper attribute `#[announce(..)]` as its
+/// arguments) instead. A derive expands before the attribute macros below it, and cannot
+/// change the item, so it emits nothing (and still warns) when an announcement stands
+/// below it: the runner, an attribute whose path is `x::announce`, or another derive
+/// of `Announce`. That announcement takes its helper attributes over. Known limits: it is
+/// told by the path `announce` there, so it stands aside for an `#[x::announce]` of another
+/// crate (and then nothing announces the item), and it does not see a renamed import
+/// below it, so `#[derive(Announce)] #[ann]` makes two trampolines (E0252, plus the
+/// warning). A bare `#[announce]` that is imported as the attribute macro and stands above
+/// a `#[derive(Announce)]` is the helper of the derive for rustc, and an error
+/// ("derive helper attribute is used before it is introduced"): write
+/// `#[::announce::announce]` there, or drop the derive.
 ///
 /// ```ignore
 /// #[announce(meta = a::info)]
@@ -196,7 +223,8 @@ use proc_macro::TokenStream;
 /// ```
 ///
 /// - `#[announce]` **removes** the owned attributes from the item it emits, so rustc
-///   never sees them.
+///   never sees them (the runner does it when it expands, see
+///   [Several announcements on one item](#several-announcements-on-one-item)).
 /// - The payload **keeps** them. Callbacks see them, and `META` lists the names as
 ///   one element, `attrs(my_lib, other)` (`announce::helper::Entry::owned_attrs`). A
 ///   callback that emits the item itself must remove them first
@@ -213,9 +241,9 @@ use proc_macro::TokenStream;
 /// and more (exact rules: [`announce::helper::attrs`]). A name that rustc or a
 /// standard tool uses (`cfg`, `doc`, `derive`, `allow`, `rustfmt`, `rustc_*`, ..)
 /// cannot be owned: that is an error where `#[announce]` is used. Two checks must not
-/// own the same name for different purposes. An owned name must not be read by
-/// another macro on the item: a derive's helper attribute would be removed before the
-/// derive runs.
+/// own the same name for different purposes. The other macros on the item see the owned
+/// attributes until the runner removes them (it is the last to expand), and must leave
+/// them alone.
 ///
 /// **The query.** With checks, `#[announce]` first asks each of them which attribute
 /// names it owns. **Every check must answer**, also one that owns no attribute.
@@ -476,8 +504,8 @@ use proc_macro::TokenStream;
 /// or `&mut self` methods only, at most `Send` and `Sync` as supertraits). With
 /// `emit_item = false` or `mock` there is no impl.
 ///
-/// For a struct, enum or union that you write yourself, you can use
-/// [`#[derive(Announce)]`](derive@Announce) instead.
+/// A [`#[derive(Announce)]`](derive@Announce) that you write does the same for a struct,
+/// enum or union, but it is deprecated: write `#[announce]`.
 ///
 /// [wire format]: https://docs.rs/announce/latest/announce/helper/struct.Input.html#the-wire-format
 /// [`announce::helper::attrs`]: https://docs.rs/announce/latest/announce/helper/attrs/index.html
@@ -524,12 +552,21 @@ pub fn define_repeater(input: TokenStream) -> TokenStream {
 
 /// Announces a struct, enum or union as written, and implements `Announce` for it.
 ///
+/// **Deprecated: write [`#[announce]`](macro@announce) instead.** It does the same on every
+/// kind of item, and merges with the other announcements of the item without the limits
+/// of a derive (which cannot change its item). A `#[derive(Announce)]` that you write
+/// warns (`use of deprecated unit struct DeriveAnnounce`, at the name of the item) and says
+/// so; `#[allow(deprecated)]` on the module or the function that holds the item silences it.
+/// The functions of `announce::machinery` do not warn.
+///
 /// Options go in a helper attribute, `#[announce(..)]`. They are the
 /// [options](macro@announce#options) of the `#[announce]` attribute, except `mock`
-/// and `emit_item`. By default the announced item has no doc attributes: see
-/// [Docs](macro@announce#docs). Several helper attributes, and an `#[announce]`
-/// attribute on the same item, are merged:
+/// and `emit_item`, which are errors. By default the announced item has no doc attributes:
+/// see [Docs](macro@announce#docs). Several helper attributes are merged:
 /// [Several announcements on one item](macro@announce#several-announcements-on-one-item).
+/// The derive stands aside, and emits nothing, if the item has an announcement below it
+/// (the hidden runner, an `x::announce` attribute, or another derive of `Announce`): that
+/// announcement takes the helper attributes over.
 ///
 /// ```ignore
 /// #[derive(announce::Announce)]
@@ -538,7 +575,16 @@ pub fn define_repeater(input: TokenStream) -> TokenStream {
 /// ```
 #[proc_macro_derive(Announce, attributes(announce))]
 pub fn derive_announce(input: TokenStream) -> TokenStream {
-    announce_core::derive_announce(input.into()).into()
+    announce_core::derive_entry(input.into()).into()
+}
+
+/// The runner: the attribute that `#[announce]` puts last among the attributes of an item,
+/// which makes the trampoline when it expands, after the other macros on the item. Not
+/// part of the API, never written by hand.
+#[doc(hidden)]
+#[proc_macro_attribute]
+pub fn _actually_run_announce(attr: TokenStream, item: TokenStream) -> TokenStream {
+    announce_core::run_announce(attr.into(), item.into()).into()
 }
 
 /// The end of the attribute query of `#[announce(check, ..)]`: the last element of the

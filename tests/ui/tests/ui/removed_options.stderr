@@ -17,3 +17,11 @@ error: `emit_item` does not apply to `#[derive(Announce)]`: the item is emitted 
   |          ^^^^^^^^^^^^^^^^^^
   |
   = note: this error originates in the derive macro `announce::Announce` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: use of deprecated unit struct `_::DeriveAnnounce`: write `#[announce]` on the item instead of `#[derive(Announce)]`, with the options of the helper attribute `#[announce(..)]` as its arguments (several announcements of one item are merged either way)
+  --> tests/ui/removed_options.rs:10:12
+   |
+10 | pub struct C;
+   |            ^
+   |
+   = note: `#[warn(deprecated)]` on by default

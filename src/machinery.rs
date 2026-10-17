@@ -47,12 +47,12 @@
 //!
 //! # Output
 //!
-//! The output is the output of the attribute, token for token: the item as given
-//! (unless `emit_item = false` or `mock`), followed by a hidden `#[derive]` on a
-//! dummy enum that carries the item. The derive runs after rustc has evaluated the
-//! `#[cfg]` attributes in the item, in the crate that expands the macro. Then it
-//! emits the trampoline. So the item may hold `#[cfg]` attributes, and the macro
-//! must be expanded in item position.
+//! The output is the output of the attribute, token for token. If the item has no other
+//! outer attribute, nothing can expand after the attribute: the output is the item as given
+//! (unless `emit_item = false` or `mock`), followed by a hidden `#[derive]` on a dummy
+//! enum that carries the item and emits the trampoline. The derive runs after rustc has
+//! evaluated the `#[cfg]` attributes in the item, in the crate that expands the macro. So
+//! the item may hold `#[cfg]` attributes, and the macro must be expanded in item position.
 //!
 //! ```
 //! use announce::machinery::announce;
@@ -66,16 +66,32 @@
 //!
 //! # Several announcements
 //!
-//! [`announce`] goes the way of the attribute in this as well. If the item it
-//! gets has an outer attribute, the output is the item with
-//! `#[<crate path>::announce(.., __announce_deferred)]` moved below the other attributes,
-//! and nothing else; that attribute, when it expands, makes the trampoline, or merges
-//! into another announcement that has moved. Only an announcement that has the mark is
-//! seen as one, never an attribute by its path. The output of a macro that calls
-//! [`announce`] must be an item that the compiler expands, so that the attribute is
-//! expanded. See [Several announcements on one
-//! item](macro@crate::announce#several-announcements-on-one-item). The derives
-//! ([`derive_announce`] and [`derive_announce_with`]) never do that.
+//! [`announce`] goes the way of the attribute in this as well. If the item has other outer
+//! attributes, the output is the item with the hidden attribute
+//! `#[<crate path>::__private::_actually_run_announce(..)]`, the *runner*, as its last
+//! attribute, and nothing else. It holds the options (and the version of its encoding),
+//! and when it expands, after everything else on the item, it makes the trampoline. If the
+//! item has a runner already, because another announcement was expanded first, the options
+//! are merged into it. The output of a macro that calls [`announce`] must be an item that
+//! the compiler expands, so that the runner is expanded. An announcement with `mock` or
+//! `emit_item = false` is made at once. See [Several announcements on one
+//! item](macro@crate::announce#several-announcements-on-one-item).
+//!
+//! ```
+//! use announce::machinery::announce;
+//! use proc_macro2::TokenStream;
+//!
+//! let attr: TokenStream = "crate = ::my_lib::announce, meta = my_lib::info".parse().unwrap();
+//! let item: TokenStream = "#[derive(Debug)] pub struct S;".parse().unwrap();
+//! let out = announce(attr, item).to_string();
+//! assert!(out.contains("__private ::_actually_run_announce"));
+//! assert!(out.contains("_announce_format_version = \"1\""));
+//! assert!(!out.contains("Capture"));
+//! ```
+//!
+//! [`derive_announce`] and [`derive_announce_with`] do not put a runner on the item. The
+//! derive that you write stands aside if the item has a runner (or an `x::announce`
+//! attribute, or another derive of `Announce`) below it: that one makes the trampoline.
 //!
 //! # Checks
 //!

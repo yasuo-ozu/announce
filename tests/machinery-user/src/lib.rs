@@ -88,18 +88,18 @@ pub struct DocsPlain {
 }
 
 // `tracked` calls `announce::machinery::announce`, which does what `#[announce]` does:
-// the item comes back with the announcement moved to the end and flagged. The other
-// announcement moves behind it, and the one that moved first folds into it: the two
-// are merged. This crate has no `announce` dependency, so the attribute names the
-// library's re-export and the crate in `crate = ..`.
+// the item comes back with the derive that announces it and the helper attribute that
+// holds the options, as its last attributes. The other announcement expands next and
+// merges its options into that attribute. This crate has no `announce` dependency, so the
+// attribute names the library's re-export and the crate in `crate = ..`.
 #[tracked(meta = test_lib::tracked)]
 #[announce_test_machinery_lib::announce::announce(crate = ::announce_test_machinery_lib::announce, meta = test_lib::attr)]
 pub struct MergedBelow {
     pub a: u8,
 }
 
-// Here the attribute expands first and moves below `tracked`; `tracked` then announces
-// as well, and the attribute folds into that announcement.
+// Here the attribute expands first and adds the derive; `tracked` then announces as
+// well, and its options are merged into the attribute of the derive.
 #[announce_test_machinery_lib::announce::announce(crate = ::announce_test_machinery_lib::announce, meta = test_lib::attr)]
 #[tracked(meta = test_lib::tracked)]
 pub struct MergedAbove {

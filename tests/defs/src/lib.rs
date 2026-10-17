@@ -1,14 +1,20 @@
 //! Definitions for the announce integration tests. The `x` feature is OFF here and
 //! ON in `announce-test-user`, to check that cfgs are evaluated in this crate.
+//!
+//! The definitions with a `#[derive(Announce)]` that the author writes are here on
+//! purpose, and so is the allowed warning: that derive is deprecated (it says to write
+//! `#[announce]` instead), and the tests are of the way it still works.
+#![allow(deprecated)]
 
 use announce::announce;
 
 pub mod docs;
-pub mod flag;
 pub mod large;
 pub mod large_leak;
 pub mod merge;
 pub mod owned;
+pub mod paths;
+pub mod runner;
 pub mod wire;
 
 pub mod kinds {

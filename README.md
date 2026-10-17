@@ -45,14 +45,13 @@ show! {
 `META` lists what the definer attached (checks, `meta` entries). Callers and
 callbacks need no dependency on announce.
 
-For a struct, enum or union you write yourself, derive it instead. The derive
-also implements the [`Announce`](https://docs.rs/announce/latest/announce/trait.Announce.html)
-trait, and takes the same options in a helper attribute `#[announce(..)]`:
+For a struct, enum or union it also implements the
+[`Announce`](https://docs.rs/announce/latest/announce/trait.Announce.html) trait,
+so that a consumer can ask for a clear error when an item is not announced.
 
-```rust
-#[derive(announce::Announce)]
-pub struct Point { pub x: i32, pub y: i32 }
-```
+An item that several attributes and macros announce, yours and those of the
+libraries you use, makes one trampoline, with the options of all of them
+([details](https://docs.rs/announce/latest/announce/attr.announce.html#several-announcements-on-one-item)).
 
 ## Calling a trampoline
 
@@ -89,7 +88,7 @@ All options of `#[announce(..)]` are in the
 
 In `announce`:
 
-- `#[announce]`, `#[derive(Announce)]` and the trait `Announce` define announced items.
+- `#[announce]` and the trait `Announce` define announced items.
 - [`announce::helper`](https://docs.rs/announce/latest/announce/helper/index.html)
   writes callbacks and checks, starts chains and redirects derives.
 - [`announce::machinery`](https://docs.rs/announce/latest/announce/machinery/index.html)

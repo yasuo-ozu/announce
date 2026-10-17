@@ -1,4 +1,6 @@
 //! Uses announce only as `ann` (renamed in Cargo.toml).
+// `DerivedExplicit` tests the derive that the author writes, which is deprecated.
+#![allow(deprecated)]
 
 pub mod inner {
     pub struct Local(pub u8);

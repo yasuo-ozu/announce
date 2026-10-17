@@ -1,6 +1,7 @@
 //! Items with attributes of their own (`#[my_lib(..)]`, `#[other(..)]`, ..),
 //! which the checks of `#[announce]` own: they are removed from the emitted item
-//! and kept in the payload.
+//! (by the runner, or by the announcement when nothing can expand after it) and kept in
+//! the payload.
 
 use announce::announce;
 

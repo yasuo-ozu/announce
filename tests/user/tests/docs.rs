@@ -74,8 +74,9 @@ fn struct_payload_has_no_docs() {
         out
     );
     // `doc(alias = ..)` on the item stays. `#[derive]` is not there: it is below
-    // `#[announce]` in the source, which moves below it, so it has expanded (and rustc
-    // has taken it off the item) when the announcement is made.
+    // `#[announce]` in the source, and the runner that makes the announcement is below
+    // it, so it has expanded (and rustc has taken it off the item) when the announcement
+    // is made.
     assert!(
         out.contains("{#[doc(alias=\"plain_alias\")]pubstructPlain"),
         "{}",

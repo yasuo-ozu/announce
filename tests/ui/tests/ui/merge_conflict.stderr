@@ -1,26 +1,26 @@
-error: announce: this item is announced twice with different trampoline names (`A` and `B`). One item has one trampoline, so use the same `macro_name` (or none) in every announcement
- --> tests/ui/merge_conflict.rs:4:1
+error: announce: this item is announced twice with different trampoline names (`B` and `A`). One item has one trampoline, so use the same `macro_name` (or none) in every announcement
+ --> tests/ui/merge_conflict.rs:5:1
   |
-4 | #[announce::announce(macro_name = A)]
+5 | #[announce::announce(macro_name = B)]
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
   |
-  = note: this error originates in the attribute macro `::announce::announce` (in Nightly builds, run with -Z macro-backtrace for more info)
+  = note: this error originates in the attribute macro `announce::announce` (in Nightly builds, run with -Z macro-backtrace for more info)
 
-error: announce: this item is announced twice with different trampoline names (`Parse` and `ParseAlt`). One item has one trampoline, so use the same `macro_name` (or none) in every announcement
-  --> tests/ui/merge_conflict.rs:11:1
+error: announce: this item is announced twice with different trampoline names (`ParseAlt` and `Parse`). One item has one trampoline, so use the same `macro_name` (or none) in every announcement
+  --> tests/ui/merge_conflict.rs:12:1
    |
-11 | #[announce::announce]
-   | ^^^^^^^^^^^^^^^^^^^^^
+12 | #[announce::announce(macro_name = ParseAlt)]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    |
-   = note: this error originates in the attribute macro `::announce::announce` (in Nightly builds, run with -Z macro-backtrace for more info)
+   = note: this error originates in the attribute macro `announce::announce` (in Nightly builds, run with -Z macro-backtrace for more info)
 
-error: announce: this announcement sets `layout = single`, but another announcement of the same item sets `layout = direct`. The announcements of one item are merged into one trampoline, so they must agree: remove one of them or make them equal
+error: announce: this announcement sets `layout = direct`, but another announcement of the same item sets `layout = single`. The announcements of one item are merged into one trampoline, so they must agree: remove one of them or make them equal
   --> tests/ui/merge_conflict.rs:16:1
    |
 16 | #[announce::announce(layout = single)]
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    |
-   = note: this error originates in the attribute macro `::announce::announce` (in Nightly builds, run with -Z macro-backtrace for more info)
+   = note: this error originates in the attribute macro `announce::announce` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 error: announce: this item is announced twice with different trampoline names (`B` and `A`). One item has one trampoline, so use the same `macro_name` (or none) in every announcement
   --> tests/ui/merge_conflict.rs:25:1
@@ -33,3 +33,23 @@ error: announce: this item is announced twice with different trampoline names (`
    |
 30 | #[announce(macro_name = HelperAlt)]
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated unit struct `_::DeriveAnnounce`: write `#[announce]` on the item instead of `#[derive(Announce)]`, with the options of the helper attribute `#[announce(..)]` as its arguments (several announcements of one item are merged either way)
+  --> tests/ui/merge_conflict.rs:19:12
+   |
+19 | pub struct WithDerive(pub u8);
+   |            ^^^^^^^^^^
+   |
+   = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated unit struct `_::DeriveAnnounce`: write `#[announce]` on the item instead of `#[derive(Announce)]`, with the options of the helper attribute `#[announce(..)]` as its arguments (several announcements of one item are merged either way)
+  --> tests/ui/merge_conflict.rs:26:12
+   |
+26 | pub struct Helpers(pub u8);
+   |            ^^^^^^^
+
+warning: use of deprecated unit struct `_::DeriveAnnounce`: write `#[announce]` on the item instead of `#[derive(Announce)]`, with the options of the helper attribute `#[announce(..)]` as its arguments (several announcements of one item are merged either way)
+  --> tests/ui/merge_conflict.rs:31:12
+   |
+31 | pub struct UnsetHelper(pub u8);
+   |            ^^^^^^^^^^^

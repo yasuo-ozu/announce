@@ -5,6 +5,8 @@
 //!
 //! `tests/nostd.rs` calls the trampolines from a crate with std.
 #![no_std]
+// The derive that the author writes is deprecated; `Derived` below is a test of it.
+#![allow(deprecated)]
 
 use announce::announce;
 

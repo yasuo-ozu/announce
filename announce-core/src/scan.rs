@@ -184,14 +184,6 @@ impl OuterAttr {
         !self.leading_colon && self.segments.len() == 1 && self.segments[0] == name
     }
 
-    /// The arguments carry the flag of an announcement that has moved
-    /// ([`crate::options::FLAG`]): whatever the path of the attribute is.
-    pub fn carries_flag(&self) -> bool {
-        self.args
-            .as_ref()
-            .map_or(false, |g| tokens_carry_flag(g.stream()))
-    }
-
     /// The first segment of the path is one of `owned` (see `OwnedAttrs::owns`).
     pub fn is_owned_by(&self, owned: &crate::helper::OwnedAttrs) -> bool {
         !self.leading_colon
@@ -209,24 +201,6 @@ impl OuterAttr {
         }
         out
     }
-}
-
-/// Whether the arguments of an attribute (the tokens inside its parentheses) have the
-/// flag of an announcement that has moved, [`crate::options::FLAG`], as one of the
-/// entries separated by commas: alone, or with its parenthesized answer. Only the
-/// top level is read, and nothing is parsed.
-pub(crate) fn tokens_carry_flag(args: TokenStream) -> bool {
-    let tts: Vec<TokenTree> = args.into_iter().collect();
-    tts.iter().enumerate().any(|(i, t)| {
-        matches!(t, TokenTree::Ident(id) if id == crate::options::FLAG)
-            && (i == 0 || is_punct(tts.get(i - 1), ','))
-            && match tts.get(i + 1) {
-                None => true,
-                Some(TokenTree::Punct(p)) => p.as_char() == ',',
-                Some(TokenTree::Group(g)) => g.delimiter() == Delimiter::Parenthesis,
-                Some(_) => false,
-            }
-    })
 }
 
 /// An item split into its outer attributes and the rest.
