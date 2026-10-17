@@ -244,18 +244,18 @@ fn dollar_payloads_of_large_items() {
     );
 }
 
-mod derived_single {
-    ::announce_test_defs::large::DerivedSingle! { [::announce_test_defs::large::DerivedSingle!, capture!] }
+mod single_with_derive {
+    ::announce_test_defs::large::SingleWithDerive! { [::announce_test_defs::large::SingleWithDerive!, capture!] }
 }
 
 #[test]
-fn the_derive_takes_the_layout_option() {
+fn the_runner_takes_the_layout_option() {
     fn is_announced<T: ?Sized + announce::Announce>() {}
-    is_announced::<announce_test_defs::large::DerivedSingle>();
-    let out = norm(derived_single::OUT);
+    is_announced::<announce_test_defs::large::SingleWithDerive>();
+    let out = norm(single_with_derive::OUT);
     assert!(
-        out.contains("=>[$crate::info(derived)]{")
-            && out.ends_with("pubstructDerivedSingle{puba:u8,}}"),
+        out.contains("=>[$crate::info(runner)]{")
+            && out.ends_with("pubstructSingleWithDerive{puba:u8,}}"),
         "{}",
         out
     );

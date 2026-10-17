@@ -984,11 +984,11 @@ pub mod big_direct_mod {
     }
 }
 
-// The derive form takes the option in its helper attribute, and the item is
-// emitted as written.
-#[derive(::announce::Announce, Debug)]
-#[announce(layout = single, meta = crate::info(derived))]
-pub struct DerivedSingle {
+// An item with a derive of another trait goes through the runner, which holds the
+// option, and the item is emitted as written.
+#[announce(layout = single, meta = crate::info(runner))]
+#[derive(Debug)]
+pub struct SingleWithDerive {
     pub a: u8,
     #[cfg(any())]
     pub gone: u8,

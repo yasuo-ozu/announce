@@ -498,11 +498,10 @@ fn trait_is_simple_dyn(t: &syn::ItemTrait) -> bool {
 /// The `Announce` impl, if `generate` writes one. Its generics are those of the
 /// item, without the attributes of the parameters.
 fn marker_impl(item: &Item, opts: &Options) -> TokenStream {
-    // `#[derive(Announce)]` always implements it. `emit_item = false` means
-    // the item is emitted (and its `Announce` impl owned) by someone else, so
-    // a second announcement cannot conflict with it. A mock is a
+    // `emit_item = false` means the item is emitted (and its `Announce` impl owned) by
+    // someone else, so a second announcement cannot conflict with it. A mock is a
     // stand-in, not the real item.
-    if opts.mock.is_some() || !(opts.derived || opts.emit_item) {
+    if opts.mock.is_some() || !opts.emit_item {
         return TokenStream::new();
     }
     match item {
@@ -765,13 +764,18 @@ fn single_arms(fallback: &Ident, v: &Variant) -> TokenStream {
     out
 }
 
+/// The arm that the sentinel of the announcement calls (`NAME! { @__announce_exists }`, see
+/// `runner::Sentinel`): it expands to nothing, and is first so that no other arm sees it.
+const EXISTS_ARM: &str = "(@__announce_exists) => {};";
+
 /// The arms of the chosen layout, and the catch-all error arm.
 fn arms(fallback: &Ident, plain: &Variant, single: bool) -> TokenStream {
-    let mut out = if single {
+    let mut out: TokenStream = EXISTS_ARM.parse().expect("a macro arm");
+    out.extend(if single {
         single_arms(fallback, plain)
     } else {
         direct_arms(fallback, plain)
-    };
+    });
     out.extend(quote! {
         ($($t:tt)*) => { compile_error! { #BAD_INPUT } };
     });
@@ -893,10 +897,44 @@ fn trampoline_with(
     out
 }
 
+/// What stands in for the trampoline and the `Announce` impl when `generate` has failed
+/// (after its error), for the sentinel of the announcement (`runner::Sentinel`) to find: the
+/// impl, or a macro with the arm of the sentinel only. Without it the sentinel would report a
+/// second error, about what the first one has already said.
+pub fn sentinel_stub(
+    sentinel: crate::runner::Sentinel,
+    ident: &Ident,
+    opts: &Options,
+    random: u64,
+) -> TokenStream {
+    match sentinel {
+        crate::runner::Sentinel::Impl => {
+            let krate = opts.krate();
+            quote! { impl #krate::Announce for #ident {} }
+        }
+        crate::runner::Sentinel::Macro => {
+            let name = opts.macro_name.clone().unwrap_or_else(|| ident.clone());
+            let hidden = Ident::new(
+                &format!("__announce_stub_{}", hex(random)),
+                Span::call_site(),
+            );
+            let arm: TokenStream = EXISTS_ARM.parse().expect("a macro arm");
+            quote! {
+                #[doc(hidden)]
+                #[allow(unused_macros)]
+                macro_rules! #hidden { #arm }
+                #[doc(hidden)]
+                #[allow(unused_imports)]
+                use #hidden as #name;
+            }
+        }
+    }
+}
+
 /// Whether `generate` emits the real item itself: when something is removed from
-/// it, the derive emits it instead of `#[announce]`.
+/// it, the capture derive emits it instead of `#[announce]`.
 fn emits_real_item(opts: &Options, owned: &OwnedAttrs) -> bool {
-    !owned.is_empty() && opts.emit_item && opts.mock.is_none() && !opts.derived
+    !owned.is_empty() && opts.emit_item && opts.mock.is_none()
 }
 
 /// What stands in for `generate` when it fails: the real item, if `generate`
@@ -937,20 +975,8 @@ pub fn generate(
     random: u64,
     owned: &OwnedAttrs,
 ) -> Result<TokenStream> {
-    generate_timed(item, opts, random, owned, &mut Timer::off())
-}
-
-/// [`generate`], with the steps timed by `t`.
-pub(crate) fn generate_timed(
-    item: Item,
-    opts: &Options,
-    random: u64,
-    owned: &OwnedAttrs,
-    t: &mut Timer,
-) -> Result<TokenStream> {
     let prep = prepare(item, None, opts, owned);
-    t.step("strip");
-    emit(&prep, opts, random, owned, t)
+    emit(&prep, opts, random, owned, &mut Timer::off())
 }
 
 /// [`generate`] for a [`Prepared`] item. The steps are timed by `t` (the caller
@@ -1452,6 +1478,50 @@ mod tests {
         }
     }
 
+    #[test]
+    fn both_layouts_start_with_the_arm_of_the_sentinel() {
+        // The arm that `NAME! { @__announce_exists }` of the sentinel matches is the first, so
+        // that no other arm sees the call; with `$` in the payload as well.
+        for layout in [Layout::Direct, Layout::Single] {
+            for payload in [struct_of(2), quote! { pub struct S { pub a: [u8; $n] } }] {
+                let out = emitted(layout, payload);
+                assert!(
+                    out.contains(
+                        "macro_rules!__announce_S_0000000000000001{(@__announce_exists)=>{};("
+                    ),
+                    "{}",
+                    out
+                );
+                assert_eq!(out.matches("@__announce_exists").count(), 1, "{}", out);
+            }
+        }
+    }
+
+    #[test]
+    fn the_stand_ins_for_a_failed_generate_satisfy_the_sentinel() {
+        use crate::runner::Sentinel;
+        let ident = Ident::new("S", Span::call_site());
+        let opts: Options = syn::parse2(quote! { crate = ::l::announce }).unwrap();
+        // The `Announce` impl for the check, or a macro with the arm of the sentinel.
+        let out = squash(sentinel_stub(Sentinel::Impl, &ident, &opts, 7));
+        assert_eq!(out, "impl::l::announce::AnnounceforS{}");
+        let out = squash(sentinel_stub(Sentinel::Macro, &ident, &opts, 7));
+        assert!(
+            out.contains("macro_rules!__announce_stub_0000000000000007{(@__announce_exists)=>{};}")
+                && out.ends_with("use__announce_stub_0000000000000007asS;"),
+            "{}",
+            out
+        );
+        // Under the name of the trampoline.
+        let opts: Options = syn::parse2(quote! { macro_name = N }).unwrap();
+        let out = squash(sentinel_stub(Sentinel::Macro, &ident, &opts, 7));
+        assert!(
+            out.ends_with("use__announce_stub_0000000000000007asN;"),
+            "{}",
+            out
+        );
+    }
+
     fn generate_for(opts: &str, owned: &[&str], item: TokenStream) -> String {
         let opts: Options = syn::parse2(opts.parse().unwrap()).unwrap();
         let item: Item = syn::parse2(item).unwrap();
@@ -1541,29 +1611,13 @@ mod tests {
         // `emit_item = false`: nothing is emitted for rustc at all.
         let out = generate_for("emit_item = false", &["my_lib"], item.clone());
         assert!(out.starts_with("#[doc(hidden)]"), "{}", out);
-        // A derive does not emit its input either.
-        let opts = Options {
-            derived: true,
-            emit_item: false,
-            ..Options::default()
-        };
-        let out = squash(
-            generate(
-                syn::parse2(item).unwrap(),
-                &opts,
-                3,
-                &OwnedAttrs::from_strs(&["my_lib"]),
-            )
-            .unwrap(),
-        );
-        assert!(out.starts_with("#[doc(hidden)]"), "{}", out);
     }
 
     #[test]
     fn a_failed_generate_still_gives_the_real_item() {
         let owned = OwnedAttrs::from_strs(&["my_lib"]);
         let opts = Options::default();
-        // With owned names the derive would have emitted the item.
+        // With owned names the capture derive emits the item.
         let item2: Item =
             syn::parse2(quote! { pub struct S { #[my_lib] #[cfg(a)] pub a: u8 } }).unwrap();
         let out = squash(real_item_on_error(item2.clone(), &opts, &owned));

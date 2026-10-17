@@ -1,0 +1,7 @@
+error: announce: this item has an `#[announce]` that expands after its announcements were run, so it makes a second trampoline: a macro of the item has put it below the other attributes of its output (for example by appending it to the attributes of the item). It is removed. Put it first among the attributes of the output (`quote! { #[announce(..)] #item }`)
+ --> tests/ui/merge_late.rs:5:1
+  |
+5 | #[announce::announce(meta = my_lib::first)]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `::announce::__private::__announce_runner` (in Nightly builds, run with -Z macro-backtrace for more info)

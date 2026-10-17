@@ -28,7 +28,10 @@ mod explicit {
         ::announce_test_renamed::ExplicitTrait! { [::announce_test_renamed::ExplicitTrait!, capture!] }
     }
     pub mod d {
-        ::announce_test_renamed::DerivedExplicit! { [::announce_test_renamed::DerivedExplicit!, capture!] }
+        ::announce_test_renamed::ExplicitWithDerive! { [::announce_test_renamed::ExplicitWithDerive!, capture!] }
+    }
+    pub mod r {
+        ::announce_test_renamed::RenamedWithDerive! { [::announce_test_renamed::RenamedWithDerive!, capture!] }
     }
 }
 
@@ -36,10 +39,12 @@ mod explicit {
 fn crate_option_with_a_renamed_dependency() {
     assert_marker::<announce_test_renamed::Explicit>();
     assert_marker::<dyn announce_test_renamed::ExplicitTrait>();
-    assert_marker::<announce_test_renamed::DerivedExplicit>();
+    assert_marker::<announce_test_renamed::ExplicitWithDerive>();
+    assert_marker::<announce_test_renamed::RenamedWithDerive>();
     assert!(explicit::OUT.contains("struct Explicit"));
     assert!(explicit::t::OUT.contains("trait ExplicitTrait"));
-    assert!(explicit::d::OUT.contains("struct DerivedExplicit"));
+    assert!(explicit::d::OUT.contains("struct ExplicitWithDerive"));
+    assert!(explicit::r::OUT.contains("struct RenamedWithDerive"));
     // An explicit path wins over the one read from Cargo.toml.
     fn spy<T: ?Sized + announce_test_renamed::spy::Announce>() {}
     spy::<announce_test_renamed::ViaSpy>();

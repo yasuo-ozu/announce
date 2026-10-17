@@ -1,5 +1,0 @@
-error: cannot find attribute `my_lib` in this scope
- --> tests/ui/owned_derive.rs:8:7
-  |
-8 |     #[my_lib(x)]
-  |       ^^^^^^

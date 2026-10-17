@@ -2,8 +2,8 @@
 //!
 //! With the environment variable `ANNOUNCE_TIMING` set (to anything but `0` or the
 //! empty string) in the environment of the compiler, every expansion of
-//! `#[announce]`, of its hidden `Capture` derive, of `finish!` and of
-//! `#[derive(Announce)]` prints one line to stderr:
+//! `#[announce]`, of its hidden `Capture` derive and of `finish!` prints one line to
+//! stderr:
 //!
 //! ```text
 //! announce-timing: capture trait Big: read=0.021 parse=2.310 strip=1.873 marker=0.402 analysis(fast)=0.912 payload=2.011 quote=0.455 | total=8.013 ms
@@ -57,7 +57,7 @@ impl Timer {
         Timer(None)
     }
 
-    /// Starts the clock of `phase` (`attribute`, `capture`, `finish`, `derive`).
+    /// Starts the clock of `phase` (`attribute`, `capture`, `finish`).
     pub(crate) fn new(phase: &'static str) -> Timer {
         if !enabled() {
             return Timer(None);
@@ -155,7 +155,7 @@ mod tests {
         // Built by hand: the environment is read once per process.
         let now = Instant::now();
         let mut t = Timer(Some(Box::new(Active {
-            phase: "derive",
+            phase: "capture",
             subject: String::new(),
             start: now,
             last: now,

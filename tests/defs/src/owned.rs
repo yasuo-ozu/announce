@@ -1,6 +1,7 @@
 //! Items with attributes of their own (`#[my_lib(..)]`, `#[other(..)]`, ..),
 //! which the checks of `#[announce]` own: they are removed from the emitted item
-//! and kept in the payload.
+//! (by the runner, or by the announcement when nothing can expand after it) and kept in
+//! the payload.
 
 use announce::announce;
 
@@ -258,12 +259,12 @@ pub mod with_dollar_rules {
     }
 }
 
-/// The derive form with a check that owns `rules`: a derive removes nothing, so
-/// `Rules` declares the attribute, and the callbacks see `attrs(rules)`.
-#[derive(::announce::Announce, announce_test_derive::Rules, Debug)]
+/// A check that owns `rules`, on an item with a derive of another trait: the runner
+/// makes the trampoline, and the callbacks see `attrs(rules)`.
 #[announce(crate::rules_check)]
-pub struct DerivedOwned {
-    #[rules(derived)]
+#[derive(Debug)]
+pub struct OwnedWithDerive {
+    #[rules(on_field)]
     pub a: u8,
 }
 

@@ -1,5 +1,5 @@
-//! Proc macros used by the announce tests: an announce-aware derive, a proc-macro
-//! callback, a trampoline starter and a definition-side check.
+//! Proc macros used by the announce tests: announce-aware derives and attributes, a
+//! proc-macro callback, a trampoline starter and a definition-side check.
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
@@ -257,14 +257,6 @@ pub fn head_probe(input: TokenStream) -> TokenStream {
     }
 }
 
-/// Declares the attribute `rules` and does nothing else. A `#[derive(Announce)]`
-/// cannot remove attributes from its item, so an item that has `#[rules(..)]` in it
-/// needs a derive that declares them (the check is `announce_test_defs::rules_check`).
-#[proc_macro_derive(Rules, attributes(rules))]
-pub fn derive_rules(_: TokenStream) -> TokenStream {
-    TokenStream::new()
-}
-
 /// A check written the way checks were before the attribute query existed: it
 /// parses `CheckInput` and does not answer the query.
 #[proc_macro]
@@ -285,7 +277,9 @@ pub fn check_marker(input: TokenStream) -> TokenStream {
     announce::helper::check_type(&syn::parse_quote!(::announce), &ty).into()
 }
 
-/// A derive that announces its own input via `#[announce(emit_item = false)]`.
+/// A derive of a library that emits a trampoline of a copy of its input, with
+/// `#[announce(emit_item = false)]`: the item it is on is not announced by it, and the
+/// copy is not emitted.
 #[proc_macro_derive(Announced)]
 pub fn derive_announced(input: TokenStream) -> TokenStream {
     let input: TokenStream2 = input.into();
@@ -489,5 +483,229 @@ announce::helper::callback! {
             });
         }
         Ok(quote! { pub const #name: &[&str] = &[ #(#rows),* ]; })
+    }
+}
+
+// ---- several announcements of one item (tests/defs/src/merge.rs) ----
+
+/// An attribute macro that returns its input as it is. `#[announce]` cannot know
+/// that, so the runner waits for it (see the module `merge` of the definitions).
+#[proc_macro_attribute]
+pub fn passthrough(_: TokenStream, item: TokenStream) -> TokenStream {
+    item
+}
+
+/// `#[emit_announce(OPTIONS)]`: a macro that announces what it produces. Emits the
+/// item with `#[::announce::announce(OPTIONS)]` as its outermost attribute.
+#[proc_macro_attribute]
+pub fn emit_announce(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let (attr, item): (TokenStream2, TokenStream2) = (attr.into(), item.into());
+    TokenStream::from(quote! { #[::announce::announce(#attr)] #item })
+}
+
+/// An attribute macro of another crate that returns the item without its outer attributes,
+/// as a macro that rebuilds its input from the parsed fields does. It drops the runner that
+/// `#[announce]` has put last among the attributes, so nothing announces the item: the
+/// sentinel of the announcement fails at the definition.
+#[proc_macro_attribute]
+pub fn drop_attrs(_: TokenStream, item: TokenStream) -> TokenStream {
+    use proc_macro::TokenTree;
+    let mut tokens = item.into_iter().peekable();
+    // The attributes are `#` and a bracketed group, one after the other.
+    while matches!(tokens.peek(), Some(TokenTree::Punct(p)) if p.as_char() == '#') {
+        tokens.next();
+        tokens.next();
+    }
+    tokens.collect()
+}
+
+/// An attribute macro that puts a runner of another version of `announce` below the other
+/// attributes of the item, as a second `announce` crate in the build would.
+#[proc_macro_attribute]
+pub fn other_version(_: TokenStream, item: TokenStream) -> TokenStream {
+    use proc_macro::TokenTree;
+    let mut out = TokenStream::new();
+    let mut tokens = item.into_iter().peekable();
+    while matches!(tokens.peek(), Some(TokenTree::Punct(p)) if p.as_char() == '#') {
+        out.extend(tokens.next());
+        out.extend(tokens.next());
+    }
+    out.extend(TokenStream::from(quote! {
+        #[::announce::__private::__announce_runner(__announce_format_version = "7")]
+    }));
+    out.extend(tokens);
+    out
+}
+
+/// `#[late_announce(OPTIONS)]`: a macro that announces what it produces, wrongly: it adds
+/// `#[::announce::announce(OPTIONS)]` *below* the other attributes of the item, after
+/// the runner that `#[announce]` put there. That announcement is too late.
+#[proc_macro_attribute]
+pub fn late_announce(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let attr: TokenStream2 = attr.into();
+    let mut item: syn::DeriveInput = match syn::parse(item) {
+        Ok(i) => i,
+        Err(e) => return e.to_compile_error().into(),
+    };
+    item.attrs
+        .push(syn::parse_quote!(#[::announce::announce(#attr)]));
+    TokenStream::from(quote! { #item })
+}
+
+/// `#[chain(N)]`: a macro that runs `N` times, each time announcing the item with
+/// `meta = merge::step(N)` and leaving `#[chain(N-1)]` to expand next. `#[chain(0)]`
+/// only returns the item. All the announcements must end up as one.
+#[proc_macro_attribute]
+pub fn chain(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let n: u32 = match attr.to_string().trim().parse() {
+        Ok(n) => n,
+        Err(_) => {
+            return quote! { ::core::compile_error!("chain: expected a number"); }.into();
+        }
+    };
+    let item: TokenStream2 = item.into();
+    if n == 0 {
+        return item.into();
+    }
+    let (next, step) = (
+        proc_macro2::Literal::u32_unsuffixed(n - 1),
+        proc_macro2::Literal::u32_unsuffixed(n),
+    );
+    TokenStream::from(quote! {
+        #[::announce::announce(meta = merge::step(#step))]
+        #[::announce_test_derive::chain(#next)]
+        #item
+    })
+}
+
+/// A check that leaves a mark where it runs: `tick! { (NAME), ITEM }` emits
+/// `pub const TICK_<ITEM>_<NAME>: u8 = 0;`, so a check that ran twice for one item is
+/// an error (the constant would be defined twice). It owns no attributes.
+#[proc_macro]
+pub fn tick(input: TokenStream) -> TokenStream {
+    announce::helper::check(input.into(), &[], |ci| {
+        let name = match &ci.item {
+            syn::Item::Struct(s) => s.ident.to_string(),
+            syn::Item::Enum(s) => s.ident.to_string(),
+            syn::Item::Trait(s) => s.ident.to_string(),
+            other => {
+                return Err(syn::Error::new_spanned(other, "tick: unsupported item"));
+            }
+        };
+        let arg: String = ci.args.to_string().split_whitespace().collect();
+        let id = syn::Ident::new(
+            &format!("TICK_{}_{}", name.to_uppercase(), arg.to_uppercase()),
+            proc_macro2::Span::call_site(),
+        );
+        Ok(quote! { pub const #id: u8 = 0; })
+    })
+    .into()
+}
+
+// ---- announcements are told by their flag, not by their path (tests/defs/src/flag.rs) ----
+
+/// An attribute macro of another crate that happens to be called `announce`, like
+/// `#[metrics::announce(level = 2)]`. It returns the item and a constant next to it:
+/// `#[announce(level = N)]` makes `FOREIGN_<ITEM>_<N>: u32 = N`, and any other arguments
+/// (also none, or `meta = path`, which are arguments of ours as well) make
+/// `FOREIGN_<ITEM>_ARGS: &str`, the arguments without spaces. `#[announce]` must never
+/// take it for an announcement or swallow it: not by the path
+/// `announce_test_derive::announce`, nor when it is imported and written as the bare
+/// `#[announce(level = 2)]`, `#[announce]` or `#[announce(meta = path)]`.
+#[proc_macro_attribute]
+pub fn announce(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let attr: TokenStream2 = attr.into();
+    let item: TokenStream2 = item.into();
+    let parsed: syn::DeriveInput = match syn::parse2(item.clone()) {
+        Ok(i) => i,
+        Err(e) => return e.to_compile_error().into(),
+    };
+    let name = parsed.ident.to_string().to_uppercase();
+    let span = proc_macro2::Span::call_site();
+    let tokens: Vec<proc_macro2::TokenTree> = attr.clone().into_iter().collect();
+    let level = match tokens.as_slice() {
+        [proc_macro2::TokenTree::Ident(key), proc_macro2::TokenTree::Punct(eq), proc_macro2::TokenTree::Literal(lit)]
+            if key == "level" && eq.as_char() == '=' =>
+        {
+            syn::parse2::<syn::LitInt>(quote! { #lit }).ok()
+        }
+        _ => None,
+    };
+    let konst = match level {
+        Some(level) => {
+            let id = syn::Ident::new(&format!("FOREIGN_{}_{}", name, level.base10_digits()), span);
+            quote! { pub const #id: u32 = #level; }
+        }
+        None => {
+            let id = syn::Ident::new(&format!("FOREIGN_{}_ARGS", name), span);
+            let args: String = attr.to_string().split_whitespace().collect();
+            quote! { pub const #id: &str = #args; }
+        }
+    };
+    TokenStream::from(quote! {
+        #item
+        #konst
+    })
+}
+
+thread_local! {
+    /// How many times `count_query` answered the query for each item (by name).
+    static QUERIES: std::cell::RefCell<std::collections::HashMap<String, usize>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// The name of the item in the state of an attribute query
+/// (`[RANDOM; attr (OPTIONS) { ITEM }] attrs(..)*`): the identifier after the first
+/// `struct`, `enum`, `union` or `trait` in it.
+fn queried_item(state: &TokenStream2) -> String {
+    use proc_macro2::TokenTree;
+    fn find(ts: TokenStream2) -> Option<String> {
+        let mut prev_kw = false;
+        for t in ts {
+            match t {
+                TokenTree::Ident(i) if prev_kw => return Some(i.to_string()),
+                TokenTree::Ident(i) => {
+                    prev_kw = matches!(
+                        i.to_string().as_str(),
+                        "struct" | "enum" | "union" | "trait"
+                    )
+                }
+                TokenTree::Group(g) => {
+                    if let Some(found) = find(g.stream()) {
+                        return Some(found);
+                    }
+                    prev_kw = false;
+                }
+                _ => prev_kw = false,
+            }
+        }
+        None
+    }
+    find(state.clone()).unwrap_or_default()
+}
+
+/// A check that counts the queries it is asked. It answers the query of an item with
+/// an attribute name that owns the number of the answer, `queried_0` for the first
+/// query that it answers for that item, `queried_1` for the second, ..., so META lists
+/// `attrs(queried_0)` if the query was sent once. A query that is sent again
+/// for the same item shows in the names. (A thread-local counter: the compiler
+/// expands macros on one thread.)
+#[proc_macro]
+pub fn count_query(input: TokenStream) -> TokenStream {
+    use announce::helper::{CheckCall, OwnedAttrs};
+    match syn::parse::<CheckCall>(input) {
+        Ok(CheckCall::Query(q)) => {
+            let item = queried_item(&q.state);
+            let n = QUERIES.with(|c| {
+                let mut c = c.borrow_mut();
+                let n = c.entry(item).or_insert(0);
+                *n += 1;
+                *n - 1
+            });
+            q.answer(&OwnedAttrs::from_strs(&[&format!("queried_{}", n)]))
+                .into()
+        }
+        Ok(CheckCall::Run(_)) => TokenStream::new(),
+        Err(e) => e.to_compile_error().into(),
     }
 }
