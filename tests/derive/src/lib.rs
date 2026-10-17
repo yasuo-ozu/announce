@@ -800,3 +800,32 @@ pub fn count_query(input: TokenStream) -> TokenStream {
         Err(e) => e.to_compile_error().into(),
     }
 }
+
+announce::helper::callback! {
+    /// Reports the format prefix of the call it got: `pub const <REST>: &str` is the
+    /// version in `@announce_format "VERSION"` (`Input::format`), or `"none"` for a
+    /// call without the prefix. `REST` is the name. Defined with the macro `callback!`.
+    pub fn format_report(input) {
+        let name: syn::Ident = input.rest_as()?;
+        let format = input.format.clone().unwrap_or_else(|| "none".to_string());
+        Ok(quote! { pub const #name: &str = #format; })
+    }
+}
+
+/// The same as `format_report!`, defined with the function `announce::helper::callback`.
+#[proc_macro]
+pub fn format_report_fn(input: TokenStream) -> TokenStream {
+    announce::helper::callback(input.into(), |input| {
+        let name: syn::Ident = input.rest_as()?;
+        let format = input.format.clone().unwrap_or_else(|| "none".to_string());
+        Ok(quote! { pub const #name: &str = #format; })
+    })
+    .into()
+}
+
+/// Forwards what it got to the next element, with `announce::helper::transformer` (the
+/// entry is not changed): the call it makes has the format prefix.
+#[proc_macro]
+pub fn pass_through_fn(input: TokenStream) -> TokenStream {
+    announce::helper::transformer(input.into(), Ok).into()
+}

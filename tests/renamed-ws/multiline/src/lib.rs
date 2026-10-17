@@ -13,7 +13,7 @@ pub trait MarkedMulti {
 }
 
 macro_rules! capture {
-    ([$($l:tt)*] $($t:tt)*) => { pub const OUT: &str = stringify!($($t)*); };
+    (@announce_format "1" [$($l:tt)*] $($t:tt)*) => { pub const OUT: &str = stringify!($($t)*); };
 }
 pub mod check {
     crate::Multi! { [crate::Multi!, capture!] }

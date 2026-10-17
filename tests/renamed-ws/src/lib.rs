@@ -11,7 +11,7 @@ pub trait MarkedWs {
 }
 
 macro_rules! capture {
-    ([$($l:tt)*] $($t:tt)*) => { pub const OUT: &str = stringify!($($t)*); };
+    (@announce_format "1" [$($l:tt)*] $($t:tt)*) => { pub const OUT: &str = stringify!($($t)*); };
 }
 pub mod check {
     crate::ViaWorkspace! { [crate::ViaWorkspace!, capture!] }
@@ -22,10 +22,10 @@ const _: fn() = _assert_marker::<ViaWorkspace>;
 const _: fn() = _assert_marker::<dyn MarkedWs>;
 
 macro_rules! ws_check {
-    (@__announce_attrs [ $($hp:ident)? $(:: $hs:ident)* ! , $($np:ident)? $(:: $ns:ident)* ! $(, $($rest:tt)*)? ] { $($state:tt)* }) => {
-        $($np)? $(:: $ns)* ! { @__announce_attrs [ $($np)? $(:: $ns)* ! $(, $($rest)*)? ] { $($state)* attrs(ws_attr) } }
+    (@announce_format "1" @__announce_attrs [ $($hp:ident)? $(:: $hs:ident)* ! , $($np:ident)? $(:: $ns:ident)* ! $(, $($rest:tt)*)? ] { $($state:tt)* }) => {
+        $($np)? $(:: $ns)* ! { @announce_format "1" @__announce_attrs [ $($np)? $(:: $ns)* ! $(, $($rest)*)? ] { $($state)* attrs(ws_attr) } }
     };
-    (($($args:tt)*), $($item:tt)*) => {};
+    (@announce_format "1" ($($args:tt)*), $($item:tt)*) => {};
 }
 
 /// The query ends at `finish!`, reached through the workspace-inherited rename.

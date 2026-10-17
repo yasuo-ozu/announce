@@ -5,8 +5,9 @@ use template_quote::{quote, ToTokens};
 
 /// One check or `meta` entry of the attribute: `path` or `path(args)`.
 ///
-/// As a check (`#[announce(my_lib::check(args))]`) it runs at the definition,
-/// as `path! { (args), ITEM }`. As a `meta` entry it is only listed in `META`.
+/// As a check (`#[announce(my_lib::check(args))]`) it runs at the definition, as
+/// `path! { @announce_format "1" (args), ITEM }`. As a `meta` entry it is only listed in
+/// `META`.
 #[derive(Clone)]
 pub struct Check {
     /// The macro path.

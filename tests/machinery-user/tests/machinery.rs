@@ -2,7 +2,7 @@ use announce_test_derive::summary;
 use announce_test_machinery_user as lib;
 
 macro_rules! capture {
-    ([$($l:tt)*] $($t:tt)*) => { pub const OUT: &str = stringify!($($t)*); };
+    (@announce_format "1" [$($l:tt)*] $($t:tt)*) => { pub const OUT: &str = stringify!($($t)*); };
 }
 
 fn norm(s: &str) -> String {

@@ -5,10 +5,10 @@ use announce_test_derive::fetched_raw;
 // gets no definition back, so it must stop with the same error as `gather`
 // instead of fetching until the recursion limit.
 macro_rules! forwards_only {
-    (($($o:tt)*)
+    (@announce_format "1" ($($o:tt)*)
      [$($h:ident)? $(:: $hs:ident)* ! , $($n:ident)? $(:: $ns:ident)* ! $($tail:tt)*]
      $($r:tt)*) => {
-        $($n)? $(:: $ns)* ! { ($($o)*) [$($n)? $(:: $ns)* ! $($tail)*] $($r)* }
+        $($n)? $(:: $ns)* ! { @announce_format "1" ($($o)*) [$($n)? $(:: $ns)* ! $($tail)*] $($r)* }
     };
 }
 

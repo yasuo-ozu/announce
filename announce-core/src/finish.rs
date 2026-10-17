@@ -9,10 +9,17 @@
 //! always receives `[ finish! ]`:
 //!
 //! ```text
-//! a::check! { @__announce_attrs [ a::check!, b::check!, KRATE::__private::finish! ] { STATE } }
-//! b::check! { @__announce_attrs [ b::check!, KRATE::__private::finish! ] { STATE attrs(..) } }
-//! KRATE::__private::finish! { @__announce_attrs [ KRATE::__private::finish! ] { STATE attrs(..) } }
+//! a::check! { @announce_format "1" @__announce_attrs [ a::check!, b::check!, KRATE::__private::finish! ] { STATE } }
+//! b::check! { @announce_format "1" @__announce_attrs [ b::check!, KRATE::__private::finish! ] { STATE attrs(..) } }
+//! KRATE::__private::finish! { @announce_format "1" @__announce_attrs [ KRATE::__private::finish! ] { STATE attrs(..) } }
 //! ```
+//!
+//! Every call starts with the format prefix `@announce_format "1"`, as all calls of
+//! announce do (see [`crate::helper::Input`]). The checks are user macros, so the
+//! query is written with the prefix, and a check that forwards it writes the prefix
+//! again. `finish!` is ours: it reads the query with or without the prefix, since a
+//! check written by hand may forward it without, and reports another version as one
+//! error that names both versions.
 //!
 //! ```text
 //! STATE := '[' RANDOM 'u64' ';' 'attr' '(' OPTIONS ')' '{' ITEM '}' ']'  ('attrs' '(' IDENT,* ')')*
@@ -40,7 +47,7 @@ const STATE_ERROR: &str = "announce: the state of the attribute query was change
 /// it is `opts.checks`.
 ///
 /// The list is headed by the macro that is called, like a continuation list:
-/// `a! { @__announce_attrs [ a!, b!, KRATE::__private::finish! ] { STATE } }`.
+/// `a! { @announce_format "1" @__announce_attrs [ a!, b!, KRATE::__private::finish! ] { STATE } }`.
 pub(crate) fn query(
     opts: &Options,
     attr: &TokenStream,
@@ -54,8 +61,10 @@ pub(crate) fn query(
     let paths: Vec<&syn::Path> = ask.iter().map(|c| &c.path).collect();
     // `ask` is not empty: with nothing to ask there is no query (`try_announce`).
     let first = paths.first().expect("a query needs a check");
+    let format = crate::helper::format_prefix();
     quote! {
         #first ! {
+            #format
             @__announce_attrs
             [ #(#paths ! ,)* #krate::__private::finish! ]
             { [ #lit ; #tag ( #attr ) { #item } ] }
@@ -135,6 +144,10 @@ pub fn finish(input: TokenStream) -> TokenStream {
 /// [`finish()`] with the error returned as a [`syn::Error`].
 pub fn try_finish(input: TokenStream) -> Result<TokenStream> {
     let query: Query = syn::parse2(input).map_err(|e| {
+        // A version that cannot be read has its own, clear error.
+        if crate::helper::is_format_error(&e) {
+            return e;
+        }
         syn::Error::new(
             e.span(),
             format!(

@@ -3,7 +3,7 @@
 //! `proc-macro-api` of `announce`; the callbacks are plain `macro_rules!`.
 
 macro_rules! capture {
-    ([$($l:tt)*] $($t:tt)*) => {
+    (@announce_format "1" [$($l:tt)*] $($t:tt)*) => {
         pub const OUT: &str = stringify!([$($l)*] $($t)*);
     };
 }
@@ -28,7 +28,7 @@ fn a_struct_is_passed_to_the_callback() {
 }
 
 macro_rules! kind {
-    ([$($l:tt)*] $($p:ident)::+ ! => [$($m:tt)*] { $($item:tt)* } $($rest:tt)*) => {
+    (@announce_format "1" [$($l:tt)*] $($p:ident)::+ ! => [$($m:tt)*] { $($item:tt)* } $($rest:tt)*) => {
         pub const KIND: &str = stringify!($($item)*);
     };
 }

@@ -6,7 +6,7 @@ use announce_test_defs::owned as d;
 use announce_test_derive::{owned_report, rest_probe, summary};
 
 macro_rules! capture {
-    ([$($l:tt)*] $($t:tt)*) => {
+    (@announce_format "1" [$($l:tt)*] $($t:tt)*) => {
         pub const OUT: &str = stringify!($($t)*);
     };
 }
@@ -295,7 +295,7 @@ fn an_item_in_a_function_body_goes_through_the_query() {
         pub x: u8,
     }
     macro_rules! here {
-        ([$($l:tt)*] $($t:tt)*) => {
+        (@announce_format "1" [$($l:tt)*] $($t:tt)*) => {
             const HERE: &str = stringify!($($t)*);
         };
     }
@@ -341,7 +341,7 @@ fn macro_rules_checks_skip_their_head_in_every_path_form() {
         pub b: u8,
     }
     macro_rules! here {
-        ([$($l:tt)*] $($t:tt)*) => {
+        (@announce_format "1" [$($l:tt)*] $($t:tt)*) => {
             const HERE: &str = stringify!($($t)*);
         };
     }
@@ -368,6 +368,21 @@ mod dollar_rules {
 fn an_item_with_dollar_passes_through_a_macro_rules_check() {
     assert_eq!(dollar_rules::ALL, ["rules|1|0"]);
     assert_eq!(d::with_dollar_rules::twenty_four(), 24);
+}
+
+mod unprefixed {
+    use super::{d, owned_report};
+    d::Unprefixed! { [d::Unprefixed!, owned_report!] ALL }
+}
+
+#[test]
+fn a_check_may_forward_the_query_without_the_format_prefix() {
+    // `unprefixed_rules_check` forwards `@__announce_attrs [..] { .. }` to `finish!`
+    // without `@announce_format "1"`, as a check written by hand may do: `finish!`
+    // reads it with or without the prefix. The item exists without its `#[unprefixed]`
+    // attribute only if the query ended at `finish!`.
+    assert_eq!(d::Unprefixed { a: 1 }.a, 1);
+    assert_eq!(unprefixed::ALL, ["unprefixed|1|0"]);
 }
 
 mod checked_with_derive {

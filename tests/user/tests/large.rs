@@ -9,7 +9,7 @@ use announce_test_defs::large;
 use announce_test_derive::{gathered, public_fields, start, summary};
 
 macro_rules! capture {
-    ([$($l:tt)*] $($t:tt)*) => {
+    (@announce_format "1" [$($l:tt)*] $($t:tt)*) => {
         pub const OUT: &str = stringify!([$($l)*] $($t)*);
     };
 }
@@ -20,13 +20,13 @@ fn norm(s: &str) -> String {
 }
 
 macro_rules! reemit {
-    ([$($l:tt)*] $($p:ident)? $(:: $s:ident)* ! => [$($m:tt)*] { $($item:tt)* }) => {
+    (@announce_format "1" [$($l:tt)*] $($p:ident)? $(:: $s:ident)* ! => [$($m:tt)*] { $($item:tt)* }) => {
         $($item)*
     };
 }
 
 macro_rules! reemit_two {
-    ([$($l:tt)*]
+    (@announce_format "1" [$($l:tt)*]
      $($p1:ident)? $(:: $s1:ident)* ! => [$($m1:tt)*] { $($a:tt)* }
      $($p2:ident)? $(:: $s2:ident)* ! => [$($m2:tt)*] { $($b:tt)* }) => {
         $($a)*
@@ -410,12 +410,12 @@ fn derive_and_attribute_routes_into_large_trampolines() {
 
 // Positions: expression (with and without `(expr)`), type, pattern, statement.
 macro_rules! expr_cb {
-    ($( ($($o:tt)*) )? [$($l:tt)*] $($p:ident)? $(:: $s:ident)* ! => [$($m:tt)*] { $($item:tt)* } $($r:tt)*) => {
+    (@announce_format "1" $( ($($o:tt)*) )? [$($l:tt)*] $($p:ident)? $(:: $s:ident)* ! => [$($m:tt)*] { $($item:tt)* } $($r:tt)*) => {
         stringify!($($item)*)
     };
 }
 macro_rules! expr_two {
-    ($( ($($o:tt)*) )? [$($l:tt)*]
+    (@announce_format "1" $( ($($o:tt)*) )? [$($l:tt)*]
      $($p1:ident)? $(:: $s1:ident)* ! => [$($m1:tt)*] { $($a:tt)* }
      $($p2:ident)? $(:: $s2:ident)* ! => [$($m2:tt)*] { $($b:tt)* }) => {
         [stringify!($($a)*), stringify!($($b)*)]
@@ -427,22 +427,22 @@ macro_rules! ty_cb {
     };
 }
 macro_rules! opts_cb {
-    (($($o:tt)*) [$($l:tt)*] $($r:tt)*) => { stringify!($($o)*) };
+    (@announce_format "1" ($($o:tt)*) [$($l:tt)*] $($r:tt)*) => { stringify!($($o)*) };
 }
 macro_rules! struct_pat {
-    ([$($l:tt)*] $($p:ident)? $(:: $s:ident)* ! => [$($m:tt)*]
+    (@announce_format "1" [$($l:tt)*] $($p:ident)? $(:: $s:ident)* ! => [$($m:tt)*]
      { $(#[$($a:tt)*])* $v:vis struct $name:ident $($body:tt)* } $($r:tt)*) => {
         $name { .. }
     };
 }
 macro_rules! first_variant_pat {
-    ([$($l:tt)*] $($p:ident)? $(:: $s:ident)* ! => [$($m:tt)*]
+    (@announce_format "1" [$($l:tt)*] $($p:ident)? $(:: $s:ident)* ! => [$($m:tt)*]
      { $(#[$($a:tt)*])* $v:vis enum $name:ident { $first:ident $($body:tt)* } } $($r:tt)*) => {
         $name::$first(..)
     };
 }
 macro_rules! let_cb {
-    ([$($l:tt)*] $($p:ident)? $(:: $s:ident)* ! => [$($m:tt)*] { $($item:tt)* } $bound:ident) => {
+    (@announce_format "1" [$($l:tt)*] $($p:ident)? $(:: $s:ident)* ! => [$($m:tt)*] { $($item:tt)* } $bound:ident) => {
         let $bound = stringify!($($item)*);
     };
 }

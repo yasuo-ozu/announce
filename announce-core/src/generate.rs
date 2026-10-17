@@ -583,7 +583,8 @@ pub(crate) fn is_single(layout: Layout, size: usize) -> bool {
 const BAD_INPUT: &str =
     "announce: invalid trampoline input; expected `Item! { [Item!, next!, ..] .. }` \
      (a head and at least one continuation; a derive or attribute head goes through \
-     `announce::helper::redirect`)";
+     `announce::helper::redirect`) with an optional leading `@announce_format \"1\"` \
+     (another version is from an incompatible announce)";
 
 /// The derive/attribute route emits an item (the dummy enum): an error in
 /// expression position (`(expr)`).
@@ -597,6 +598,23 @@ fn opts_pat() -> TokenStream {
 
 fn opts_out() -> TokenStream {
     quote! { $( ( $($__announce_o)* ) )? }
+}
+
+/// `@announce_format "1"`: every call that a trampoline makes starts with it, to the
+/// next element and to itself. The trampolines write it with the version of this
+/// crate ([`ANNOUNCE_FORMAT`](crate::helper::ANNOUNCE_FORMAT)); a pattern that reads
+/// a call from outside takes it as optional ([`format_pat`]), because a call by
+/// hand has none. A call with another version matches no arm and ends at the
+/// catch-all, whose message tells so (a macro cannot compare versions).
+fn format_out() -> TokenStream {
+    crate::helper::format_prefix()
+}
+
+/// `$( @announce_format "1" )?`: what a pattern starts with that is called by a
+/// helper (with the prefix) or by hand (without it).
+fn format_pat() -> TokenStream {
+    let format = format_out();
+    quote! { $( #format )? }
 }
 
 /// The head of the list: `path::to::macro!`, or `#[attr] Name?`. One pattern
@@ -633,9 +651,10 @@ fn shape_arms(
 ) -> TokenStream {
     let (opts_pat, opts_out) = (opts_pat(), opts_out());
     let (head, key) = (head_pat(), head_key());
-    let entry = entry(&key);
+    let (format, entry) = (format_out(), entry(&key));
     let bang = quote! {
         $($np)? $(:: $ns)* ! {
+            #format
             #opts_out
             [ $($np)? $(:: $ns)* ! $($tail)* ]
             #entry
@@ -647,6 +666,7 @@ fn shape_arms(
         #[allow(dead_code, non_camel_case_types)]
         enum $nid {
             __AnnouncePayload = (stringify! {
+                #format
                 #opts_out
                 [ #[$($na)*] $nid $(, $($tail)*)? ]
                 #entry
@@ -659,6 +679,7 @@ fn shape_arms(
         #[allow(dead_code, non_camel_case_types)]
         enum #fallback {
             __AnnouncePayload = (stringify! {
+                #format
                 #opts_out
                 [ #[$($na)*] #fallback $($tail)* ]
                 #entry
@@ -686,19 +707,21 @@ fn shape_arms(
 /// `redirect` writes `@__announce_self { path } @__announce_dollar { $ }`
 /// before the list, for the layouts that call themselves again; the arms of
 /// this layout ignore the self path. A payload
-/// without `$` ignores the dollar prefix too.
+/// without `$` ignores the dollar prefix too. All of these come after the optional
+/// `@announce_format "1"`, which is first in every call.
 fn direct_arms(fallback: &Ident, v: &Variant) -> TokenStream {
     let Variant {
         meta,
         payload,
         needs_dollar,
     } = v;
+    let (format_pat, format_out) = (format_pat(), format_out());
     let prefix = if *needs_dollar {
-        quote! { $( @__announce_self { $($__announce_s:tt)* } )? @__announce_dollar { $__dollar:tt } }
+        quote! { #format_pat $( @__announce_self { $($__announce_s:tt)* } )? @__announce_dollar { $__dollar:tt } }
     } else {
-        quote! { $( @__announce_self { $($__announce_s:tt)* } @__announce_dollar { $__announce_d:tt } )? }
+        quote! { #format_pat $( @__announce_self { $($__announce_s:tt)* } @__announce_dollar { $__announce_d:tt } )? }
     };
-    let mut out = expr_error_arm(&TokenStream::new());
+    let mut out = expr_error_arm(&format_pat);
     out.extend(shape_arms(
         &prefix,
         &|key| quote! { #key => [ #meta ] { #payload } },
@@ -707,8 +730,8 @@ fn direct_arms(fallback: &Ident, v: &Variant) -> TokenStream {
     if *needs_dollar {
         out.extend(quote! {
             // Re-invoke through the head path, adding a real `$`.
-            ($( ($($o:tt)*) )? [ $($hp:ident)? $(:: $hs:ident)* ! $($l:tt)* ] $($r:tt)*) => {
-                $($hp)? $(:: $hs)* ! { @__announce_dollar { $ } $( ($($o)*) )? [ $($hp)? $(:: $hs)* ! $($l)* ] $($r)* }
+            (#format_pat $( ($($o:tt)*) )? [ $($hp:ident)? $(:: $hs:ident)* ! $($l:tt)* ] $($r:tt)*) => {
+                $($hp)? $(:: $hs)* ! { #format_out @__announce_dollar { $ } $( ($($o)*) )? [ $($hp)? $(:: $hs)* ! $($l)* ] $($r)* }
             };
         });
     }
@@ -728,8 +751,11 @@ fn direct_arms(fallback: &Ident, v: &Variant) -> TokenStream {
 /// 3. The output arms match `[META]` and `{ ITEM }` as one `tt` each, so the
 ///    item is not read again, and write the entry for every next shape.
 ///
-/// Every call after the first starts with `@`, which routing arms cannot
-/// match: the three levels never loop. Anything else ends at the catch-all.
+/// Every call starts with the optional `@announce_format "1"`. The calls of
+/// 2 and 3, which the trampoline makes to itself, always have it. Every call
+/// after the first has `@__announce_self` or `@__announce_emit` after it, which
+/// the routing arm cannot match: the three levels never loop. Anything else
+/// ends at the catch-all.
 fn single_arms(fallback: &Ident, v: &Variant) -> TokenStream {
     let Variant {
         meta,
@@ -741,12 +767,14 @@ fn single_arms(fallback: &Ident, v: &Variant) -> TokenStream {
     } else {
         quote! { $__announce_ignored:tt }
     };
+    let (format_pat, format_out) = (format_pat(), format_out());
     let mut out = quote! {
-        (@__announce_self { $($__announce_s:tt)* } @__announce_dollar { #dollar } $($__announce_a:tt)*) => {
-            $($__announce_s)* ! { @__announce_emit [ #meta ] { #payload } $($__announce_a)* }
+        (#format_pat @__announce_self { $($__announce_s:tt)* } @__announce_dollar { #dollar } $($__announce_a:tt)*) => {
+            $($__announce_s)* ! { #format_out @__announce_emit [ #meta ] { #payload } $($__announce_a)* }
         };
     };
-    let emit = quote! { @__announce_emit $__announce_m:tt $__announce_i:tt };
+    // Only the trampoline makes this call, to itself: the prefix is always there.
+    let emit = quote! { #format_out @__announce_emit $__announce_m:tt $__announce_i:tt };
     out.extend(expr_error_arm(&emit));
     out.extend(shape_arms(
         &emit,
@@ -754,8 +782,9 @@ fn single_arms(fallback: &Ident, v: &Variant) -> TokenStream {
         fallback,
     ));
     out.extend(quote! {
-        ($( ($($o:tt)*) )? [ $($hp:ident)? $(:: $hs:ident)* ! $($l:tt)* ] $($r:tt)*) => {
+        (#format_pat $( ($($o:tt)*) )? [ $($hp:ident)? $(:: $hs:ident)* ! $($l:tt)* ] $($r:tt)*) => {
             $($hp)? $(:: $hs)* ! {
+                #format_out
                 @__announce_self { $($hp)? $(:: $hs)* } @__announce_dollar { $ }
                 $( ($($o)*) )? [ $($hp)? $(:: $hs)* ! $($l)* ] $($r)*
             }
@@ -764,13 +793,18 @@ fn single_arms(fallback: &Ident, v: &Variant) -> TokenStream {
     out
 }
 
-/// The arm that the sentinel of the announcement calls (`NAME! { @__announce_exists }`, see
-/// `runner::Sentinel`): it expands to nothing, and is first so that no other arm sees it.
-const EXISTS_ARM: &str = "(@__announce_exists) => {};";
+/// The arm that the sentinel of the announcement calls (`NAME! { @announce_format "1"
+/// @__announce_exists }`, see `runner::Sentinel`): it expands to nothing, and is first so
+/// that no other arm sees it. The prefix is optional, as in every arm that a call from outside
+/// reaches ([`format_pat`]): the bare `NAME! { @__announce_exists }` is taken as well.
+fn exists_arm() -> TokenStream {
+    let format_pat = format_pat();
+    quote! { (#format_pat @__announce_exists) => {}; }
+}
 
 /// The arms of the chosen layout, and the catch-all error arm.
 fn arms(fallback: &Ident, plain: &Variant, single: bool) -> TokenStream {
-    let mut out: TokenStream = EXISTS_ARM.parse().expect("a macro arm");
+    let mut out = exists_arm();
     out.extend(if single {
         single_arms(fallback, plain)
     } else {
@@ -918,7 +952,7 @@ pub fn sentinel_stub(
                 &format!("__announce_stub_{}", hex(random)),
                 Span::call_site(),
             );
-            let arm: TokenStream = EXISTS_ARM.parse().expect("a macro arm");
+            let arm = exists_arm();
             quote! {
                 #[doc(hidden)]
                 #[allow(unused_macros)]
@@ -998,10 +1032,11 @@ pub(crate) fn emit(
     // `docs = true` (a smaller trampoline). Made only for the checks; the
     // trampoline makes its payload in its own pass.
     let checks_item = (!opts.checks.is_empty()).then(|| plain(prep));
+    let format = crate::helper::format_prefix();
     let checks = opts.checks.iter().map(|c| {
         let p = &c.path;
         let a = c.args.clone().unwrap_or_default();
-        quote! { #p! { (#a), #checks_item } }
+        quote! { #p! { #format (#a), #checks_item } }
     });
     let mock_copy = opts.mock.as_ref().map(|_| {
         let m = Ident::new(&format!("__announce_mock_{}", h), Span::call_site());
@@ -1464,6 +1499,149 @@ mod tests {
         assert_eq!(out.matches("marker_zzz").count(), 1, "{}", out);
     }
 
+    /// The arms of the `macro_rules!` in `ts`: the pattern and the transcriber of each.
+    fn macro_arms(ts: TokenStream) -> Vec<(TokenStream, TokenStream)> {
+        let mut it = ts.into_iter();
+        for tt in it.by_ref() {
+            if matches!(&tt, TokenTree::Ident(i) if i == "macro_rules") {
+                break;
+            }
+        }
+        it.next(); // `!`
+        it.next(); // the name
+        let body = match it.next() {
+            Some(TokenTree::Group(g)) => g.stream(),
+            other => panic!("the body of the macro: {:?}", other),
+        };
+        let mut arms = Vec::new();
+        let mut it = body.into_iter();
+        while let Some(pat) = it.next() {
+            let pat = match pat {
+                TokenTree::Group(g) => g.stream(),
+                other => panic!("a pattern: {:?}", other),
+            };
+            it.next(); // `=`
+            it.next(); // `>`
+            let out = match it.next() {
+                Some(TokenTree::Group(g)) => g.stream(),
+                other => panic!("a transcriber: {:?}", other),
+            };
+            it.next(); // `;`
+            arms.push((pat, out));
+        }
+        arms
+    }
+
+    /// The macro calls `path ! { .. }` in a transcriber that are not `macro_rules!` and
+    /// `compile_error!`: the first tokens of their input, squashed.
+    fn calls_in(ts: TokenStream, out: &mut Vec<String>) {
+        let tts: Vec<TokenTree> = ts.into_iter().collect();
+        for (i, tt) in tts.iter().enumerate() {
+            if let TokenTree::Group(g) = tt {
+                let after_bang =
+                    i >= 1 && matches!(&tts[i - 1], TokenTree::Punct(p) if p.as_char() == '!');
+                let skipped = i >= 2
+                    && matches!(&tts[i - 2], TokenTree::Ident(n) if n == "macro_rules" || n == "compile_error");
+                if after_bang && g.delimiter() == Delimiter::Brace && !skipped {
+                    let head: Vec<TokenTree> = g.stream().into_iter().take(3).collect();
+                    out.push(squash(head.into_iter().collect::<TokenStream>()));
+                }
+                calls_in(g.stream(), out);
+            }
+        }
+    }
+
+    #[test]
+    fn every_call_of_a_trampoline_starts_with_the_format_prefix() {
+        const PREFIX: &str = "@announce_format\"1\"";
+        let with_dollar = quote! { pub mod m { macro_rules! k { ($($x:tt)*) => {}; } } };
+        for (layout, payload) in [
+            (Layout::Direct, struct_of(2)),
+            (Layout::Direct, with_dollar.clone()),
+            (Layout::Single, struct_of(2)),
+            (Layout::Single, with_dollar),
+        ] {
+            let opts = Options {
+                layout,
+                ..Options::default()
+            };
+            let ident = Ident::new("S", Span::call_site());
+            let vis: Visibility = syn::parse_quote!(pub);
+            let t = trampoline(
+                &ident,
+                &vis,
+                &opts,
+                &OwnedAttrs::new(),
+                1,
+                payload,
+                TokenStream::new(),
+            );
+            let arms = macro_arms(t);
+            assert!(arms.len() >= 5, "{:?}", arms.len());
+            let mut calls = 0;
+            for (i, (pat, out)) in arms.iter().enumerate() {
+                let pat = squash(pat.clone());
+                // Every arm that a call from outside can reach takes the prefix as
+                // optional (a call by hand has none), the arms that the trampoline
+                // calls itself take it, and the last arm takes anything.
+                let last = i == arms.len() - 1;
+                assert!(
+                    last == (pat == "$($t:tt)*")
+                        && (last
+                            || pat.starts_with(&format!("$({})?", PREFIX))
+                            || pat.starts_with(&format!("{}@__announce_emit", PREFIX))),
+                    "{:?} arm {}: {}",
+                    layout,
+                    i,
+                    pat
+                );
+                // Every call in a transcriber starts with the prefix.
+                let mut found = Vec::new();
+                calls_in(out.clone(), &mut found);
+                for head in &found {
+                    assert!(head.starts_with(PREFIX), "{:?} arm {}: {}", layout, i, head);
+                }
+                calls += found.len();
+            }
+            // At least the calls to the next element, in its three shapes.
+            assert!(calls >= 3, "{:?}: {}", layout, calls);
+        }
+    }
+
+    #[test]
+    fn the_calls_that_a_trampoline_makes_to_itself_have_the_prefix_too() {
+        let with_dollar = quote! { pub mod m { macro_rules! k { ($($x:tt)*) => {}; } } };
+        // `direct` + `$`: the re-invoking arm adds a real `$` after the prefix.
+        let out = emitted(Layout::Direct, with_dollar.clone());
+        assert!(
+            out.contains("!{@announce_format\"1\"@__announce_dollar{$}"),
+            "{}",
+            out
+        );
+        // `single`: the routing arm, and the call that carries the item.
+        let out = emitted(Layout::Single, struct_of(2));
+        assert!(
+            out.contains(
+                "!{@announce_format\"1\"@__announce_self{$($hp)?$(::$hs)*}@__announce_dollar{$}"
+            ),
+            "{}",
+            out
+        );
+        assert!(
+            out.contains("!{@announce_format\"1\"@__announce_emit["),
+            "{}",
+            out
+        );
+        // The emit arms take the call of the arm above, with the prefix.
+        assert_eq!(
+            out.matches("(@announce_format\"1\"@__announce_emit$__announce_m:tt$__announce_i:tt")
+                .count(),
+            4,
+            "{}",
+            out
+        );
+    }
+
     #[test]
     fn both_layouts_end_with_one_shared_catch_all() {
         for layout in [Layout::Direct, Layout::Single] {
@@ -1480,14 +1658,15 @@ mod tests {
 
     #[test]
     fn both_layouts_start_with_the_arm_of_the_sentinel() {
-        // The arm that `NAME! { @__announce_exists }` of the sentinel matches is the first, so
-        // that no other arm sees the call; with `$` in the payload as well.
+        // The arm that `NAME! { @announce_format "1" @__announce_exists }` of the sentinel
+        // matches is the first, so that no other arm sees the call; with `$` in the payload as
+        // well. The prefix is optional there, so the bare call is taken too.
         for layout in [Layout::Direct, Layout::Single] {
             for payload in [struct_of(2), quote! { pub struct S { pub a: [u8; $n] } }] {
                 let out = emitted(layout, payload);
                 assert!(
                     out.contains(
-                        "macro_rules!__announce_S_0000000000000001{(@__announce_exists)=>{};("
+                        "macro_rules!__announce_S_0000000000000001{($(@announce_format\"1\")?@__announce_exists)=>{};("
                     ),
                     "{}",
                     out
@@ -1507,7 +1686,9 @@ mod tests {
         assert_eq!(out, "impl::l::announce::AnnounceforS{}");
         let out = squash(sentinel_stub(Sentinel::Macro, &ident, &opts, 7));
         assert!(
-            out.contains("macro_rules!__announce_stub_0000000000000007{(@__announce_exists)=>{};}")
+            out.contains(
+                "macro_rules!__announce_stub_0000000000000007{($(@announce_format\"1\")?@__announce_exists)=>{};}"
+            )
                 && out.ends_with("use__announce_stub_0000000000000007asS;"),
             "{}",
             out
@@ -1548,7 +1729,7 @@ mod tests {
         // The payload and the check have them (once each: the macro holds one copy per
         // arm of the layout, so count the check's), but not the doc: both lose it.
         assert!(
-            out.contains("c::check!{(x),#[my_lib(item)]pubstructS{#[my_lib(skip)]puba:u8,#[other]"),
+            out.contains("c::check!{@announce_format\"1\"(x),#[my_lib(item)]pubstructS{#[my_lib(skip)]puba:u8,#[other]"),
             "{}",
             out
         );
@@ -1568,7 +1749,7 @@ mod tests {
         );
         assert!(
             out.contains(
-                "c::check!{(x),#[my_lib(item)]pubstructS{#[my_lib(skip)]#[doc=\"kept\"]puba:u8"
+                "c::check!{@announce_format\"1\"(x),#[my_lib(item)]pubstructS{#[my_lib(skip)]#[doc=\"kept\"]puba:u8"
             ),
             "{}",
             out
@@ -1725,7 +1906,7 @@ mod tests {
             copy
         );
         assert!(
-            out.contains("c::check!{(),#[my_lib(item)]pubstructS{puba:u8,}}"),
+            out.contains("c::check!{@announce_format\"1\"(),#[my_lib(item)]pubstructS{puba:u8,}}"),
             "{}",
             out
         );

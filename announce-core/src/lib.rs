@@ -604,7 +604,7 @@ mod tests {
         // `finish!` follow, like a continuation list.
         assert!(
             out.starts_with(
-                "a::check!{@__announce_attrs[a::check!,b::check!,::l::announce::__private::finish!]{[",
+                "a::check!{@announce_format\"1\"@__announce_attrs[a::check!,b::check!,::l::announce::__private::finish!]{[",
             ),
             "{}",
             out
@@ -758,6 +758,39 @@ mod tests {
     }
 
     #[test]
+    fn finish_reads_the_query_with_the_prefix_and_without_it() {
+        let state = |prefix: &str| {
+            ts(&format!(
+                "{} @__announce_attrs [ ::l::announce::__private::finish! ] {{ [7u64; attr (crate=::l::announce) {{ pub struct S; }}] attrs(a) }}",
+                prefix
+            ))
+        };
+        let without = norm(&finish(state("")));
+        let with = norm(&finish(state("@announce_format \"1\"")));
+        assert!(without.contains("Capture"), "{}", without);
+        assert_eq!(without, with);
+        // Another version is one error that names both versions; it is not the
+        // error of a call by hand.
+        let e = try_finish(state("@announce_format \"2\""))
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(
+            e.starts_with("announce: incompatible wire format: found `@announce_format \"2\"`, expected `@announce_format \"1\"`")
+                && !e.contains("cannot be called by hand"),
+            "{}",
+            e
+        );
+        // `finish` turns it into a `compile_error!`.
+        let out = norm(&finish(state("@announce_format \"2\"")));
+        assert!(
+            out.starts_with("::core::compile_error!") && out.contains("incompatiblewireformat"),
+            "{}",
+            out
+        );
+    }
+
+    #[test]
     fn capture_arguments_read_the_owned_names() {
         let with: options::CaptureArgs =
             syn::parse2(ts("5u64; [a, b]; crate = ::l::announce, c::check")).unwrap();
@@ -863,7 +896,7 @@ mod tests {
             ts("#[other] #[my_lib(x)] pub struct S;"),
         ));
         assert!(
-            first.starts_with("a::check!{@__announce_attrs"),
+            first.starts_with("a::check!{@announce_format\"1\"@__announce_attrs"),
             "{}",
             first
         );
@@ -940,7 +973,7 @@ mod tests {
             let out = norm(&announce(ts(&attr), ts("#[derive(Debug)] pub struct S;")));
             // The item is not emitted, so the sentinel is the call of the trampoline.
             let want = format!(
-                "#[derive(Debug)]#[::l::announce::__private::__announce_runner(__announce_format_version=\"1\",__announce_sentinel=\"macro\",crate=::l::announce,{})]pubstructS;S!{{@__announce_exists}}",
+                "#[derive(Debug)]#[::l::announce::__private::__announce_runner(__announce_format_version=\"1\",__announce_sentinel=\"macro\",crate=::l::announce,{})]pubstructS;S!{{@announce_format\"1\"@__announce_exists}}",
                 opt.replace(' ', "")
             );
             assert_eq!(out, want);
@@ -968,14 +1001,18 @@ mod tests {
                 ts(&format!("{}, a::check", attr)),
                 ts("#[derive(Debug)] pub struct S;"),
             ));
-            assert!(out.starts_with("a::check!{@__announce_attrs"), "{}", out);
+            assert!(
+                out.starts_with("a::check!{@announce_format\"1\"@__announce_attrs"),
+                "{}",
+                out
+            );
             let end = norm(&finish(finish_input(
                 &format!("crate=::l::announce,{},a::check", opt.replace(' ', "")),
                 "#[derive(Debug)] pub struct S;",
                 "attrs(my_lib)",
             )));
             assert!(
-                end.contains("pubstructS;S!{@__announce_exists}")
+                end.contains("pubstructS;S!{@announce_format\"1\"@__announce_exists}")
                     && end.contains("__announce_runner(__announce_format_version=\"1\",__announce_sentinel=\"macro\",__announce_owned(my_lib),"),
                 "{}",
                 end
@@ -1234,7 +1271,7 @@ mod tests {
             );
             assert!(
                 out.contains(
-                    "macro_rules!__announce_stub_0000000000000007{(@__announce_exists)=>{};}"
+                    "macro_rules!__announce_stub_0000000000000007{($(@announce_format\"1\")?@__announce_exists)=>{};}"
                 ) && out.ends_with("use__announce_stub_0000000000000007asN;"),
                 "{}: {}",
                 body,

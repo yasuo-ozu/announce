@@ -4,10 +4,10 @@ use announce_test_derive::gathered;
 // list element and adds no entry. `gather` fetched it once and gets no
 // definition back, so it must stop with an error instead of fetching forever.
 macro_rules! forwards_only {
-    (($($o:tt)*)
+    (@announce_format "1" ($($o:tt)*)
      [$($h:ident)? $(:: $hs:ident)* ! , $($n:ident)? $(:: $ns:ident)* ! $($tail:tt)*]
      $($r:tt)*) => {
-        $($n)? $(:: $ns)* ! { ($($o)*) [$($n)? $(:: $ns)* ! $($tail)*] $($r)* }
+        $($n)? $(:: $ns)* ! { @announce_format "1" ($($o)*) [$($n)? $(:: $ns)* ! $($tail)*] $($r)* }
     };
 }
 

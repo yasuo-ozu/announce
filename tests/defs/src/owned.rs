@@ -9,19 +9,31 @@ use announce::announce;
 /// `rules` (the one arm every check needs), and does nothing else.
 #[macro_export]
 macro_rules! rules_check {
-    (@__announce_attrs [ $($hp:ident)? $(:: $hs:ident)* ! , $($np:ident)? $(:: $ns:ident)* ! $(, $($rest:tt)*)? ] { $($state:tt)* }) => {
-        $($np)? $(:: $ns)* ! { @__announce_attrs [ $($np)? $(:: $ns)* ! $(, $($rest)*)? ] { $($state)* attrs(rules) } }
+    (@announce_format "1" @__announce_attrs [ $($hp:ident)? $(:: $hs:ident)* ! , $($np:ident)? $(:: $ns:ident)* ! $(, $($rest:tt)*)? ] { $($state:tt)* }) => {
+        $($np)? $(:: $ns)* ! { @announce_format "1" @__announce_attrs [ $($np)? $(:: $ns)* ! $(, $($rest)*)? ] { $($state)* attrs(rules) } }
     };
-    (($($args:tt)*), $($item:tt)*) => {};
+    (@announce_format "1" ($($args:tt)*), $($item:tt)*) => {};
 }
 
 /// A `macro_rules!` check that owns nothing: it forwards the state unchanged.
 #[macro_export]
 macro_rules! plain_rules_check {
-    (@__announce_attrs [ $($hp:ident)? $(:: $hs:ident)* ! , $($np:ident)? $(:: $ns:ident)* ! $(, $($rest:tt)*)? ] { $($state:tt)* }) => {
-        $($np)? $(:: $ns)* ! { @__announce_attrs [ $($np)? $(:: $ns)* ! $(, $($rest)*)? ] { $($state)* } }
+    (@announce_format "1" @__announce_attrs [ $($hp:ident)? $(:: $hs:ident)* ! , $($np:ident)? $(:: $ns:ident)* ! $(, $($rest:tt)*)? ] { $($state:tt)* }) => {
+        $($np)? $(:: $ns)* ! { @announce_format "1" @__announce_attrs [ $($np)? $(:: $ns)* ! $(, $($rest)*)? ] { $($state)* } }
     };
-    (($($args:tt)*), $($item:tt)*) => {};
+    (@announce_format "1" ($($args:tt)*), $($item:tt)*) => {};
+}
+
+/// A `macro_rules!` check that does not write `@announce_format "1"` when it
+/// forwards the query: the next element is `finish!` (the check must be the last
+/// one), which reads a query with or without the prefix. Its patterns take the
+/// prefix as optional, so it also answers a query by hand.
+#[macro_export]
+macro_rules! unprefixed_rules_check {
+    ($(@announce_format "1")? @__announce_attrs [ $($hp:ident)? $(:: $hs:ident)* ! , $($np:ident)? $(:: $ns:ident)* ! $(, $($rest:tt)*)? ] { $($state:tt)* }) => {
+        $($np)? $(:: $ns)* ! { @__announce_attrs [ $($np)? $(:: $ns)* ! $(, $($rest)*)? ] { $($state)* attrs(unprefixed) } }
+    };
+    ($(@announce_format "1")? ($($args:tt)*), $($item:tt)*) => {};
 }
 
 /// A `macro_rules!` check that asserts, with its pattern, that the list of the
@@ -31,10 +43,10 @@ macro_rules! plain_rules_check {
 // `crate::head_check` in the pattern is the path the item below writes, on purpose.
 #[allow(clippy::crate_in_macro_def)]
 macro_rules! head_check {
-    (@__announce_attrs [ crate::head_check ! , $($np:ident)? $(:: $ns:ident)* ! $(, $($rest:tt)*)? ] { $($state:tt)* }) => {
-        $($np)? $(:: $ns)* ! { @__announce_attrs [ $($np)? $(:: $ns)* ! $(, $($rest)*)? ] { $($state)* attrs(head_seen) } }
+    (@announce_format "1" @__announce_attrs [ crate::head_check ! , $($np:ident)? $(:: $ns:ident)* ! $(, $($rest:tt)*)? ] { $($state:tt)* }) => {
+        $($np)? $(:: $ns)* ! { @announce_format "1" @__announce_attrs [ $($np)? $(:: $ns)* ! $(, $($rest)*)? ] { $($state)* attrs(head_seen) } }
     };
-    (($($args:tt)*), $($item:tt)*) => {};
+    (@announce_format "1" ($($args:tt)*), $($item:tt)*) => {};
 }
 
 /// Attributes on every kind of position of a struct. The feature `x` is off here.
@@ -282,4 +294,11 @@ macro_rules! make_owned {
             pub x: u8,
         }
     };
+}
+
+/// The last check forwards the query without the prefix: `finish!` takes it.
+#[announce(crate::unprefixed_rules_check)]
+pub struct Unprefixed {
+    #[unprefixed(x)]
+    pub a: u8,
 }
