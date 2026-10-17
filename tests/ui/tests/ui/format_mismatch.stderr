@@ -25,3 +25,34 @@ error: announce: invalid trampoline input; expected `Item! { [Item!, next!, ..] 
    | |_^
    |
    = note: this error originates in the macro `announce_test_defs::kinds::Greet` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: announce: invalid trampoline input; expected `Item! { [Item!, next!, ..] .. }` (a head and at least one continuation; a derive or attribute head goes through `announce::helper::redirect`) with an optional leading `@announce_format "1"` (another version is from an incompatible announce)
+  --> tests/ui/format_mismatch.rs:25:1
+   |
+25 | / announce_test_defs::kinds::with_macro! {
+26 | |     @announce_format "2" [announce_test_defs::kinds::with_macro!, announce_test_derive::format_report!] C
+27 | | }
+   | |_^
+   |
+   = note: this error originates in the macro `announce_test_defs::kinds::with_macro` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: announce: invalid trampoline input; expected `Item! { [Item!, next!, ..] .. }` (a head and at least one continuation; a derive or attribute head goes through `announce::helper::redirect`) with an optional leading `@announce_format "1"` (another version is from an incompatible announce)
+  --> tests/ui/format_mismatch.rs:28:1
+   |
+28 | / announce_test_defs::large::BigTrait! {
+29 | |     @announce_format "2" [announce_test_defs::large::BigTrait!, announce_test_derive::format_report!] D
+30 | | }
+   | |_^
+   |
+   = note: this error originates in the macro `announce_test_defs::large::BigTrait` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: announce: invalid trampoline input; expected `Item! { [Item!, next!, ..] .. }` (a head and at least one continuation; a derive or attribute head goes through `announce::helper::redirect`) with an optional leading `@announce_format "1"` (another version is from an incompatible announce)
+  --> tests/ui/format_mismatch.rs:31:1
+   |
+31 | / announce_test_defs::large::big_mod! {
+32 | |     @announce_format "2" @__announce_self { announce_test_defs::large::big_mod } @__announce_dollar { $ }
+33 | |     (my_opt) [announce_test_defs::large::big_mod!, announce_test_derive::format_report!] E
+34 | | }
+   | |_^
+   |
+   = note: this error originates in the macro `announce_test_defs::large::big_mod` (in Nightly builds, run with -Z macro-backtrace for more info)

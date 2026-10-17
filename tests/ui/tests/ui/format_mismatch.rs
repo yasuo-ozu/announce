@@ -19,4 +19,18 @@ announce_test_defs::kinds::Greet! {
     @announce_format "2" [announce_test_defs::kinds::Greet!, announce_test_derive::format_report!] B
 }
 
+// The same for the other layouts (`$` in the item; the item held once), with and without
+// the other prefixes of a call. Only a version that is given is wrong: the same calls
+// without the prefix are fine (tests/user/tests/format.rs).
+announce_test_defs::kinds::with_macro! {
+    @announce_format "2" [announce_test_defs::kinds::with_macro!, announce_test_derive::format_report!] C
+}
+announce_test_defs::large::BigTrait! {
+    @announce_format "2" [announce_test_defs::large::BigTrait!, announce_test_derive::format_report!] D
+}
+announce_test_defs::large::big_mod! {
+    @announce_format "2" @__announce_self { announce_test_defs::large::big_mod } @__announce_dollar { $ }
+    (my_opt) [announce_test_defs::large::big_mod!, announce_test_derive::format_report!] E
+}
+
 fn main() {}

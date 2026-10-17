@@ -124,6 +124,146 @@ fn trampolines_take_a_call_with_or_without_the_prefix_and_pass_it_on() {
     assert_eq!(two_hops::FORMAT, "1");
 }
 
+// A call by hand that has no prefix, in the shapes a trampoline is reached by: with the
+// options group; with the prefixes that `redirect` writes (`@__announce_self { PATH }` and
+// `@__announce_dollar { $ }`: a trampoline ignores them or needs them); and with both. Nothing
+// is given, so no version is read: every layout takes the call, and writes the prefix of
+// this version in what it calls next.
+report! {
+    direct_options_hand: ::announce_test_defs::kinds::Greet! {
+        (my_opt) [::announce_test_defs::kinds::Greet!, format_report!] FORMAT
+    };
+    direct_prefixes_hand: ::announce_test_defs::kinds::Greet! {
+        @__announce_self { ::announce_test_defs::kinds::Greet } @__announce_dollar { $ }
+        [::announce_test_defs::kinds::Greet!, format_report!] FORMAT
+    };
+    direct_both_hand: ::announce_test_defs::kinds::Greet! {
+        @__announce_self { ::announce_test_defs::kinds::Greet } @__announce_dollar { $ }
+        (my_opt) [::announce_test_defs::kinds::Greet!, format_report!] FORMAT
+    };
+    direct_dollar_options_hand: ::announce_test_defs::kinds::with_macro! {
+        (my_opt) [::announce_test_defs::kinds::with_macro!, format_report!] FORMAT
+    };
+    direct_dollar_prefixes_hand: ::announce_test_defs::kinds::with_macro! {
+        @__announce_self { ::announce_test_defs::kinds::with_macro } @__announce_dollar { $ }
+        [::announce_test_defs::kinds::with_macro!, format_report!] FORMAT
+    };
+    direct_dollar_both_hand: ::announce_test_defs::kinds::with_macro! {
+        @__announce_self { ::announce_test_defs::kinds::with_macro } @__announce_dollar { $ }
+        (my_opt) [::announce_test_defs::kinds::with_macro!, format_report!] FORMAT
+    };
+    single_options_hand: ::announce_test_defs::large::BigTrait! {
+        (my_opt) [::announce_test_defs::large::BigTrait!, format_report!] FORMAT
+    };
+    single_prefixes_hand: ::announce_test_defs::large::BigTrait! {
+        @__announce_self { ::announce_test_defs::large::BigTrait } @__announce_dollar { $ }
+        [::announce_test_defs::large::BigTrait!, format_report!] FORMAT
+    };
+    single_both_hand: ::announce_test_defs::large::BigTrait! {
+        @__announce_self { ::announce_test_defs::large::BigTrait } @__announce_dollar { $ }
+        (my_opt) [::announce_test_defs::large::BigTrait!, format_report!] FORMAT
+    };
+    single_dollar_options_hand: ::announce_test_defs::large::big_mod! {
+        (my_opt) [::announce_test_defs::large::big_mod!, format_report!] FORMAT
+    };
+    single_dollar_prefixes_hand: ::announce_test_defs::large::big_mod! {
+        @__announce_self { ::announce_test_defs::large::big_mod } @__announce_dollar { $ }
+        [::announce_test_defs::large::big_mod!, format_report!] FORMAT
+    };
+    single_dollar_both_hand: ::announce_test_defs::large::big_mod! {
+        @__announce_self { ::announce_test_defs::large::big_mod } @__announce_dollar { $ }
+        (my_opt) [::announce_test_defs::large::big_mod!, format_report!] FORMAT
+    };
+    // The head is a derive or an attribute: the call that `redirect` makes to the
+    // trampoline of a derive or attribute macro, but for the prefix.
+    derive_head_hand: ::announce_test_defs::conflict::ParseAnnounce! {
+        @__announce_self { ::announce_test_defs::conflict::ParseAnnounce } @__announce_dollar { $ }
+        [#[derive(::announce_test_defs::conflict::Parse)] Named, format_report!] FORMAT
+    };
+    attribute_head_hand: ::announce_test_defs::conflict::ParseAnnounce! {
+        @__announce_self { ::announce_test_defs::conflict::ParseAnnounce } @__announce_dollar { $ }
+        [#[::announce_test_defs::conflict::parse_attr], format_report!] FORMAT
+    };
+    derive_head_single_hand: ::announce_test_defs::large::BigParseAnnounce! {
+        @__announce_self { ::announce_test_defs::large::BigParseAnnounce } @__announce_dollar { $ }
+        [#[derive(::announce_test_defs::large::BigParse)] Named, format_report!] FORMAT
+    };
+    derive_head_small_single_hand: ::announce_test_defs::large::SmallSingleParseAnnounce! {
+        @__announce_self { ::announce_test_defs::large::SmallSingleParseAnnounce } @__announce_dollar { $ }
+        [#[derive(::announce_test_defs::large::SmallSingleParse)] Named, format_report!] FORMAT
+    };
+}
+
+#[test]
+fn trampolines_take_a_call_without_the_prefix_in_every_shape() {
+    assert_eq!(direct_options_hand::FORMAT, "1");
+    assert_eq!(direct_prefixes_hand::FORMAT, "1");
+    assert_eq!(direct_both_hand::FORMAT, "1");
+    assert_eq!(direct_dollar_options_hand::FORMAT, "1");
+    assert_eq!(direct_dollar_prefixes_hand::FORMAT, "1");
+    assert_eq!(direct_dollar_both_hand::FORMAT, "1");
+    assert_eq!(single_options_hand::FORMAT, "1");
+    assert_eq!(single_prefixes_hand::FORMAT, "1");
+    assert_eq!(single_both_hand::FORMAT, "1");
+    assert_eq!(single_dollar_options_hand::FORMAT, "1");
+    assert_eq!(single_dollar_prefixes_hand::FORMAT, "1");
+    assert_eq!(single_dollar_both_hand::FORMAT, "1");
+    assert_eq!(derive_head_hand::FORMAT, "1");
+    assert_eq!(attribute_head_hand::FORMAT, "1");
+    assert_eq!(derive_head_single_hand::FORMAT, "1");
+    assert_eq!(derive_head_small_single_hand::FORMAT, "1");
+}
+
+/// The dummy enum of a derive or attribute continuation, made by hand: its payload has no
+/// prefix, so `redirect` has no version to keep and writes the one of this crate. The
+/// trampoline it calls takes it, and the callback after it sees the prefix.
+mod hand_made_dummies {
+    use announce_test_derive::format_report;
+
+    /// `#[ATTR] enum NAME { __AnnouncePayload = (stringify!{ PAYLOAD }, 0).1 }`, the way a
+    /// trampoline writes it, but for the prefix.
+    macro_rules! dummy {
+        (#[$($attr:tt)*] $name:ident { $($payload:tt)* }) => {
+            #[$($attr)*]
+            #[allow(dead_code, non_camel_case_types)]
+            enum $name {
+                __AnnouncePayload = (stringify! { $($payload)* }, 0).1,
+            }
+        };
+    }
+
+    dummy! {
+        #[derive(::announce_test_defs::conflict::Parse)] Direct {
+            [#[derive(::announce_test_defs::conflict::Parse)] Direct, format_report!] DIRECT
+        }
+    }
+    dummy! {
+        #[derive(::announce_test_defs::large::BigParse)] Single {
+            [#[derive(::announce_test_defs::large::BigParse)] Single, format_report!] SINGLE
+        }
+    }
+    dummy! {
+        #[::announce_test_defs::conflict::parse_attr] Attribute {
+            [#[::announce_test_defs::conflict::parse_attr] Attribute, format_report!] ATTRIBUTE
+        }
+    }
+    dummy! {
+        #[::announce_test_defs::large::big_parse_attr] AttributeSingle {
+            [#[::announce_test_defs::large::big_parse_attr] AttributeSingle, format_report!]
+            ATTRIBUTE_SINGLE
+        }
+    }
+}
+
+#[test]
+fn a_dummy_made_by_hand_without_the_prefix_gets_the_prefix_of_this_version() {
+    use hand_made_dummies as h;
+    assert_eq!(h::DIRECT, "1");
+    assert_eq!(h::SINGLE, "1");
+    assert_eq!(h::ATTRIBUTE, "1");
+    assert_eq!(h::ATTRIBUTE_SINGLE, "1");
+}
+
 #[test]
 fn a_proc_macro_callback_called_by_hand_sees_no_format() {
     mod hand {

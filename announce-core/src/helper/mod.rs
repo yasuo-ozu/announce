@@ -2822,6 +2822,100 @@ mod format_tests {
     }
 
     #[test]
+    fn a_call_without_the_prefix_is_never_checked_for_a_version() {
+        // Nothing given, nothing validated: every parser of announce reads the call as it
+        // is, with no version and no error about one. (A given version that is not ours is
+        // the error: `another_version_is_one_error_that_names_both`.)
+        let no_error = |what: &str, out: &str| {
+            assert!(
+                !out.contains("wire format") && !out.contains("compile_error"),
+                "{}: {}",
+                what,
+                out
+            );
+        };
+        let dollar = Punct::new('$', Spacing::Alone);
+        // `Input`: with the options, the prefixes of a trampoline, and an entry.
+        let calls = [
+            template_quote::quote! { [cb!] },
+            template_quote::quote! { (expr) [cb!] a::F! => [] { struct F; } REST },
+            template_quote::quote! { @__announce_dollar { #dollar } [cb!] REST },
+            template_quote::quote! {
+                @__announce_self { ::a::F } @__announce_dollar { #dollar } (o) [cb!] REST
+            },
+        ];
+        for call in calls {
+            let input: Input = syn::parse2(call.clone()).unwrap();
+            assert_eq!(input.format, None, "{}", s(&call));
+            // What it fetches has the prefix of this version.
+            let fetched = s(input.fetch([Cont::bang(syn::parse_quote!(g::G))]));
+            assert!(fetched.contains(&format!("!{{{}", PREFIX)), "{}", fetched);
+            // And the callback function reads it.
+            let out = s(callback(call.clone(), |_| Ok(TokenStream::new())));
+            assert_eq!(out, "", "{}", s(&call));
+        }
+        // `Query` and `CheckCall`, `CheckInput`, `check`.
+        let query = template_quote::quote! { @__announce_attrs [ me!, f! ] { st } };
+        let own = template_quote::quote! { (a), struct S; };
+        let q: Query = syn::parse2(query.clone()).unwrap();
+        no_error(
+            "Query::answer",
+            &s(q.answer(&OwnedAttrs::from_strs(&["x"]))),
+        );
+        assert!(matches!(
+            syn::parse2::<CheckCall>(query.clone()).unwrap(),
+            CheckCall::Query(_)
+        ));
+        assert!(matches!(
+            syn::parse2::<CheckCall>(own.clone()).unwrap(),
+            CheckCall::Run(_)
+        ));
+        syn::parse2::<CheckInput>(own.clone()).unwrap();
+        let answered = s(check(query, &["x"], |_| unreachable!()));
+        no_error("check (query)", &answered);
+        assert!(
+            answered.starts_with(&format!("f!{{{}", PREFIX)),
+            "{}",
+            answered
+        );
+        let mut ran = false;
+        let out = check(own, &["x"], |_| {
+            ran = true;
+            Ok(TokenStream::new())
+        });
+        assert!(ran && out.is_empty());
+        // `callback` and `transformer` on a call by hand: no error, whatever they emit.
+        let call = template_quote::quote! { [me!, next!] a::S! => [] { struct S; } NAME };
+        no_error(
+            "callback",
+            &s(callback(call.clone(), |i| Ok(i.forward().unwrap()))),
+        );
+        no_error("transformer", &s(transformer(call, Ok)));
+        // `redirect` on a dummy whose payload has no prefix: it writes ours.
+        let dummy = template_quote::quote! {
+            #[derive(p::D)]
+            enum N { __AnnouncePayload = (stringify!{ [cb!] rest }, 0).1 }
+        };
+        let out = redirect(dummy, &syn::parse_quote!(::x::Y)).unwrap();
+        no_error("redirect", &s(&out));
+        assert!(s(out).starts_with(&format!("::x::Y!{{{}", PREFIX)));
+    }
+
+    #[test]
+    fn check_answers_a_query_with_the_prefix_and_without_it() {
+        let answer = |tokens: TokenStream| s(check(tokens, &["my_lib"], |_| unreachable!()));
+        let with = answer(template_quote::quote! {
+            @announce_format "1" @__announce_attrs [ me!, f! ] { st }
+        });
+        let without = answer(template_quote::quote! { @__announce_attrs [ me!, f! ] { st } });
+        assert_eq!(with, without);
+        assert_eq!(
+            with,
+            format!("f!{{{}@__announce_attrs[f!]{{stattrs(my_lib)}}}}", PREFIX)
+        );
+    }
+
+    #[test]
     fn redirect_moves_the_prefix_of_the_payload_to_the_front_and_keeps_its_version() {
         let dollar = Punct::new('$', Spacing::Alone);
         let dummy = |payload: TokenStream| {

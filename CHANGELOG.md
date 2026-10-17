@@ -123,9 +123,11 @@
   prefix, and `Input::format` is the version a call came with.
   - Everything announce parses accepts the prefix (`Input`, `Query`, `CheckInput`,
     `CheckCall`, `check`, `finish!`, the trampolines), and a call without it, written by
-    hand (`S! { [S!, cb!] }`), keeps working. A call with another version
-    (`@announce_format "2"`) is one compile error that names both versions; a trampoline,
-    a `macro_rules!`, can only say which version it takes.
+    hand (`S! { [S!, cb!] }`), keeps working: with no prefix there is no version, and
+    none is checked (no error, no warning). Only a version that is given and is not ours
+    is an error. A call with another version (`@announce_format "2"`) is one compile
+    error that names both versions; a trampoline, a `macro_rules!`, can only say which
+    version it takes.
   - **Wire-format change.** A `macro_rules!` callback, check or transformer written
     for 0.1.x matches the old shape (`([$($list:tt)*] ..)`, `(@__announce_attrs ..)`,
     `(($($args:tt)*), $($item:tt)*)`) and does not match any more: put
