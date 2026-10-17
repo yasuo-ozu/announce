@@ -13,7 +13,7 @@
 //!
 //! ```toml
 //! # Cargo.toml of the library's proc-macro crate
-//! announce = "0.1"
+//! announce = "0.2"
 //! ```
 //!
 //! ```ignore

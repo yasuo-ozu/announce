@@ -1,7 +1,7 @@
 [package]
 name = "announce-std"
 description = "announce trampolines for std/core traits"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.57"
 license = "MIT"
@@ -16,7 +16,7 @@ std = []
 # A definer crate: it needs only the macros and `announce::Announce`, not the
 # `proc-macro-api` feature of announce (proc-macro2 and syn), so with its own
 # `std` feature off it builds for targets without std.
-announce = { path = "..", version = "0.1.1", default-features = false }
+announce = { path = "..", version = "0.2.0", default-features = false }
 
 [build-dependencies]
 rustversion = "1"
