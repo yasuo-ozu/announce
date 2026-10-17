@@ -904,9 +904,22 @@ pub mod __private {
 /// `compile_error!` in the result, so the result can be returned from the proc macro
 /// as it is.
 ///
-/// ```ignore
+/// In a proc-macro crate this is a `#[proc_macro]` function. The example is run as a
+/// doctest, which cannot define a proc macro: it has no attribute, and `proc_macro`
+/// stands for `proc_macro2`.
+///
+/// ```
+/// # use announce_core as announce;
+/// # use announce::helper::{Cont, Entry, Input};
+/// # use proc_macro2 as proc_macro;
+/// # fn needed(_: &Input) -> syn::Result<Vec<Cont>> {
+/// #     Ok(vec![Cont::bang(syn::parse_quote!(a::Get))])
+/// # }
+/// # fn generate(entries: Vec<&Entry>) -> syn::Result<proc_macro::TokenStream> {
+/// #     let n = entries.len();
+/// #     Ok(template_quote::quote!(const COUNT: usize = #n;))
+/// # }
 /// /// Receives trait definitions.
-/// #[proc_macro]
 /// pub fn my_callback(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 ///     announce::helper::callback(input.into(), |input| {
 ///         // `input` is an `announce::helper::Input`.
@@ -918,6 +931,13 @@ pub mod __private {
 ///     })
 ///     .into()
 /// }
+/// #
+/// # // `a::Get!` is there: `generate` runs.
+/// # let out = my_callback(syn::parse_quote! { [cb!] a::Get! => [] { trait Get {} } });
+/// # assert_eq!(out.to_string(), "const COUNT : usize = 1usize ;");
+/// # // It is missing: the callback fetches it and is called again.
+/// # let out = my_callback(syn::parse_quote! { [cb!] }).to_string();
+/// # assert!(out.starts_with("a :: Get !") && out.contains("cb !"), "{}", out);
 /// ```
 ///
 /// The function can be tested with `proc_macro2` streams, because it does not use the
@@ -977,9 +997,18 @@ pub fn callback(input: TokenStream, f: impl FnOnce(Input) -> Result<TokenStream>
 ///
 /// is the same as
 ///
-/// ```ignore
+/// ```
+/// # use announce_core as announce;
+/// # use announce::helper::{Cont, Entry, Input};
+/// # use proc_macro2 as proc_macro; // a doctest cannot define a `#[proc_macro]`
+/// # fn needed(_: &Input) -> syn::Result<Vec<Cont>> {
+/// #     Ok(vec![Cont::bang(syn::parse_quote!(a::Get))])
+/// # }
+/// # fn generate(entries: Vec<&Entry>) -> syn::Result<proc_macro::TokenStream> {
+/// #     let n = entries.len();
+/// #     Ok(template_quote::quote!(const COUNT: usize = #n;))
+/// # }
 /// /// Receives trait definitions.
-/// #[proc_macro]
 /// pub fn my_callback(ts: proc_macro::TokenStream) -> proc_macro::TokenStream {
 ///     announce::helper::callback(ts.into(), |input| {
 ///         let entries = match input.gather(needed(&input)?) {
@@ -990,6 +1019,9 @@ pub fn callback(input: TokenStream, f: impl FnOnce(Input) -> Result<TokenStream>
 ///     })
 ///     .into()
 /// }
+/// #
+/// # let out = my_callback(syn::parse_quote! { [cb!] a::Get! => [] { trait Get {} } });
+/// # assert_eq!(out.to_string(), "const COUNT : usize = 1usize ;");
 /// ```
 ///
 /// The facade crate must re-export the callback (e.g. under `__private`) so

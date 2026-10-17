@@ -54,20 +54,41 @@ impl Input {
 /// no entry, the transformer is the last element of the list, or `f` fails) becomes a
 /// `compile_error!`, so the result can be returned from the proc macro as it is.
 ///
-/// ```ignore
+/// In a proc-macro crate this is a `#[proc_macro]` function. The example is run as a
+/// doctest, which cannot define a proc macro: it has no attribute, and `proc_macro`
+/// stands for `proc_macro2`.
+///
+/// ```
+/// # use announce_core as announce;
+/// # use proc_macro2 as proc_macro;
+/// # use template_quote as quote;
 /// /// Drops non-`pub` fields and lists the kept ones in META.
-/// #[proc_macro]
 /// pub fn public_fields(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 ///     announce::helper::transformer(input.into(), |mut entry| {
 ///         // `entry` is an `announce::helper::Entry`.
 ///         let mut item: syn::ItemStruct = syn::parse2(entry.item.clone())?;
-///         // ..
+///         if let syn::Fields::Named(fields) = &mut item.fields {
+///             let all = std::mem::take(&mut fields.named);
+///             fields.named = all
+///                 .into_iter()
+///                 .filter(|f| matches!(f.vis, syn::Visibility::Public(_)))
+///                 .collect();
+///             let kept = fields.named.iter().filter_map(|f| f.ident.as_ref());
+///             entry.meta.push(syn::parse_quote!(fields(#(#kept),*)));
+///         }
 ///         entry.item = quote::quote!(#item);
-///         entry.meta.push(syn::parse_quote!(fields(a, c)));
 ///         Ok(entry)
 ///     })
 ///     .into()
 /// }
+/// #
+/// # let out = public_fields(syn::parse_quote! {
+/// #     [t!, cb!] a::S! => [] { struct S { pub a: u8, b: u8, pub c: u8 } } REST
+/// # });
+/// # let out = out.to_string();
+/// # assert!(out.starts_with("cb !"), "{}", out);
+/// # assert!(out.contains("struct S { pub a : u8 , pub c : u8 }"), "{}", out);
+/// # assert!(out.contains("fields (a , c)"), "{}", out);
 /// ```
 ///
 /// The function can be tested with `proc_macro2` streams, because it does not use the
@@ -133,9 +154,11 @@ pub fn transformer(input: TokenStream, f: impl FnOnce(Entry) -> Result<Entry>) -
 ///
 /// is the same as
 ///
-/// ```ignore
+/// ```
+/// # use announce_core as announce;
+/// # use proc_macro2 as proc_macro; // a doctest cannot define a `#[proc_macro]`
+/// # use template_quote as quote;
 /// /// Drops non-`pub` fields and lists the kept ones in META.
-/// #[proc_macro]
 /// pub fn public_fields(ts: proc_macro::TokenStream) -> proc_macro::TokenStream {
 ///     announce::helper::transformer(ts.into(), |mut entry| {
 ///         let mut item: syn::ItemStruct = syn::parse2(entry.item.clone())?;
@@ -146,6 +169,10 @@ pub fn transformer(input: TokenStream, f: impl FnOnce(Entry) -> Result<Entry>) -
 ///     })
 ///     .into()
 /// }
+/// #
+/// # let out = public_fields(syn::parse_quote! { [t!, cb!] a::S! => [] { struct S; } REST });
+/// # let out = out.to_string();
+/// # assert!(out.starts_with("cb !") && out.contains("fields (a , c)"), "{}", out);
 /// ```
 #[doc(hidden)]
 #[macro_export]
