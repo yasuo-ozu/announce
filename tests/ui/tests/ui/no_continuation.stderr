@@ -1,4 +1,4 @@
-error: announce: invalid trampoline input; expected `Item! { [Item!, next!, ..] .. }` (a head and at least one continuation; a derive or attribute head goes through `announce::helper::redirect`)
+error: announce: invalid trampoline input; expected `Item! { [Item!, next!, ..] .. }` (a head and at least one continuation; a derive or attribute head goes through `announce::helper::redirect`) with an optional leading `@announce_format "1"` (another version is from an incompatible announce)
  --> tests/ui/no_continuation.rs:1:1
   |
 1 | announce_test_defs::kinds::Greet! { [announce_test_defs::kinds::Greet!] }

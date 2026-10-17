@@ -1,10 +1,10 @@
 // A check that answers wrongly: it adds something that is not `attrs(..)` to
 // the state.
 macro_rules! bad_state {
-    (@__announce_attrs [ $($hp:ident)? $(:: $hs:ident)* ! , $($np:ident)? $(:: $ns:ident)* ! $(, $($rest:tt)*)? ] { $($state:tt)* }) => {
-        $($np)? $(:: $ns)* ! { @__announce_attrs [ $($np)? $(:: $ns)* ! $(, $($rest)*)? ] { $($state)* oops(my_lib) } }
+    (@announce_format "1" @__announce_attrs [ $($hp:ident)? $(:: $hs:ident)* ! , $($np:ident)? $(:: $ns:ident)* ! $(, $($rest:tt)*)? ] { $($state:tt)* }) => {
+        $($np)? $(:: $ns)* ! { @announce_format "1" @__announce_attrs [ $($np)? $(:: $ns)* ! $(, $($rest)*)? ] { $($state)* oops(my_lib) } }
     };
-    (($($args:tt)*), $($item:tt)*) => {};
+    (@announce_format "1" ($($args:tt)*), $($item:tt)*) => {};
 }
 
 #[announce::announce(bad_state)]
@@ -15,10 +15,10 @@ pub struct S {
 // A check that drops the rest of the list: `finish!` is never reached, and the
 // next check says so.
 macro_rules! drops_list {
-    (@__announce_attrs [ $($hp:ident)? $(:: $hs:ident)* ! , $($np:ident)? $(:: $ns:ident)* ! $(, $($rest:tt)*)? ] { $($state:tt)* }) => {
-        $($np)? $(:: $ns)* ! { @__announce_attrs [] { $($state)* } }
+    (@announce_format "1" @__announce_attrs [ $($hp:ident)? $(:: $hs:ident)* ! , $($np:ident)? $(:: $ns:ident)* ! $(, $($rest:tt)*)? ] { $($state:tt)* }) => {
+        $($np)? $(:: $ns)* ! { @announce_format "1" @__announce_attrs [] { $($state)* } }
     };
-    (($($args:tt)*), $($item:tt)*) => {};
+    (@announce_format "1" ($($args:tt)*), $($item:tt)*) => {};
 }
 
 #[announce::announce(drops_list, announce_test_derive::no_tuple)]
@@ -36,10 +36,10 @@ pub struct U {
 // list that the next macro receives is not headed by that macro. `finish!` wants
 // exactly `[ finish! ]` ...
 macro_rules! keeps_head {
-    (@__announce_attrs [ $($hp:ident)? $(:: $hs:ident)* ! , $($np:ident)? $(:: $ns:ident)* ! $(, $($rest:tt)*)? ] { $($state:tt)* }) => {
-        $($np)? $(:: $ns)* ! { @__announce_attrs [ $($hp)? $(:: $hs)* ! , $($np)? $(:: $ns)* ! $(, $($rest)*)? ] { $($state)* } }
+    (@announce_format "1" @__announce_attrs [ $($hp:ident)? $(:: $hs:ident)* ! , $($np:ident)? $(:: $ns:ident)* ! $(, $($rest:tt)*)? ] { $($state:tt)* }) => {
+        $($np)? $(:: $ns)* ! { @announce_format "1" @__announce_attrs [ $($hp)? $(:: $hs)* ! , $($np)? $(:: $ns)* ! $(, $($rest)*)? ] { $($state)* } }
     };
-    (($($args:tt)*), $($item:tt)*) => {};
+    (@announce_format "1" ($($args:tt)*), $($item:tt)*) => {};
 }
 
 #[announce::announce(keeps_head)]

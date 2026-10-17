@@ -20,6 +20,9 @@
 //!   `repeater = ..`. [`TypeLeak::apply`] rewrites an item so that its types resolve
 //!   in any crate.
 //!
+//! - Detect announce: every call that announce makes starts with the prefix
+//!   `@announce_format "1"` ([`format_prefix`], [`ANNOUNCE_FORMAT`], [`Input::format`]).
+//!
 //! The shape of the tokens that a callback receives is described at [`Input`].
 //!
 //! As `announce::helper`, this module needs the feature `proc-macro-api` of
@@ -56,6 +59,97 @@ use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::{Attribute, Path, Result, Token};
 use template_quote::{quote, ToTokens};
+
+/// The version of the wire format, as written in the prefix `@announce_format "1"`
+/// that starts every call announce makes ([`format_prefix`]).
+///
+/// Bump it when the wire format changes in a way that a parser of the old version
+/// cannot read ([the wire format](Input#the-wire-format)). A parser of this crate
+/// accepts a call without the prefix (written by hand), and a call with this version.
+/// Any other version is an error that names both versions.
+pub const ANNOUNCE_FORMAT: &str = "1";
+
+/// The word after the `@` of the prefix: `@announce_format "1"`.
+const FORMAT_TAG: &str = "announce_format";
+
+/// The start of every error about a version that is not [`ANNOUNCE_FORMAT`].
+const FORMAT_ERROR: &str = "announce: incompatible wire format";
+
+/// The prefix `@announce_format "1"`, with the version [`ANNOUNCE_FORMAT`].
+///
+/// Every call that announce makes to the next element of a chain starts with these
+/// tokens, before everything else (`@__announce_self { .. }`, `(OPTIONS)`, `[LIST]`).
+/// A macro of your own can match them to know that it was called by announce
+/// ([the wire format](Input#the-wire-format)). A proc macro that builds such a call
+/// by hand starts it with this.
+pub fn format_prefix() -> TokenStream {
+    quote! { @announce_format #ANNOUNCE_FORMAT }
+}
+
+/// The error for a call with `@announce_format "found"`.
+fn format_error(span: Span, found: &str) -> syn::Error {
+    syn::Error::new(
+        span,
+        format!(
+            "{}: found `@announce_format {:?}`, expected `@announce_format {:?}`. The item was \
+             announced, or the macro that reads it was built, with another version of \
+             `announce`, whose wire format this version cannot read: use one version of \
+             `announce` in the whole chain",
+            FORMAT_ERROR, found, ANNOUNCE_FORMAT
+        ),
+    )
+}
+
+/// Whether `e` is the error of [`format_error`].
+pub(crate) fn is_format_error(e: &syn::Error) -> bool {
+    e.to_string().starts_with(FORMAT_ERROR)
+}
+
+/// Reads the prefix `@announce_format "VERSION"` if the input starts with it, and
+/// returns the version. A version other than [`ANNOUNCE_FORMAT`] is an error. Nothing
+/// is consumed when the input starts with anything else (a call written by hand).
+pub(crate) fn parse_format(input: ParseStream) -> Result<Option<String>> {
+    if !input.peek(Token![@]) {
+        return Ok(None);
+    }
+    let fork = input.fork();
+    let _: Token![@] = fork.parse()?;
+    match fork.parse::<Ident>() {
+        Ok(i) if i == FORMAT_TAG => {}
+        _ => return Ok(None),
+    }
+    let lit: syn::LitStr = fork.parse().map_err(|e| {
+        syn::Error::new(
+            e.span(),
+            "announce: `@announce_format` must be followed by a string literal, like \
+             `@announce_format \"1\"`",
+        )
+    })?;
+    syn::parse::discouraged::Speculative::advance_to(input, &fork);
+    let found = lit.value();
+    if found != ANNOUNCE_FORMAT {
+        return Err(format_error(lit.span(), &found));
+    }
+    Ok(Some(found))
+}
+
+/// Splits the prefix `@announce_format "VERSION"` off the start of `ts`, whatever the
+/// version is. The prefix is `None` when `ts` does not start with it.
+fn split_format(ts: TokenStream) -> (Option<TokenStream>, TokenStream) {
+    use proc_macro2::TokenTree;
+    let mut it = ts.into_iter();
+    let first: Vec<TokenTree> = it.by_ref().take(3).collect();
+    let is_prefix = matches!(
+        first.as_slice(),
+        [TokenTree::Punct(p), TokenTree::Ident(i), TokenTree::Literal(_)]
+            if p.as_char() == '@' && i == FORMAT_TAG
+    );
+    if is_prefix {
+        (Some(first.into_iter().collect()), it.collect())
+    } else {
+        (None, first.into_iter().chain(it).collect())
+    }
+}
 
 /// A random identifier `<prefix><16 hex digits>`, unique within the process.
 pub fn gensym(prefix: &str) -> Ident {
@@ -252,12 +346,15 @@ impl ContList {
         }
     }
 
-    /// Invokes the head with `[self] body`, where `body` is `ENTRY* REST`.
+    /// Invokes the head with `@announce_format "1" [self] body`, where `body` is
+    /// `ENTRY* REST` (a derive or attribute head gets the same tokens in the dummy
+    /// enum).
     pub fn invoke(&self, body: TokenStream) -> TokenStream {
         self.invoke_with_options(None, body)
     }
 
-    /// Like [`invoke`](Self::invoke), with a global options group `(options) [..] ..`.
+    /// Like [`invoke`](Self::invoke), with a global options group
+    /// `@announce_format "1" (options) [..] ..`.
     /// A derive or attribute head is refused (`compile_error!`) when the group
     /// starts with `expr` ([`is_expression_position`]).
     pub fn invoke_with_options(
@@ -269,16 +366,17 @@ impl ContList {
         let in_expr = options.map_or(false, is_expression_position);
         let mut list = self.clone();
         list.name_dummies();
+        let format = format_prefix();
         match list.0.first() {
             None => quote! { compile_error! { "announce: empty continuation list" } },
             Some(Cont::Attr { .. }) if in_expr => quote! {
                 compile_error! { "announce: a derive/attribute continuation emits items, so it cannot be used with `(expr)`" }
             },
-            Some(Cont::Bang(p)) => quote! { #p ! { #opts #list #body } },
+            Some(Cont::Bang(p)) => quote! { #p ! { #format #opts #list #body } },
             Some(Cont::Attr { attr, name }) => quote! {
                 #attr
                 #[allow(dead_code, non_camel_case_types)]
-                enum #name { __AnnouncePayload = (stringify! { #opts #list #body }, 0).1 }
+                enum #name { __AnnouncePayload = (stringify! { #format #opts #list #body }, 0).1 }
             },
         }
     }
@@ -435,16 +533,34 @@ impl ToTokens for Entry {
     }
 }
 
-/// What a callback receives: `(OPTIONS)? [LIST] ENTRY* REST`.
+/// What a callback receives: `@announce_format "1" (OPTIONS)? [LIST] ENTRY* REST`.
 ///
 /// # The wire format
 ///
 /// A callback receives these tokens:
 ///
 /// ```text
-/// (OPTIONS)? [LIST] ENTRY* REST
+/// @announce_format "1" (OPTIONS)? [LIST] ENTRY* REST
 /// ```
 ///
+/// - `@announce_format "1"`: the *format prefix*. Every call that announce makes to
+///   the next element of a chain starts with it, whatever the element is: a
+///   trampoline, a transformer, a callback, a check. `"1"` is the version of the wire
+///   format ([`ANNOUNCE_FORMAT`]); it changes when this format changes in a way an old
+///   reader cannot read. A call written by hand does not need the prefix, and every
+///   parser of announce reads a call with or without it ([`Input::format`] is the
+///   version found). A call with another version is one compile error that names both
+///   versions, because the item and the macro that reads it were built with
+///   incompatible versions of announce. [How a macro of your own detects the
+///   prefix](#detecting-a-call-from-announce).
+///   It starts every call that announce makes, also the call of the sentinel of the runner,
+///   `NAME! { @announce_format "1" @__announce_exists }`.
+///   (The *runner* is the hidden attribute that `#[announce]` puts on an item that has other
+///   attributes. Its arguments have their own marker, `__announce_format_version = "1"`: it
+///   versions the encoding of the arguments of an attribute, which the runners of two
+///   versions of announce compare when they meet on one item. The runner is not a call of a
+///   chain, and has no `@announce_format`; the calls of a chain are not attributes, and have
+///   no `__announce_format_version`.)
 /// - `OPTIONS`: global options, forwarded unchanged by every hop. Only a leading
 ///   `expr` has a meaning: it puts the chain in expression position, where derive
 ///   and attribute elements are refused ([`is_expression_position`]). The rest is
@@ -468,8 +584,12 @@ impl ToTokens for Entry {
 ///   [`Input::entries_in_order`] gives oldest first.
 /// - `[META]` is always written, even when empty (`[]`).
 /// - A trampoline can get the prefixes `@__announce_self { PATH }` and
-///   `@__announce_dollar { $ }` before this input. Only trampolines and [`redirect`]
-///   use them. Parsing an [`Input`] skips them.
+///   `@__announce_dollar { $ }` after the format prefix, before the rest of this input:
+///   `@announce_format "1" @__announce_self { PATH } @__announce_dollar { $ } ..`. Only
+///   trampolines and [`redirect`] use them. Parsing an [`Input`] skips them.
+/// - The calls that announce makes to a check have the prefix too: the query
+///   `@announce_format "1" @__announce_attrs [..] { STATE }` and the check itself,
+///   `@announce_format "1" (ARGS), ITEM` ([`attrs`]).
 ///
 /// `META` holds these elements, as the definer wrote them:
 ///
@@ -486,15 +606,55 @@ impl ToTokens for Entry {
 /// use announce::helper::Input;
 ///
 /// let input: Input = syn::parse_quote! {
+///     @announce_format "1"
 ///     [cb!]
 ///     a::F! => [my_lib::check, mock(::core::iter::Iterator)] { pub trait F {} }
 ///     REST tokens
 /// };
+/// assert_eq!(input.format.as_deref(), Some("1"));
 /// let entry = &input.entries[0];
 /// assert!(entry.has_check("check"));
 /// assert!(entry.mock().is_some());
 /// assert_eq!(input.rest.to_string(), "REST tokens");
+///
+/// // A call by hand has no prefix, and parses as well.
+/// let by_hand: Input = syn::parse_quote! { [cb!] a::F! => [] { pub trait F {} } };
+/// assert_eq!(by_hand.format, None);
+///
+/// // Another version is one error, which names the version found and the one read.
+/// let err = syn::parse2::<Input>(syn::parse_quote! { @announce_format "2" [cb!] }).unwrap_err();
+/// assert!(err.to_string().contains("found `@announce_format \"2\"`"));
+/// assert!(err.to_string().contains("expected `@announce_format \"1\"`"));
 /// ```
+///
+/// # Detecting a call from announce
+///
+/// A macro of your own, a `macro_rules!` callback, check or transformer, can match
+/// the prefix to know that announce called it, and which version of the wire format
+/// the call has. Put the arm for the prefix first. The arm for the call by hand
+/// (without it) stays, if you want one:
+///
+/// ```
+/// macro_rules! who_calls {
+///     // Called by announce: the prefix, then `[LIST] ENTRY* REST`.
+///     (@announce_format "1" [$($list:tt)*] $($rest:tt)*) => {
+///         const CALLER: &str = "announce";
+///     };
+///     // Called by hand, or with a version that this macro does not know.
+///     ($($rest:tt)*) => {
+///         const CALLER: &str = "not announce, or another format";
+///     };
+/// }
+///
+/// who_calls! { @announce_format "1" [who_calls!] }
+/// assert_eq!(CALLER, "announce");
+/// ```
+///
+/// A macro that forwards the call to the next element starts the forwarded call with
+/// the prefix again; [`Input::forward`] does it, and [`format_prefix`] gives the
+/// tokens to a proc macro that builds the call itself. A `macro_rules!` callback
+/// that is written for one version only says so in its pattern, as above: a call
+/// with another version matches no arm, and rustc reports the call.
 ///
 /// # A real example
 ///
@@ -537,6 +697,7 @@ impl ToTokens for Entry {
 ///
 /// <!-- wire-example -->
 /// ```text
+/// @announce_format "1"
 /// (expr)
 /// [show!]
 /// defs::Length! => [
@@ -563,6 +724,7 @@ impl ToTokens for Entry {
 ///
 /// | Tokens | Field | Notes |
 /// |---|---|---|
+/// | `@announce_format "1"` | [`format`](Input::format) | The prefix, written by both hops. |
 /// | `(expr)` | [`options`](Input::options) | From the call, forwarded by both hops. |
 /// | `[show!]` | [`list`](Input::list) | Only the callback is left: `Point!` and `Length!` each dropped themselves. |
 /// | `defs::Length! => [..] { .. }` | `entries[0]` | The newest entry, the last hop. Its `key` is as written in the call. |
@@ -622,6 +784,13 @@ impl ToTokens for Entry {
 /// ```
 #[derive(Clone, Debug)]
 pub struct Input {
+    /// The version of the prefix `@announce_format "VERSION"` that the call started
+    /// with ([`ANNOUNCE_FORMAT`] when there is one), or `None` for a call without it
+    /// (written by hand). A call with another version does not parse.
+    ///
+    /// [`forward`](Self::forward), [`fetch`](Self::fetch) and [`gather`](Self::gather)
+    /// always write the prefix with the version of this crate, whatever this field is.
+    pub format: Option<String>,
     /// The global options group `(..)`. [`forward`](Self::forward) passes it on
     /// unchanged. [`fetch`](Self::fetch) and [`gather`](Self::gather) add
     /// `__announce_fetched(..)` to it, which records what they fetched (to detect
@@ -637,6 +806,8 @@ pub struct Input {
 
 impl Parse for Input {
     fn parse(input: ParseStream) -> Result<Self> {
+        // `@announce_format "1"` comes first, before everything else.
+        let format = parse_format(input)?;
         // The `@__announce_self { path }` and `@__announce_dollar { $ }`
         // prefixes are meant for trampolines; skip them if a callback
         // receives them.
@@ -689,6 +860,7 @@ impl Parse for Input {
             }
         }
         Ok(Input {
+            format,
             options,
             list,
             entries,
@@ -1049,7 +1221,7 @@ macro_rules! callback {
 ///
 /// - `input` is the input of the proc macro: either the attribute query
 ///   `@__announce_attrs [..] { .. }` or the check's own input, `(ARGS), ITEM`
-///   ([`CheckCall`]).
+///   ([`CheckCall`]), each after the prefix `@announce_format "1"` that announce writes.
 /// - `attributes` lists the attribute names that the check owns:
 ///   `#[announce(my_lib::my_check)]` then lets the item carry `#[my_lib]`,
 ///   `#[my_lib(..)]` and `#[my_lib::..]` attributes. It may be empty, for a check that
@@ -1178,14 +1350,15 @@ pub fn payload(item: TokenStream) -> Option<TokenStream> {
 }
 
 /// For a derive or attribute whose name clashes with a trampoline: if `item` is a
-/// trampoline dummy, returns `target! { @__announce_self { target }
-/// @__announce_dollar { $ } payload }`. Otherwise returns `None`.
+/// trampoline dummy, returns `target! { @announce_format "1" @__announce_self {
+/// target } @__announce_dollar { $ } payload }`. Otherwise returns `None`.
 ///
 /// `target` is the absolute path of the `#[announce(macro_name = ..)]` macro. Pick
-/// a path that is valid at the user's site. The two prefixes are for the
-/// trampoline (see [the wire format](Input#the-wire-format)): it needs its own path
-/// to call itself again, when it holds a large item once, and a real `$` to
-/// un-escape an item that has `$` in it.
+/// a path that is valid at the user's site. The prefixes are for the trampoline (see
+/// [the wire format](Input#the-wire-format)). `@announce_format "1"` is the version of
+/// the format; the payload of the dummy starts with it, and it is moved to the front
+/// of the call. The trampoline needs its own path to call itself again, when it holds
+/// a large item once, and a real `$` to un-escape an item that has `$` in it.
 ///
 /// ```ignore
 /// #[proc_macro_derive(Parse)]
@@ -1197,17 +1370,26 @@ pub fn payload(item: TokenStream) -> Option<TokenStream> {
 /// }
 /// ```
 pub fn redirect(item: TokenStream, target: &Path) -> Option<TokenStream> {
-    let body = payload(item)?;
+    // The payload starts with `@announce_format "VERSION"`, written by whoever
+    // made the dummy. A call starts with it, before the two prefixes below, and
+    // keeps the version it was made with, so that a trampoline of another version
+    // reports the mismatch. A payload without it (a hand-made dummy) gets the
+    // version of this crate.
+    let (format, body) = split_format(payload(item)?);
+    let format = format.unwrap_or_else(format_prefix);
     // A trampoline whose payload contains `$` needs a real `$` from its
     // caller (`@__announce_dollar { $ }`); the others ignore it. A trampoline
     // that holds its item once calls itself again and needs its own path
     // (`@__announce_self { path }`); the others ignore that too. The derive route cannot re-invoke the
     // trampoline itself, so both prefixes are always added here.
     let dollar = proc_macro2::Punct::new('$', proc_macro2::Spacing::Alone);
-    Some(quote! { #target ! { @__announce_self { #target } @__announce_dollar { #dollar } #body } })
+    Some(quote! {
+        #target ! { #format @__announce_self { #target } @__announce_dollar { #dollar } #body }
+    })
 }
 
-/// What a check receives: `(ARGS), ITEM`.
+/// What a check receives: `(ARGS), ITEM`, after the prefix `@announce_format "1"` when
+/// announce calls the check (a call by hand has no prefix, and parses as well).
 ///
 /// The item has its `#[cfg]` evaluated, and it still has the attributes that the
 /// checks own (see [`OwnedAttrs`]), so the check can validate them. [`check`] parses
@@ -1239,6 +1421,8 @@ impl CheckInput {
 
 impl Parse for CheckInput {
     fn parse(input: ParseStream) -> Result<Self> {
+        // The call starts with `@announce_format "1"`, unless it was written by hand.
+        parse_format(input)?;
         if input.peek(Token![@]) {
             return Err(input.error(
                 "announce: this check received the attribute query `@__announce_attrs` that \
@@ -1380,19 +1564,19 @@ mod tests {
         assert!(!ran);
         assert_eq!(
             s(out),
-            "b::check!{@__announce_attrs[b::check!,f::finish!]{stattrs(my_lib,other)}}"
+            "b::check!{@announce_format\"1\"@__announce_attrs[b::check!,f::finish!]{stattrs(my_lib,other)}}"
         );
         // No names: the state is passed on as it is, and the closure is not run.
         let out = check(q(), &[], |_| panic!("the query is not a call"));
         assert_eq!(
             s(out),
-            "b::check!{@__announce_attrs[b::check!,f::finish!]{st}}"
+            "b::check!{@announce_format\"1\"@__announce_attrs[b::check!,f::finish!]{st}}"
         );
         // Names are written as text: a raw identifier is its plain name.
         let out = check(q(), &["r#type", "type"], |_| unreachable!());
         assert_eq!(
             s(out),
-            "b::check!{@__announce_attrs[b::check!,f::finish!]{stattrs(type)}}"
+            "b::check!{@announce_format\"1\"@__announce_attrs[b::check!,f::finish!]{stattrs(type)}}"
         );
         // The answer of `Query` is kept as is: a list that does not fit is a compile error.
         let out = s(check(
@@ -1497,12 +1681,15 @@ mod tests {
         // The fetch is recorded in the options group.
         assert_eq!(
             out,
-            "g::G!{(__announce_fetched(g::G))[g::G!,me!,next!]a::F!=>[]{structS;}(rest)}"
+            "g::G!{@announce_format\"1\"(__announce_fetched(g::G))[g::G!,me!,next!]a::F!=>[]{structS;}(rest)}"
         );
         assert_eq!(Cont::bang(syn::parse_quote!(a::F)), input.entries[0].key);
         // Nothing to fetch: nothing to record.
         let out = s(input.fetch([]));
-        assert_eq!(out, "me!{[me!,next!]a::F!=>[]{structS;}(rest)}");
+        assert_eq!(
+            out,
+            "me!{@announce_format\"1\"[me!,next!]a::F!=>[]{structS;}(rest)}"
+        );
     }
 
     #[test]
@@ -1534,13 +1721,13 @@ mod tests {
         };
         let out = s(answered.fetch([Cont::bang(syn::parse_quote!(g::G))]));
         assert!(
-            out.starts_with("g::G!{(mine,__announce_fetched(g::G),__announce_fetched(g::G))"),
+            out.starts_with("g::G!{@announce_format\"1\"(mine,__announce_fetched(g::G),__announce_fetched(g::G))"),
             "{}",
             out
         );
         let out = s(answered.fetch([Cont::bang(syn::parse_quote!(h::H))]));
         assert!(
-            out.starts_with("h::H!{(mine,__announce_fetched(g::G),__announce_fetched(h::H))"),
+            out.starts_with("h::H!{@announce_format\"1\"(mine,__announce_fetched(g::G),__announce_fetched(h::H))"),
             "{}",
             out
         );
@@ -1560,7 +1747,10 @@ mod tests {
             Gather::Fetch(ts) => ts,
             Gather::Ready(_) => panic!(),
         };
-        assert_eq!(s(&first), "g::G!{(__announce_fetched(g::G))[g::G!,me!]}");
+        assert_eq!(
+            s(&first),
+            "g::G!{@announce_format\"1\"(__announce_fetched(g::G))[g::G!,me!]}"
+        );
         // ... and the callback, called again by a non-trampoline, fetches it
         // raw: the error is the same whichever one is used.
         let body: Input =
@@ -1569,7 +1759,10 @@ mod tests {
             .contains("wasfetchedbutdidnotprovide"));
         // And the other way round.
         let raw = input.fetch([Cont::bang(syn::parse_quote!(g::G))]);
-        assert_eq!(s(&raw), "g::G!{(__announce_fetched(g::G))[g::G!,me!]}");
+        assert_eq!(
+            s(&raw),
+            "g::G!{@announce_format\"1\"(__announce_fetched(g::G))[g::G!,me!]}"
+        );
         match body.gather([Cont::bang(syn::parse_quote!(g::G))]) {
             Gather::Fetch(ts) => assert!(s(ts).contains("wasfetchedbutdidnotprovide")),
             Gather::Ready(_) => panic!(),
@@ -1599,7 +1792,11 @@ mod tests {
             out
         );
         let body = payload(list.invoke(TokenStream::new())).map(s).unwrap();
-        assert!(body.starts_with("[#[derive(p::D)]__AnnounceT_"), "{}", body);
+        assert!(
+            body.starts_with("@announce_format\"1\"[#[derive(p::D)]__AnnounceT_"),
+            "{}",
+            body
+        );
         assert!(redirect(list.invoke(TokenStream::new()), &syn::parse_quote!(::x::Y)).is_some());
     }
 }
@@ -1752,7 +1949,7 @@ mod options_tests {
         assert!(input.has_option("type_leak"));
         let fwd = input.forward().unwrap().to_string().replace(' ', "");
         assert!(
-            fwd.starts_with("next!{(type_leak)[next!]a::F!=>"),
+            fwd.starts_with("next!{@announce_format\"1\"(type_leak)[next!]a::F!=>"),
             "{}",
             fwd
         );
@@ -1761,7 +1958,9 @@ mod options_tests {
             .to_string()
             .replace(' ', "");
         assert!(
-            fetch.starts_with("g::G!{(type_leak,__announce_fetched(g::G))[g::G!,me!,next!]"),
+            fetch.starts_with(
+                "g::G!{@announce_format\"1\"(type_leak,__announce_fetched(g::G))[g::G!,me!,next!]"
+            ),
             "{}",
             fetch
         );
@@ -2215,7 +2414,10 @@ mod gap_tests {
         let bang: ContList = [Cont::bang(syn::parse_quote!(p::cb))].into_iter().collect();
         let opts = template_quote::quote!(type_leak, expr);
         let out = s(bang.invoke_with_options(Some(&opts), template_quote::quote!(body)));
-        assert_eq!(out, "p::cb!{(type_leak,expr)[p::cb!]body}");
+        assert_eq!(
+            out,
+            "p::cb!{@announce_format\"1\"(type_leak,expr)[p::cb!]body}"
+        );
     }
 
     #[test]
@@ -2223,7 +2425,7 @@ mod gap_tests {
         let bang: ContList = [Cont::bang(syn::parse_quote!(p::cb))].into_iter().collect();
         let opts = template_quote::quote!(expr);
         let out = s(bang.invoke_with_options(Some(&opts), template_quote::quote!(body)));
-        assert_eq!(out, "p::cb!{(expr)[p::cb!]body}");
+        assert_eq!(out, "p::cb!{@announce_format\"1\"(expr)[p::cb!]body}");
         let derive: ContList = [Cont::derive(syn::parse_quote!(p::D))]
             .into_iter()
             .collect();
@@ -2231,7 +2433,7 @@ mod gap_tests {
         let out = s(derive.invoke_with_options(Some(&opts), template_quote::quote!(body)));
         assert!(out.contains("__AnnouncePayload"), "{}", out);
         assert!(
-            out.contains("stringify!{(type_leak)[#[derive(p::D)]__AnnounceT_"),
+            out.contains("stringify!{@announce_format\"1\"(type_leak)[#[derive(p::D)]__AnnounceT_"),
             "{}",
             out
         );
@@ -2301,12 +2503,14 @@ mod gap_tests {
         let out_s = s(&out);
         assert!(
             out_s.starts_with(
-                "::x::Y!{@__announce_self{::x::Y}@__announce_dollar{$}[#[derive(p::D)]__AnnounceT_"
+                "::x::Y!{@announce_format\"1\"@__announce_self{::x::Y}@__announce_dollar{$}[#[derive(p::D)]__AnnounceT_"
             ),
             "{}",
             out_s
         );
         assert!(out_s.ends_with("cb!]body}"), "{}", out_s);
+        // The prefix of the payload is moved to the front, not copied.
+        assert_eq!(out_s.matches("@announce_format").count(), 1, "{}", out_s);
         // The `$` is a real punct, not a string.
         let has_dollar = out.into_iter().any(|tt| match tt {
             proc_macro2::TokenTree::Group(g) => g
@@ -2330,5 +2534,329 @@ mod gap_tests {
         .unwrap();
         assert_eq!(input.list.0.len(), 2);
         assert_eq!(s(input.rest), "body");
+    }
+}
+
+/// The format prefix `@announce_format "1"` of every call.
+#[cfg(test)]
+mod format_tests {
+    use super::*;
+    use proc_macro2::{Punct, Spacing};
+
+    fn s(ts: impl ToTokens) -> String {
+        ts.to_token_stream()
+            .to_string()
+            .split_whitespace()
+            .collect()
+    }
+
+    /// What every call of announce starts with, without whitespace.
+    const PREFIX: &str = "@announce_format\"1\"";
+
+    #[test]
+    fn the_version_is_written_once_and_the_prefix_is_made_of_it() {
+        assert_eq!(ANNOUNCE_FORMAT, "1");
+        assert_eq!(s(format_prefix()), PREFIX);
+        assert_eq!(
+            s(format_prefix()),
+            format!("@announce_format{:?}", ANNOUNCE_FORMAT)
+        );
+    }
+
+    #[test]
+    fn input_reads_a_call_with_the_prefix_and_one_without() {
+        let with: Input = syn::parse_quote! { @announce_format "1" (expr) [cb!] REST };
+        assert_eq!(with.format.as_deref(), Some(ANNOUNCE_FORMAT));
+        assert!(with.has_option("expr"));
+        assert_eq!(s(&with.rest), "REST");
+        let without: Input = syn::parse_quote! { (expr) [cb!] REST };
+        assert_eq!(without.format, None);
+        assert_eq!(s(&without.rest), "REST");
+        // The rest of the input is read the same way.
+        assert_eq!(s(&with.list), s(&without.list));
+        // The prefix is first; the prefixes of the trampolines follow it.
+        let all: Input = syn::parse_quote! {
+            @announce_format "1" @__announce_self { a::b } @__announce_dollar { $ } (x) [cb!] REST
+        };
+        assert_eq!(all.format.as_deref(), Some("1"));
+        assert!(all.has_option("x"));
+        assert_eq!(s(&all.rest), "REST");
+        // Entries and a REST that looks like an entry do not hide the prefix.
+        let e: Input = syn::parse_quote! {
+            @announce_format "1" [cb!] a::F! => [] { struct F; } b::G! => [] { struct G; }
+        };
+        assert_eq!(e.entries.len(), 2);
+    }
+
+    #[test]
+    fn the_prefix_after_the_other_prefixes_is_not_a_prefix() {
+        let late = syn::parse2::<Input>(template_quote::quote! {
+            @__announce_self { a::b } @announce_format "1" [cb!]
+        });
+        assert!(late.is_err());
+        // Two of them are not one either.
+        let twice = syn::parse2::<Input>(template_quote::quote! {
+            @announce_format "1" @announce_format "1" [cb!]
+        });
+        assert!(twice.is_err());
+    }
+
+    #[test]
+    fn another_version_is_one_error_that_names_both() {
+        let e = syn::parse2::<Input>(template_quote::quote! { @announce_format "2" [cb!] })
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            e.matches("announce: incompatible wire format").count(),
+            1,
+            "{}",
+            e
+        );
+        assert!(
+            e.contains("found `@announce_format \"2\"`")
+                && e.contains("expected `@announce_format \"1\"`"),
+            "{}",
+            e
+        );
+        // The same error from every parser.
+        let query = template_quote::quote! { @announce_format "7" @__announce_attrs [ f! ] { } };
+        let call = template_quote::quote! { @announce_format "7" (), struct S; };
+        let errors = vec![
+            syn::parse2::<CheckCall>(query.clone()).err().unwrap(),
+            syn::parse2::<CheckCall>(call.clone()).err().unwrap(),
+            syn::parse2::<Query>(query).err().unwrap(),
+            syn::parse2::<CheckInput>(call).err().unwrap(),
+        ];
+        for e in errors {
+            let e = e.to_string();
+            assert!(
+                e.starts_with("announce: incompatible wire format")
+                    && e.contains("found `@announce_format \"7\"`")
+                    && e.contains("expected `@announce_format \"1\"`"),
+                "{}",
+                e
+            );
+        }
+    }
+
+    #[test]
+    fn a_prefix_without_a_string_is_an_error() {
+        for bad in [
+            template_quote::quote! { @announce_format [cb!] },
+            template_quote::quote! { @announce_format 1 [cb!] },
+            template_quote::quote! { @announce_format },
+        ] {
+            let e = syn::parse2::<Input>(bad).unwrap_err().to_string();
+            assert!(e.contains("followed by a string literal"), "{}", e);
+        }
+        // `@` and another word is not the prefix: the input is read as it is.
+        let e = syn::parse2::<Input>(template_quote::quote! { @other [cb!] })
+            .unwrap_err()
+            .to_string();
+        assert!(!e.contains("wire format"), "{}", e);
+    }
+
+    #[test]
+    fn checks_take_a_call_with_the_prefix_and_one_without() {
+        for tokens in [
+            template_quote::quote! { @announce_format "1" (a, b), struct S; },
+            template_quote::quote! { (a, b), struct S; },
+        ] {
+            let i: CheckInput = syn::parse2(tokens.clone()).unwrap();
+            assert_eq!(s(&i.args), "a,b");
+            match syn::parse2::<CheckCall>(tokens).unwrap() {
+                CheckCall::Run(i) => assert_eq!(s(&i.args), "a,b"),
+                CheckCall::Query(_) => panic!("the check itself"),
+            }
+        }
+        for tokens in [
+            template_quote::quote! { @announce_format "1" @__announce_attrs [ me!, f! ] { st } },
+            template_quote::quote! { @__announce_attrs [ me!, f! ] { st } },
+        ] {
+            let q: Query = syn::parse2(tokens.clone()).unwrap();
+            assert_eq!(q.list.0.len(), 2);
+            assert!(matches!(
+                syn::parse2::<CheckCall>(tokens).unwrap(),
+                CheckCall::Query(_)
+            ));
+            // The answer has the prefix, whatever the query had.
+            assert!(
+                s(q.answer(&OwnedAttrs::new())).starts_with(&format!("f!{{{}", PREFIX)),
+                "{}",
+                s(q.answer(&OwnedAttrs::new()))
+            );
+        }
+        // `check` runs the closure for both forms of the check's own input.
+        for tokens in [
+            template_quote::quote! { @announce_format "1" (), struct S; },
+            template_quote::quote! { (), struct S; },
+        ] {
+            let mut ran = false;
+            let out = check(tokens, &[], |_| {
+                ran = true;
+                Ok(TokenStream::new())
+            });
+            assert!(ran && out.is_empty());
+        }
+        // The query of the other version is a `compile_error!`, and the check is not run.
+        let out = s(check(
+            template_quote::quote! { @announce_format "3" @__announce_attrs [ me!, f! ] { st } },
+            &[],
+            |_| unreachable!(),
+        ));
+        assert!(
+            out.starts_with("::core::compile_error!") && out.contains("incompatiblewireformat"),
+            "{}",
+            out
+        );
+    }
+
+    #[test]
+    fn every_call_that_a_helper_makes_starts_with_the_prefix() {
+        let starts = |ts: TokenStream| {
+            let out = s(&ts);
+            // `path!{` + prefix, or the prefix in the payload of a dummy.
+            assert!(
+                out.contains(&format!("!{{{}", PREFIX))
+                    || out.contains(&format!("stringify!{{{}", PREFIX)),
+                "{}",
+                out
+            );
+            // And it is first: nothing but the macro path comes before it.
+            let at = out.find(PREFIX).unwrap();
+            assert!(
+                out[..at].ends_with("!{") || out[..at].ends_with("stringify!{"),
+                "{}",
+                out
+            );
+            assert_eq!(out.matches(PREFIX).count(), 1, "{}", out);
+        };
+        let input: Input = syn::parse_quote! { [me!, next!] a::F! => [] { struct F; } (rest) };
+        // `forward`, `fetch` and `gather`.
+        starts(input.forward().unwrap());
+        starts(input.fetch([Cont::bang(syn::parse_quote!(g::G))]));
+        match input.gather([Cont::bang(syn::parse_quote!(g::G))]) {
+            Gather::Fetch(ts) => starts(ts),
+            Gather::Ready(_) => panic!("g::G is not there"),
+        }
+        // `forward_transformed`.
+        starts(input.forward_transformed(input.entries[0].clone()).unwrap());
+        // `ContList::invoke` and `invoke_with_options`, for a macro head and for a
+        // derive or attribute head (the prefix is first in the payload of the dummy).
+        let bang: ContList = [Cont::bang(syn::parse_quote!(p::cb))].into_iter().collect();
+        starts(bang.invoke(TokenStream::new()));
+        starts(bang.invoke_with_options(Some(&template_quote::quote!(expr)), TokenStream::new()));
+        let derive: ContList = [
+            Cont::derive(syn::parse_quote!(p::D)),
+            Cont::bang(syn::parse_quote!(cb)),
+        ]
+        .into_iter()
+        .collect();
+        let dummy = derive.invoke(template_quote::quote!(body));
+        starts(dummy.clone());
+        assert!(s(payload(dummy.clone()).unwrap()).starts_with(&format!("{}[", PREFIX)));
+        // `redirect`: the prefix is first, before the two prefixes of the trampoline.
+        let out = redirect(dummy, &syn::parse_quote!(::x::Y)).unwrap();
+        starts(out.clone());
+        assert!(s(out).starts_with(&format!(
+            "::x::Y!{{{}@__announce_self{{::x::Y}}@__announce_dollar{{$}}",
+            PREFIX
+        )));
+        // The query of a check, and the answer of `check`.
+        let q: Query = syn::parse_quote! { @__announce_attrs [ me!, f! ] { st } };
+        starts(q.answer(&OwnedAttrs::new()));
+        starts(check(
+            template_quote::quote! { @__announce_attrs [ me!, f! ] { st } },
+            &["a"],
+            |_| unreachable!(),
+        ));
+    }
+
+    #[test]
+    fn the_callback_and_transformer_functions_take_and_write_the_prefix() {
+        let call = |prefix: TokenStream| {
+            template_quote::quote! { #prefix [me!, next!] a::S! => [] { struct S; } NAME }
+        };
+        let with = call(format_prefix());
+        let without = call(TokenStream::new());
+        // `callback` reads a call with the prefix and one without.
+        for input in [with.clone(), without.clone()] {
+            let out = callback(input, |i| {
+                let name: syn::Ident = i.rest_as()?;
+                Ok(template_quote::quote! { const #name: usize = 1; })
+            });
+            assert_eq!(s(out), "constNAME:usize=1;");
+        }
+        // What it forwards has the prefix, whatever it got.
+        for input in [with.clone(), without.clone()] {
+            let out = s(callback(input, |i| Ok(i.forward().unwrap())));
+            assert!(out.starts_with(&format!("next!{{{}", PREFIX)), "{}", out);
+        }
+        // `transformer` forwards the rewritten entry with the prefix, too.
+        for input in [with.clone(), without] {
+            let out = s(transformer(input, |mut entry| {
+                entry.meta.push(syn::parse_quote!(seen));
+                Ok(entry)
+            }));
+            assert!(
+                out.starts_with(&format!("next!{{{}[next!]a::S!=>[seen]", PREFIX)),
+                "{}",
+                out
+            );
+        }
+        // Another version is one error from both, naming both versions.
+        let other = template_quote::quote! { @announce_format "5" [me!, next!] a::S! => [] { struct S; } NAME };
+        for out in [
+            s(callback(other.clone(), |_| unreachable!())),
+            s(transformer(other, |_| unreachable!())),
+        ] {
+            assert!(
+                out.starts_with("::core::compile_error!")
+                    && out.contains(
+                        "found`@announce_format\\\"5\\\"`,expected`@announce_format\\\"1\\\"`"
+                    ),
+                "{}",
+                out
+            );
+        }
+    }
+
+    #[test]
+    fn redirect_moves_the_prefix_of_the_payload_to_the_front_and_keeps_its_version() {
+        let dollar = Punct::new('$', Spacing::Alone);
+        let dummy = |payload: TokenStream| {
+            template_quote::quote! {
+                #[derive(p::D)]
+                enum N { __AnnouncePayload = (stringify!{ #payload }, 0).1 }
+            }
+        };
+        let target: Path = syn::parse_quote!(::x::Y);
+        // A payload with the prefix: moved, not copied.
+        let out = redirect(
+            dummy(template_quote::quote!(@announce_format "1" [cb!] rest)),
+            &target,
+        )
+        .unwrap();
+        assert_eq!(
+            s(out),
+            format!(
+                "::x::Y!{{{}@__announce_self{{::x::Y}}@__announce_dollar{{{}}}[cb!]rest}}",
+                PREFIX,
+                dollar.as_char()
+            )
+        );
+        // The version of the maker is kept, so that the trampoline reports the mismatch.
+        let out = redirect(
+            dummy(template_quote::quote!(@announce_format "9" [cb!] rest)),
+            &target,
+        )
+        .unwrap();
+        assert!(s(out).starts_with("::x::Y!{@announce_format\"9\"@__announce_self"));
+        // A dummy that was made by hand, without the prefix, gets this version.
+        let out = redirect(dummy(template_quote::quote!([cb!] rest)), &target).unwrap();
+        assert!(s(out).starts_with(&format!("::x::Y!{{{}@__announce_self", PREFIX)));
+        // A payload that is shorter than the prefix is left alone.
+        let out = redirect(dummy(template_quote::quote!(@announce_format)), &target).unwrap();
+        assert!(s(out).ends_with("@__announce_dollar{$}@announce_format}"));
     }
 }

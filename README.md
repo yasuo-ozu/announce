@@ -23,7 +23,7 @@ item's name, and calling that macro passes the definition to a callback macro.
 pub trait Greet { fn hi(&self) -> &'static str; }
 
 macro_rules! show {
-    ([$($list:tt)*] $($key:ident)::+ ! => [$($meta:tt)*] { $($item:tt)* } $($rest:tt)*) => {
+    (@announce_format "1" [$($list:tt)*] $($key:ident)::+ ! => [$($meta:tt)*] { $($item:tt)* } $($rest:tt)*) => {
         const SHOWN: &str = stringify!($($item)*);
     };
 }
@@ -36,6 +36,7 @@ The callback receives the definition, and `REST` unchanged:
 
 ```text
 show! {
+    @announce_format "1"
     [show!]
     path::to::Greet! => [META] { pub trait Greet { fn hi(&self) -> &'static str; } }
     REST
@@ -44,6 +45,30 @@ show! {
 
 `META` lists what the definer attached (checks, `meta` entries). Callers and
 callbacks need no dependency on announce.
+
+Every call that announce makes to the next macro of a chain starts with
+`@announce_format "1"`, the version of the wire format, before `[LIST]`. A macro of
+yours can match it to know that announce called it. A call you write by hand
+(`Greet! { [Greet!, show!] }`) needs no prefix:
+
+```rust
+#[announce::announce]
+pub trait Greet { fn hi(&self) -> &'static str; }
+
+macro_rules! who {
+    // Called by announce.
+    (@announce_format "1" $($call:tt)*) => { const CALLER: &str = "announce"; };
+    // Called by hand.
+    ($($call:tt)*) => { const CALLER: &str = "hand"; };
+}
+Greet! { [Greet!, who!] }
+assert_eq!(CALLER, "announce");
+```
+
+The prefix is part of the
+[wire format](https://docs.rs/announce/latest/announce/helper/struct.Input.html#the-wire-format).
+An item and a macro built with different, incompatible versions of announce stop with
+one error that names both versions.
 
 ## Calling a trampoline
 

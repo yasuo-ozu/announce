@@ -15,6 +15,7 @@ use announce::helper::{
     check,
     check_trait,
     check_type,
+    format_prefix,
     gensym,
     is_expression_position,
     payload,
@@ -35,6 +36,8 @@ use announce::helper::{
     OwnedAttrs,
     Query,
     TypeLeak,
+    // Constants.
+    ANNOUNCE_FORMAT,
 };
 // Modules.
 use announce::helper::{attrs, leak, type_leak};
@@ -97,7 +100,7 @@ fn input_entries_and_conts() {
     assert_eq!(list.0.len(), 2);
     assert!(input.entry_for(&a).is_some());
     let out = ContList(vec![a.clone()]).invoke(TokenStream::new());
-    assert!(squash(out).starts_with("a::F!{[a::F!]"));
+    assert!(squash(out).starts_with("a::F!{@announce_format\"1\"[a::F!]"));
     let out = ContList(vec![a.clone()])
         .invoke_with_options(Some(&syn::parse_quote!(expr)), TokenStream::new());
     assert!(squash(out).contains("(expr)"));
@@ -199,7 +202,9 @@ fn checks_and_attributes() {
     };
     assert_eq!(query.list.0.len(), 2);
     let owned = OwnedAttrs::from_strs(&["my_lib"]);
-    assert!(squash(query.answer(&owned)).starts_with("next!{@__announce_attrs"));
+    assert!(
+        squash(query.answer(&owned)).starts_with("next!{@announce_format\"1\"@__announce_attrs")
+    );
     let call: CheckCall = syn::parse_quote! { (a), struct S; };
     let input: CheckInput = match call {
         CheckCall::Run(i) => i,
@@ -289,4 +294,28 @@ fn type_leak_and_transformers() {
     let mut f: syn::Item = syn::parse_quote! { fn f() -> u8 { 1 } };
     signature_only(&mut f);
     assert!(!squash(&f).contains('1'));
+}
+
+#[test]
+fn announce_format_prefix() {
+    // The version, the prefix, and `Input::format`.
+    assert_eq!(ANNOUNCE_FORMAT, "1");
+    assert_eq!(squash(format_prefix()), "@announce_format\"1\"");
+    let by_hand: Input = syn::parse_quote! { [cb!] a::F! => [] { struct F; } };
+    assert_eq!(by_hand.format, None);
+    let prefixed: Input =
+        syn::parse_quote! { @announce_format "1" [cb!] a::F! => [] { struct F; } };
+    assert_eq!(prefixed.format.as_deref(), Some(ANNOUNCE_FORMAT));
+    // Everything that the helpers emit starts with the prefix.
+    let out = prefixed.fetch(vec![Cont::bang(syn::parse_quote!(g::G))]);
+    assert!(squash(out).starts_with("g::G!{@announce_format\"1\""));
+    // Another version is an error that names both.
+    let e =
+        syn::parse2::<Input>(template_quote::quote! { @announce_format "2" [cb!] }).unwrap_err();
+    assert!(
+        e.to_string().contains("found `@announce_format \"2\"`")
+            && e.to_string().contains("expected `@announce_format \"1\"`"),
+        "{}",
+        e
+    );
 }

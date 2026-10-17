@@ -1,7 +1,7 @@
 use announce_test_derive::{check_marker, summary};
 
 macro_rules! capture {
-    ([$($l:tt)*] $($t:tt)*) => {
+    (@announce_format "1" [$($l:tt)*] $($t:tt)*) => {
         pub const OUT: &str = stringify!([$($l)*] $($t)*);
     };
 }
@@ -72,7 +72,7 @@ fn cfg_is_evaluated_in_the_defining_crate() {
 
 // The payload is re-emitted as real items, so `$` inside it must survive.
 macro_rules! reemit {
-    ([$($l:tt)*] $($p:ident)? $(:: $s:ident)* ! => [$($m:tt)*] { $($item:tt)* }) => {
+    (@announce_format "1" [$($l:tt)*] $($p:ident)? $(:: $s:ident)* ! => [$($m:tt)*] { $($item:tt)* }) => {
         $($item)*
     };
 }
@@ -401,7 +401,7 @@ fn allow_std_prelude_accepts_prelude_names() {
 
 // Two `$`-payloads in one chain, and REST containing `$(..)*`.
 macro_rules! reemit_two {
-    ([$($l:tt)*]
+    (@announce_format "1" [$($l:tt)*]
      $($p1:ident)? $(:: $s1:ident)* ! => [$($m1:tt)*] { $($a:tt)* }
      $($p2:ident)? $(:: $s2:ident)* ! => [$($m2:tt)*] { $($b:tt)* }) => {
         $($a)*
@@ -472,19 +472,19 @@ fn raw_identifier_items_work() {
 
 // Positions: expression (with `(expr)` for `$`-payloads) and type.
 macro_rules! expr_cb {
-    ($( ($($o:tt)*) )? [$($l:tt)*] $($p:ident)? $(:: $s:ident)* ! => [$($m:tt)*] { $($item:tt)* } $($r:tt)*) => {
+    (@announce_format "1" $( ($($o:tt)*) )? [$($l:tt)*] $($p:ident)? $(:: $s:ident)* ! => [$($m:tt)*] { $($item:tt)* } $($r:tt)*) => {
         stringify!($($item)*)
     };
 }
 macro_rules! expr_two {
-    ($( ($($o:tt)*) )? [$($l:tt)*]
+    (@announce_format "1" $( ($($o:tt)*) )? [$($l:tt)*]
      $($p1:ident)? $(:: $s1:ident)* ! => [$($m1:tt)*] { $($a:tt)* }
      $($p2:ident)? $(:: $s2:ident)* ! => [$($m2:tt)*] { $($b:tt)* }) => {
         [stringify!($($a)*), stringify!($($b)*)]
     };
 }
 macro_rules! ty_cb {
-    ([$($l:tt)*] $($t:tt)*) => {
+    (@announce_format "1" [$($l:tt)*] $($t:tt)*) => {
         u32
     };
 }
@@ -561,7 +561,7 @@ fn audit3_repeater_tables() {
 }
 
 macro_rules! opts_cb {
-    (($($o:tt)*) [$($l:tt)*] $($r:tt)*) => { stringify!($($o)*) };
+    (@announce_format "1" ($($o:tt)*) [$($l:tt)*] $($r:tt)*) => { stringify!($($o)*) };
 }
 
 #[test]
@@ -779,19 +779,19 @@ fn announce_on_a_union_with_a_derive() {
 
 // M11: pattern and statement positions.
 macro_rules! struct_pat {
-    ([$($l:tt)*] $($p:ident)? $(:: $s:ident)* ! => [$($m:tt)*]
+    (@announce_format "1" [$($l:tt)*] $($p:ident)? $(:: $s:ident)* ! => [$($m:tt)*]
      { $(#[$($a:tt)*])* $v:vis struct $name:ident $($body:tt)* } $($r:tt)*) => {
         $name { .. }
     };
 }
 macro_rules! first_variant_pat {
-    ([$($l:tt)*] $($p:ident)? $(:: $s:ident)* ! => [$($m:tt)*]
+    (@announce_format "1" [$($l:tt)*] $($p:ident)? $(:: $s:ident)* ! => [$($m:tt)*]
      { $(#[$($a:tt)*])* $v:vis enum $name:ident { $first:ident $($body:tt)* } } $($r:tt)*) => {
         $name::$first(..)
     };
 }
 macro_rules! let_cb {
-    ([$($l:tt)*] $($p:ident)? $(:: $s:ident)* ! => [$($m:tt)*] { $($item:tt)* } $bound:ident) => {
+    (@announce_format "1" [$($l:tt)*] $($p:ident)? $(:: $s:ident)* ! => [$($m:tt)*] { $($item:tt)* } $bound:ident) => {
         let $bound = stringify!($($item)*);
     };
 }

@@ -7,7 +7,7 @@
 //!
 //! ```
 //! macro_rules! show {
-//!     ([$($l:tt)*] $($p:ident)? $(:: $s:ident)* ! => [mock($($m:tt)*)] { $($item:tt)* }) => {
+//!     (@announce_format "1" [$($l:tt)*] $($p:ident)? $(:: $s:ident)* ! => [mock($($m:tt)*)] { $($item:tt)* }) => {
 //!         const MOCKED: &str = stringify!($($m)*);
 //!     };
 //! }

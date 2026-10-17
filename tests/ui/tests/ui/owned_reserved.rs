@@ -7,10 +7,10 @@ pub struct A {
 
 // A `macro_rules!` check reports it at `finish!`, at the name it wrote.
 macro_rules! cfg_owner {
-    (@__announce_attrs [ $($hp:ident)? $(:: $hs:ident)* ! , $($np:ident)? $(:: $ns:ident)* ! $(, $($rest:tt)*)? ] { $($state:tt)* }) => {
-        $($np)? $(:: $ns)* ! { @__announce_attrs [ $($np)? $(:: $ns)* ! $(, $($rest)*)? ] { $($state)* attrs(cfg) } }
+    (@announce_format "1" @__announce_attrs [ $($hp:ident)? $(:: $hs:ident)* ! , $($np:ident)? $(:: $ns:ident)* ! $(, $($rest:tt)*)? ] { $($state:tt)* }) => {
+        $($np)? $(:: $ns)* ! { @announce_format "1" @__announce_attrs [ $($np)? $(:: $ns)* ! $(, $($rest)*)? ] { $($state)* attrs(cfg) } }
     };
-    (($($args:tt)*), $($item:tt)*) => {};
+    (@announce_format "1" ($($args:tt)*), $($item:tt)*) => {};
 }
 
 #[announce::announce(cfg_owner)]
@@ -19,10 +19,10 @@ pub struct B {
 }
 
 macro_rules! announce_owner {
-    (@__announce_attrs [ $($hp:ident)? $(:: $hs:ident)* ! , $($np:ident)? $(:: $ns:ident)* ! $(, $($rest:tt)*)? ] { $($state:tt)* }) => {
-        $($np)? $(:: $ns)* ! { @__announce_attrs [ $($np)? $(:: $ns)* ! $(, $($rest)*)? ] { $($state)* attrs(rustc_thing) } }
+    (@announce_format "1" @__announce_attrs [ $($hp:ident)? $(:: $hs:ident)* ! , $($np:ident)? $(:: $ns:ident)* ! $(, $($rest:tt)*)? ] { $($state:tt)* }) => {
+        $($np)? $(:: $ns)* ! { @announce_format "1" @__announce_attrs [ $($np)? $(:: $ns)* ! $(, $($rest)*)? ] { $($state)* attrs(rustc_thing) } }
     };
-    (($($args:tt)*), $($item:tt)*) => {};
+    (@announce_format "1" ($($args:tt)*), $($item:tt)*) => {};
 }
 
 #[announce::announce(announce_owner)]

@@ -1,8 +1,8 @@
 error: announce: `forwards_only!` was fetched but did not provide a definition; is it an `#[announce]` trampoline?
   --> tests/ui/fetch_not_trampoline.rs:11:11
    |
-11 |         $($n)? $(:: $ns)* ! { ($($o)*) [$($n)? $(:: $ns)* ! $($tail)*] $($r)* }
-   |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+11 |         $($n)? $(:: $ns)* ! { @announce_format "1" ($($o)*) [$($n)? $(:: $ns)* ! $($tail)*] $($r)* }
+   |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 ...
 15 | fetched_raw! { [fetched_raw!] (forwards_only) F }
    | ------------------------------------------------- in this macro invocation
@@ -12,8 +12,8 @@ error: announce: `forwards_only!` was fetched but did not provide a definition; 
 error: announce: `forwards_only!` was fetched but did not provide a definition; is it an `#[announce]` trampoline?
   --> tests/ui/fetch_not_trampoline.rs:11:11
    |
-11 |         $($n)? $(:: $ns)* ! { ($($o)*) [$($n)? $(:: $ns)* ! $($tail)*] $($r)* }
-   |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+11 |         $($n)? $(:: $ns)* ! { @announce_format "1" ($($o)*) [$($n)? $(:: $ns)* ! $($tail)*] $($r)* }
+   |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 ...
 18 | fetched_raw! { [fetched_raw!] (::announce_test_defs::kinds::Shape, forwards_only) G }
    | ------------------------------------------------------------------------------------- in this macro invocation

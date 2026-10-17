@@ -41,6 +41,25 @@
 //!   announcements own: the answer of the query. Left out when there are none.
 //! - the rest are the options of `#[announce(..)]` as [`Options`] prints them.
 //!
+//! # Two version markers
+//!
+//! announce has two version markers. They version different things, and are bumped
+//! independently:
+//!
+//! - `__announce_format_version = "1"` ([`RUNNER_FORMAT`]) is an *entry of the arguments of
+//!   the runner*, an attribute macro. It versions the encoding of those arguments, and is
+//!   read by the runners of two versions of `announce` that meet on one item.
+//! - `@announce_format "1"` ([`crate::helper::ANNOUNCE_FORMAT`]) is the *first tokens of a
+//!   chain call*: every macro call that announce makes to the next element of a chain (a
+//!   trampoline, a transformer, a callback, a check, the query of the checks, the sentinel
+//!   below). It versions the wire format of those calls, and is read by the macros that
+//!   receive them, also those of the users (see [`crate::helper::Input`]).
+//!
+//! The runner attribute is not a chain call, so it has no `@announce_format`; the chain
+//! calls are not attributes, so they have no `__announce_format_version`. A version error of
+//! the first lists the runners that were found on the item; one of the second names the
+//! version found in the call and the one that is read.
+//!
 //! # `#[announce(ARGS)]`
 //!
 //! 1. If it has checks, it asks them which attributes they own (the query; it runs once
@@ -93,10 +112,13 @@
 //!   in the body of a function would be: a private announced struct that nothing uses
 //!   still warns "struct `S` is never constructed" (not "field `0` is never read").
 //! - `macro`, for everything else (generic structs, traits, type aliases, inline modules,
-//!   `mock`, `emit_item = false`): a call of the trampoline, `NAME! { @__announce_exists }`,
-//!   where `NAME` is the `macro_name`, else the name of the item, as a bare name (so it works
-//!   in a block too). The trampoline has an arm for it (the first one, which expands to
-//!   nothing: see `generate`). If the runner is gone the error is "cannot find macro `NAME`",
+//!   `mock`, `emit_item = false`): a call of the trampoline,
+//!   `NAME! { @announce_format "1" @__announce_exists }`, where `NAME` is the `macro_name`,
+//!   else the name of the item, as a bare name (so it works in a block too). Like every call
+//!   that announce makes, it starts with the format prefix of the wire format (see "Two version
+//!   markers" above). The trampoline has an arm for it (the first
+//!   one, which expands to nothing, and takes the bare `NAME! { @__announce_exists }` as
+//!   well: see `generate`). If the runner is gone the error is "cannot find macro `NAME`",
 //!   at the name of the item (at `macro_name = NAME` if that is where the name is).
 //!
 //! The sentinel carries the `#[cfg(..)]` attributes of the item, as the item and the
@@ -196,8 +218,8 @@ const SENTINEL_KEY: &str = "__announce_sentinel";
 ///   enum or union without generic parameters, announced without `mock` and
 ///   `emit_item = false`. The bound is in a `where` clause so that the sentinel is not a use
 ///   of `S` for the dead-code lint.
-/// - [`Sentinel::Macro`]: `NAME! { @__announce_exists }`, a call of the trampoline, which has
-///   an arm for it. Everything else.
+/// - [`Sentinel::Macro`]: `NAME! { @announce_format "1" @__announce_exists }`, a call of the
+///   trampoline, which has an arm for it. Everything else.
 ///
 /// Both are items (or statements) that expand right after the item, and the first one that
 /// cannot be resolved is the error: `Announce` is not implemented for `S`, or "cannot find
@@ -287,7 +309,8 @@ impl Sentinel {
                     .macro_name
                     .clone()
                     .unwrap_or_else(|| head.ident.clone());
-                quote! { #cfgs #name! { @__announce_exists } }
+                let format = crate::helper::format_prefix();
+                quote! { #cfgs #name! { #format @__announce_exists } }
             }
         }
     }
@@ -1304,7 +1327,10 @@ mod tests {
                 out
             );
             assert!(
-                out.ends_with(&format!("{}!{{@__announce_exists}}", name)),
+                out.ends_with(&format!(
+                    "{}!{{@announce_format\"1\"@__announce_exists}}",
+                    name
+                )),
                 "{}: {}",
                 item,
                 out
@@ -1313,7 +1339,11 @@ mod tests {
         }
         // A raw name is called as it is written.
         let out = made("", &[], "#[x] trait r#match {}");
-        assert!(out.ends_with("r#match!{@__announce_exists}"), "{}", out);
+        assert!(
+            out.ends_with("r#match!{@announce_format\"1\"@__announce_exists}"),
+            "{}",
+            out
+        );
     }
 
     #[test]
@@ -1330,7 +1360,11 @@ mod tests {
             out
         );
         let out = made("crate = ::l::announce", &[], "#[cfg(a)] #[x] trait S {}");
-        assert!(out.ends_with("#[cfg(a)]S!{@__announce_exists}"), "{}", out);
+        assert!(
+            out.ends_with("#[cfg(a)]S!{@announce_format\"1\"@__announce_exists}"),
+            "{}",
+            out
+        );
         // A `cfg_attr` that is not about a `cfg` does not matter; one that can make a `cfg`
         // leaves the sentinel out, as it could not tell if the item is there.
         let out = made(

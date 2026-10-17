@@ -23,11 +23,16 @@ use proc_macro::TokenStream;
 ///
 /// ```text
 /// my_callback! {
+///     @announce_format "1"
 ///     [my_callback!]
 ///     path::to::Greet! => [META] { pub trait Greet { fn hi(&self) -> &'static str; } }
 ///     REST
 /// }
 /// ```
+///
+/// `@announce_format "1"` starts every call that announce makes to the next macro: it
+/// is the version of the wire format, and a macro of yours can match it to know that
+/// announce called it (see the [wire format]). A call by hand needs none.
 ///
 /// `META` lists what the definer attached: checks, `meta` entries and so on. It is
 /// empty without options. In the item, `#[cfg]` is already evaluated in the defining
@@ -55,7 +60,8 @@ use proc_macro::TokenStream;
 /// - `meta = path(args)`: adds `path(args)` to `META` for consumers. It is never
 ///   called. May repeat. `(args)` is optional.
 /// - `path` or `path(args)`, without `=`: a check. It runs at the definition, as
-///   `path! { (args), ITEM }` (`()` for a bare `path`), so its `compile_error!` shows
+///   `path! { @announce_format "1" (args), ITEM }` (`()` for a bare `path`), so its
+///   `compile_error!` shows
 ///   where the item is defined, not where it is used. It is also listed in `META`.
 ///   A check can own attributes: see
 ///   [Checks and attributes of your own](#checks-and-attributes-of-your-own).
@@ -166,7 +172,10 @@ use proc_macro::TokenStream;
 ///   of the `announce` crate announce it), that is one compile error that lists the
 ///   versions and tells to use one version in every crate (`cargo tree -i announce`
 ///   shows them). Announce 0.1 has no runner, so an `#[announce]` of 0.1 on the item of
-///   one of this version is not merged: it makes a second trampoline (E0252).
+///   one of this version is not merged: it makes a second trampoline (E0252). This marker
+///   is not the `@announce_format "1"` that starts every call of a chain (see the [wire
+///   format]): that one versions the calls between macros, this one the arguments of the
+///   attribute. They are bumped independently.
 /// - **`#[cfg]` below `#[announce]`.** The trampoline goes with the item: `#[announce]
 ///   #[cfg(a)] struct S;` with `a` false emits nothing.
 /// - A macro that announces what it produces puts the attribute first among the
@@ -192,7 +201,7 @@ use proc_macro::TokenStream;
 ///
 /// ```text
 /// path::Item! { [path::Item!, other::Def!, cb!] REST }
-/// // cb! { [cb!] other::Def! => [META] { DEF } path::Item! => [META] { ITEM } REST }
+/// // cb! { @announce_format "1" [cb!] other::Def! => [META] { DEF } path::Item! => [META] { ITEM } REST }
 /// ```
 ///
 /// The bracketed list names the trampolines to call, then the callback. Each
@@ -255,7 +264,8 @@ use proc_macro::TokenStream;
 /// **The query.** With checks, `#[announce]` first asks each of them which attribute
 /// names it owns. **Every check must answer**, also one that owns no attribute.
 /// `announce::helper::check` runs a proc-macro check and answers for you. A
-/// `macro_rules!` check needs one more arm. The protocol is in
+/// `macro_rules!` check needs one more arm, and both arms start with
+/// `@announce_format "1"`, like every call of announce. The protocol is in
 /// [`announce::helper::attrs`]. Without checks there is no query.
 ///
 /// **`#[cfg]` and `#[cfg_attr]`.** Owned attributes are removed after the item's
