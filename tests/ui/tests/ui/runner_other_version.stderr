@@ -1,0 +1,15 @@
+error: announce: this item is announced by several versions of the `announce` crate (or by an incompatible one): the format versions found on its `#[__announce_runner]` attributes are `1`, `7`; this `announce` expects `1`. Use one version of `announce` in every crate that announces the item (`cargo tree -i announce` shows the versions)
+ --> tests/ui/runner_other_version.rs:5:1
+  |
+5 | #[announce::announce]
+  | ^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `::announce::__private::__announce_runner` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: announce: this item is announced by several versions of the `announce` crate (or by an incompatible one): the format versions found on its `#[__announce_runner]` attributes are `1`, `7`; this `announce` expects `1`. Use one version of `announce` in every crate that announces the item (`cargo tree -i announce` shows the versions)
+ --> tests/ui/runner_other_version.rs:9:1
+  |
+9 | #[announce::announce]
+  | ^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `::announce::__private::__announce_runner` (in Nightly builds, run with -Z macro-backtrace for more info)

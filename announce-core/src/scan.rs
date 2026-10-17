@@ -9,7 +9,7 @@
 //! the identifier. It never looks inside a group, apart from the first token of
 //! `pub( .. )`, and it never reads the generics, the fields or the body.
 
-use proc_macro2::{Delimiter, Ident, TokenStream, TokenTree};
+use proc_macro2::{Delimiter, Group, Ident, TokenStream, TokenTree};
 
 /// The kinds of item that `#[announce]` supports.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -28,6 +28,8 @@ pub(crate) enum Kind {
 pub(crate) struct Head {
     pub kind: Kind,
     pub ident: Ident,
+    /// A `<` follows the name: the item has generic parameters (lifetimes included).
+    pub generic: bool,
 }
 
 const UNSUPPORTED: &str =
@@ -155,7 +157,134 @@ pub(crate) fn head(tokens: &TokenStream) -> syn::Result<Head> {
             return Err(syn::Error::new_spanned(tokens, MOD_FILE));
         }
     }
-    Ok(Head { kind, ident })
+    let generic = is_punct(it.peek(), '<');
+    Ok(Head {
+        kind,
+        ident,
+        generic,
+    })
+}
+
+/// One outer attribute `#[..]` at the start of an item, as far as the scan reads it:
+/// its path and its arguments, not the arguments' contents.
+#[derive(Clone, Debug)]
+pub(crate) struct OuterAttr {
+    /// Index of the `#` in [`Outer::tts`]; the bracket group follows it.
+    pub at: usize,
+    /// The path starts with `::`.
+    pub leading_colon: bool,
+    /// The segments of the path (`x::y::announce`). Empty if the attribute does not
+    /// have the form `path`, `path(..)`, `path[..]`, `path{..}` or `path = ..`.
+    pub segments: Vec<Ident>,
+    /// The tokens inside the brackets, and how many of them are the path.
+    inner: Vec<TokenTree>,
+    path_len: usize,
+    /// The delimited group after the path, if there is one.
+    pub args: Option<Group>,
+}
+
+impl OuterAttr {
+    /// The path is just `name`.
+    pub fn is_bare(&self, name: &str) -> bool {
+        !self.leading_colon && self.segments.len() == 1 && self.segments[0] == name
+    }
+
+    /// The first segment of the path is one of `owned` (see `OwnedAttrs::owns`).
+    pub fn is_owned_by(&self, owned: &crate::helper::OwnedAttrs) -> bool {
+        !self.leading_colon
+            && self.segments.first().map_or(false, |s| {
+                owned.contains(s.to_string().trim_start_matches("r#"))
+            })
+    }
+
+    /// The tokens inside the brackets with the arguments replaced: the path, then
+    /// `(args)` if `args` is not empty.
+    pub fn with_args(&self, args: TokenStream) -> TokenStream {
+        let mut out: TokenStream = self.inner[..self.path_len].iter().cloned().collect();
+        if !args.is_empty() {
+            out.extend([TokenTree::Group(Group::new(Delimiter::Parenthesis, args))]);
+        }
+        out
+    }
+}
+
+/// An item split into its outer attributes and the rest.
+pub(crate) struct Outer {
+    /// All the top-level tokens of the item (a group without delimiters is read in
+    /// place). The attributes come first: `#` and `[..]`, one after the other.
+    pub tts: Vec<TokenTree>,
+    pub attrs: Vec<OuterAttr>,
+}
+
+impl Outer {
+    /// The index in `tts` where the attributes end.
+    pub fn attrs_end(&self) -> usize {
+        self.attrs.last().map_or(0, |a| a.at + 2)
+    }
+}
+
+/// Whether the item starts with an outer attribute: the cheap test that comes
+/// before [`outer`].
+pub(crate) fn starts_with_attr(tokens: &TokenStream) -> bool {
+    is_punct(Flat::new(tokens.clone()).next().as_ref(), '#')
+}
+
+fn parse_attr(at: usize, group: &Group) -> OuterAttr {
+    let inner: Vec<TokenTree> = group.stream().into_iter().collect();
+    let colons = |i: usize| is_punct(inner.get(i), ':') && is_punct(inner.get(i + 1), ':');
+    let leading_colon = colons(0);
+    let mut i = if leading_colon { 2 } else { 0 };
+    let mut segments = Vec::new();
+    let mut dirty = false;
+    while let Some(TokenTree::Ident(id)) = inner.get(i) {
+        segments.push(id.clone());
+        i += 1;
+        if colons(i) {
+            i += 2;
+            // `a::` and then no name.
+            dirty = !matches!(inner.get(i), Some(TokenTree::Ident(_)));
+        } else {
+            break;
+        }
+    }
+    let path_len = i;
+    let mut args = None;
+    match inner.get(path_len) {
+        // `path`, or `path = ..`.
+        None => {}
+        Some(TokenTree::Punct(p)) if p.as_char() == '=' => {}
+        Some(TokenTree::Group(g)) if inner.len() == path_len + 1 => args = Some(g.clone()),
+        _ => dirty = true,
+    }
+    if dirty || segments.is_empty() {
+        segments.clear();
+        args = None;
+    }
+    OuterAttr {
+        at,
+        leading_colon,
+        segments,
+        inner,
+        path_len,
+        args,
+    }
+}
+
+/// Reads the outer attributes at the start of `tokens`.
+pub(crate) fn outer(tokens: &TokenStream) -> Outer {
+    let tts: Vec<TokenTree> = Flat::new(tokens.clone()).collect();
+    let mut attrs = Vec::new();
+    let mut at = 0;
+    while is_punct(tts.get(at), '#') {
+        match tts.get(at + 1) {
+            Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Bracket => {
+                attrs.push(parse_attr(at, g));
+                at += 2;
+            }
+            _ => break,
+        }
+    }
+    Outer { tts, attrs }
 }
 
 #[cfg(test)]
@@ -248,6 +377,24 @@ mod tests {
                 src,
                 e
             );
+        }
+    }
+
+    #[test]
+    fn generics_are_told_by_the_token_after_the_name() {
+        for (src, generic) in [
+            ("struct S;", false),
+            ("pub struct S { a: u8 }", false),
+            ("struct S(u8);", false),
+            ("struct S where u8: Copy;", false),
+            ("type S = Vec<u8>;", false),
+            ("struct S<T>(T);", true),
+            ("pub enum S<'a> { A(&'a u8) }", true),
+            ("union S<T: Copy> { a: T }", true),
+            ("trait S<T> {}", true),
+            ("#[a] type S<T> = Vec<T>;", true),
+        ] {
+            assert_eq!(head(&ts(src)).unwrap().generic, generic, "{}", src);
         }
     }
 

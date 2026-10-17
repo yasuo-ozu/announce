@@ -48,8 +48,10 @@ pub mod inner {
     }
 }
 
-#[derive(announce::Announce)]
-pub struct Derived {
+/// A derive next to `#[announce]`: the item goes through the runner.
+#[announce]
+#[derive(Clone, Debug)]
+pub struct WithDerive {
     pub x: i32,
 }
 

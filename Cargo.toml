@@ -17,7 +17,7 @@ include = ["src/**/*", "build.rs", "README.md", "CHANGELOG.md", "LICENSE", "Carg
 # On by default. It gives `announce::helper`, `announce::machinery` and
 # `announce::type_leak`, which are built on proc-macro2 and syn and so need the
 # standard library. A `#![no_std]` crate (or one built for a target without std)
-# that only defines items with `#[announce]` / `#[derive(Announce)]` turns it off
+# that only defines items with `#[announce]` turns it off
 # with `default-features = false`: the generated code needs only `announce::Announce`
 # and the hidden `announce::__private`. The names `announce-core` and `type-leak`
 # are the features that cargo 1.57 makes of the optional dependencies (no `dep:`).
@@ -27,7 +27,7 @@ proc-macro-api = ["announce-core", "type-leak"]
 [dependencies]
 announce-macros = { path = "announce-macros", version = "0.1.1" }
 # Re-exported as `announce::machinery` (the generation code behind `#[announce]`
-# and `#[derive(Announce)]`, callable from other proc-macro crates) and as
+# callable from other proc-macro crates) and as
 # `announce::helper` (the helpers for callbacks and checks). Optional:
 # `announce-macros` depends on it anyway, but only for the host.
 announce-core = { path = "announce-core", version = "0.1.1", optional = true }

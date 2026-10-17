@@ -9,11 +9,3 @@ error: expected `struct`
    |
 10 | fn not_an_item() {}
    | ^^
-
-error: `mock` does not apply to `#[derive(Announce)]`: the item is emitted as written
-  --> tests/ui/machinery_errors.rs:12:10
-   |
-12 | #[derive(Tracked)]
-   |          ^^^^^^^
-   |
-   = note: this error originates in the derive macro `Tracked` (in Nightly builds, run with -Z macro-backtrace for more info)

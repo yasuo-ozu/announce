@@ -218,7 +218,7 @@ mod derived {
 }
 
 #[test]
-fn derive_announces_its_input() {
+fn a_derive_of_a_library_can_emit_a_trampoline() {
     assert_eq!(derived::DERIVED[0].2, "struct ByDerive");
     let _ = announce_test_defs::derived::ByDerive { field: 1 };
 }
@@ -597,23 +597,23 @@ fn dollar_payloads_in_any_position() {
     assert!(norm(both[1]).contains("modwith_macro{"));
 }
 
-mod derive_announce_m {
-    ::announce_test_defs::markers::Derived! { [::announce_test_defs::markers::Derived!, capture!] }
+mod with_derive_m {
+    ::announce_test_defs::markers::WithDerive! { [::announce_test_defs::markers::WithDerive!, capture!] }
     pub mod e {
-        ::announce_test_defs::markers::DerivedEnum! { [::announce_test_defs::markers::DerivedEnum!, capture!] }
+        ::announce_test_defs::markers::WithDeriveEnum! { [::announce_test_defs::markers::WithDeriveEnum!, capture!] }
     }
 }
 
 #[test]
-fn derive_announce() {
+fn announce_with_a_derive_of_another_trait() {
     fn is_announced<T: ?Sized + announce::Announce>() {}
-    is_announced::<announce_test_defs::markers::Derived>();
-    is_announced::<announce_test_defs::markers::DerivedEnum>();
-    let out = norm(derive_announce_m::OUT);
-    // The helper attribute, the cfg'd-out field and the docs are gone; META is kept.
+    is_announced::<announce_test_defs::markers::WithDerive>();
+    is_announced::<announce_test_defs::markers::WithDeriveEnum>();
+    let out = norm(with_derive_m::OUT);
+    // The derive, the cfg'd-out field and the docs are gone; META is kept.
     assert!(
-        out.contains("=>[$crate::info(1)]{pubstructDerived{puba:u8,}}")
-            && out.ends_with("pubstructDerived{puba:u8,}}"),
+        out.contains("=>[$crate::info(1)]{pubstructWithDerive{puba:u8,}}")
+            && out.ends_with("pubstructWithDerive{puba:u8,}}"),
         "{}",
         out
     );
@@ -622,7 +622,7 @@ fn derive_announce() {
         "{}",
         out
     );
-    assert!(norm(derive_announce_m::e::OUT).contains("pubenumDerivedEnum"));
+    assert!(norm(with_derive_m::e::OUT).contains("pubenumWithDeriveEnum"));
 }
 
 // `Probe::<T>::IS` is true exactly when `T: announce::Announce`.
@@ -758,22 +758,22 @@ fn module_wrapper_pattern() {
     assert_eq!(wrapper::resolved::Resolved::Resolved::f(&X).0, 6);
 }
 
-// M10: `#[derive(Announce)]` on a union, used across crates.
-mod derived_union {
-    ::announce_test_defs::derived_union::Raw! { [::announce_test_defs::derived_union::Raw!, reemit!] }
+// M10: `#[announce]` on a union with a derive, used across crates.
+mod union_with_meta {
+    ::announce_test_defs::union_with_meta::Raw! { [::announce_test_defs::union_with_meta::Raw!, reemit!] }
     pub mod meta {
         use announce_test_derive::summary;
-        ::announce_test_defs::derived_union::Raw! { [::announce_test_defs::derived_union::Raw!, summary!] S }
+        ::announce_test_defs::union_with_meta::Raw! { [::announce_test_defs::union_with_meta::Raw!, summary!] S }
     }
 }
 
 #[test]
-fn derive_announce_on_a_union() {
-    assert!(announced!(announce_test_defs::derived_union::Raw));
-    assert_eq!(derived_union::meta::S[0].2, "union Raw");
-    assert_eq!(norm(derived_union::meta::S[0].1), "$crate::info(union)");
+fn announce_on_a_union_with_a_derive() {
+    assert!(announced!(announce_test_defs::union_with_meta::Raw));
+    assert_eq!(union_with_meta::meta::S[0].2, "union Raw");
+    assert_eq!(norm(union_with_meta::meta::S[0].1), "$crate::info(union)");
     // The re-emitted union is the one as written.
-    let r = derived_union::Raw { f: 1.0 };
+    let r = union_with_meta::Raw { f: 1.0 };
     assert_eq!(unsafe { r.i }, 1.0f32.to_bits());
 }
 

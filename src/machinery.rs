@@ -1,12 +1,12 @@
-//! What `#[announce(..)]` and `#[derive(Announce)]` do, as functions that another
-//! proc-macro crate can call.
+//! What `#[announce(..)]` does, as functions that another proc-macro crate can call.
 //!
 //! A library that builds or rewrites items in its own proc macros can announce
 //! them without emitting the attribute `#[announce(..)]`. It calls [`announce`] on
 //! the tokens of the item and returns the result, which is exactly what the
-//! attribute produces. For a struct, enum or union, a derive can call
-//! [`derive_announce`] or [`derive_announce_with`] instead. The options are those
-//! of the [`#[announce]`](macro@crate::announce#options) attribute.
+//! attribute produces. The options are those of the
+//! [`#[announce]`](macro@crate::announce#options) attribute. A derive macro cannot do
+//! this, because a derive cannot change its item: ask your users for `#[announce]`, or
+//! make an attribute macro.
 //!
 //! This module needs the feature `proc-macro-api` of `announce`, which is on by
 //! default (`default-features = false` leaves it out, for `no_std` definitions).
@@ -47,12 +47,12 @@
 //!
 //! # Output
 //!
-//! The output is the output of the attribute, token for token: the item as given
-//! (unless `emit_item = false` or `mock`), followed by a hidden `#[derive]` on a
-//! dummy enum that carries the item. The derive runs after rustc has evaluated the
-//! `#[cfg]` attributes in the item, in the crate that expands the macro. Then it
-//! emits the trampoline. So the item may hold `#[cfg]` attributes, and the macro
-//! must be expanded in item position.
+//! The output is the output of the attribute, token for token. If the item has no other
+//! outer attribute, nothing can expand after the attribute: the output is the item as given
+//! (unless `emit_item = false` or `mock`), followed by a hidden `#[derive]` on a dummy
+//! enum that carries the item and emits the trampoline. The derive runs after rustc has
+//! evaluated the `#[cfg]` attributes in the item, in the crate that expands the macro. So
+//! the item may hold `#[cfg]` attributes, and the macro must be expanded in item position.
 //!
 //! ```
 //! use announce::machinery::announce;
@@ -62,6 +62,36 @@
 //! let item: TokenStream = "pub struct S { pub a: u8 }".parse().unwrap();
 //! let out = announce(attr, item).to_string();
 //! assert!(out.contains(":: my_lib :: announce :: __private :: Capture"));
+//! ```
+//!
+//! # Several announcements
+//!
+//! [`announce`] goes the way of the attribute in this as well. If the item has other outer
+//! attributes, the output is the item with the hidden attribute
+//! `#[<crate path>::__private::__announce_runner(..)]`, the *runner*, as its last
+//! attribute, and, after the item, a *sentinel* (an item that fails at the definition if the
+//! runner never runs, for example because a macro below returned the item without its
+//! attributes). The runner holds the options (and the version of its encoding), and when it
+//! expands, after everything else on the item, it makes the trampoline. If the item has a
+//! runner already, because another announcement was expanded first, the options are merged
+//! into it, with no sentinel. The output of a macro that calls [`announce`] must be an item
+//! (or items) that the compiler expands, so that the runner is expanded. An announcement
+//! with `mock` or `emit_item = false` goes the same way (the runner drops the item). See
+//! [Several announcements on one
+//! item](macro@crate::announce#several-announcements-on-one-item).
+//!
+//! ```
+//! use announce::machinery::announce;
+//! use proc_macro2::TokenStream;
+//!
+//! let attr: TokenStream = "crate = ::my_lib::announce, meta = my_lib::info".parse().unwrap();
+//! let item: TokenStream = "#[derive(Debug)] pub struct S;".parse().unwrap();
+//! let out = announce(attr, item).to_string();
+//! assert!(out.contains("__private ::__announce_runner"));
+//! assert!(out.contains("__announce_format_version = \"1\""));
+//! assert!(out.contains("__announce_sentinel = \"impl\""));
+//! assert!(out.contains("__AnnounceSentinel"));
+//! assert!(!out.contains("Capture"));
 //! ```
 //!
 //! # Checks
@@ -75,10 +105,6 @@
 //! does. `finish!` expands to the output above, without the attributes that the
 //! checks own. [`finish`] is the function behind that macro; a library does not
 //! call it.
-//!
-//! [`derive_announce`] and [`derive_announce_with`] send the same query. A derive
-//! cannot change its item, so the library declares the attributes on its own
-//! derive, and the query only lists them in `META`.
 //!
 //! ```
 //! use announce::machinery::announce;
@@ -100,14 +126,13 @@
 //!
 //! # Errors
 //!
-//! [`announce`] and [`derive_announce`] return an error as a `compile_error!`
-//! invocation in the tokens, which a proc macro can return as it is. Their `try_`
-//! forms return the `syn::Error`, to combine it with others or to report it with
-//! another span. The API uses the types of `proc-macro2` 1 and `syn` 2.
+//! [`announce`] returns an error as a `compile_error!` invocation in the tokens, which a
+//! proc macro can return as it is. [`try_announce`] returns the `syn::Error`, to combine
+//! it with others or to report it with another span. The API uses the types of
+//! `proc-macro2` 1 and `syn` 2.
 //!
 //! [attrs]: crate::helper::attrs
 pub use announce_core::{
-    announce, define_repeater, derive_announce, derive_announce_with, finish, try_announce,
-    try_define_repeater, try_derive_announce, try_finish, Check, Layout, Options,
-    SINGLE_COPY_THRESHOLD,
+    announce, define_repeater, finish, try_announce, try_define_repeater, try_finish, Check,
+    Layout, Options, SINGLE_COPY_THRESHOLD,
 };

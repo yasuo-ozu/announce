@@ -1,0 +1,9 @@
+error[E0573]: cannot find type `Dropped` in this scope
+ --> tests/ui/not_emitted_derive.rs:6:12
+  |
+5 | #[derive(Debug)]
+  |          ----- in this derive macro
+6 | pub struct Dropped(pub u8);
+  |            ^^^^^^^ not found in this scope
+  |
+  = note: a macro named `Dropped` exists in another namespace

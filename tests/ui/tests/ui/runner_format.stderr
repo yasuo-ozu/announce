@@ -1,0 +1,31 @@
+error: announce: this item is announced by several versions of the `announce` crate (or by an incompatible one): the format versions found on its `#[__announce_runner]` attributes are `0`; this `announce` expects `1`. Use one version of `announce` in every crate that announces the item (`cargo tree -i announce` shows the versions)
+ --> tests/ui/runner_format.rs:6:1
+  |
+6 | #[announce::__private::__announce_runner(__announce_format_version = "0")]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `announce::__private::__announce_runner` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: announce: this item is announced by several versions of the `announce` crate (or by an incompatible one): the format versions found on its `#[__announce_runner]` attributes are `unknown`; this `announce` expects `1`. Use one version of `announce` in every crate that announces the item (`cargo tree -i announce` shows the versions)
+ --> tests/ui/runner_format.rs:9:1
+  |
+9 | #[announce::__private::__announce_runner(meta = my_lib::info)]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `announce::__private::__announce_runner` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: announce: this item is announced by several versions of the `announce` crate (or by an incompatible one): the format versions found on its `#[__announce_runner]` attributes are `1`, `2`; this `announce` expects `1`. Use one version of `announce` in every crate that announces the item (`cargo tree -i announce` shows the versions)
+  --> tests/ui/runner_format.rs:12:1
+   |
+12 | #[announce::__private::__announce_runner(__announce_format_version = "1", ?? !!, __announce_format_version = "2")]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this error originates in the attribute macro `announce::__private::__announce_runner` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: announce: this item is announced by several versions of the `announce` crate (or by an incompatible one): the format versions found on its `#[__announce_runner]` attributes are `7` (in `announce`), `1` (in `::announce`); this `announce` expects `1`. Use one version of `announce` in every crate that announces the item (`cargo tree -i announce` shows the versions)
+  --> tests/ui/runner_format.rs:16:1
+   |
+16 | #[announce::announce(meta = my_lib::info)]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this error originates in the attribute macro `announce::announce` (in Nightly builds, run with -Z macro-backtrace for more info)

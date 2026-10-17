@@ -59,7 +59,7 @@ kinds! {
     Greet => "traitGreet",
     Alias => "typeAlias=[u8;4]",
     inner => "modinner",
-    Derived => "structDerived",
+    WithDerive => "structWithDerive",
     WithMeta => "structWithMeta",
 }
 
@@ -107,7 +107,7 @@ fn the_repeater_option_works() {
 fn announce_impls_are_there() {
     announce_test_nostd::is_announced::<announce_test_nostd::Named>();
     announce_test_nostd::is_announced::<announce_test_nostd::Shape>();
-    announce_test_nostd::is_announced::<announce_test_nostd::Derived>();
+    announce_test_nostd::is_announced::<announce_test_nostd::WithDerive>();
     announce_test_nostd::is_announced::<dyn announce_test_nostd::Greet>();
     assert_eq!(announce_test_nostd::inner::answer(), 42);
 }
