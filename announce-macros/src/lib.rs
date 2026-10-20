@@ -85,8 +85,8 @@ use proc_macro::TokenStream;
 /// - `strict = bool`: the check at the definition. With `true` (the default),
 ///   `#[announce]` checks that every type and path of the item can be named outside its
 ///   module, and fails at the definition when one cannot, whether or not anything ever calls
-///   the trampoline. With `false`, the failure is recorded instead, for the callbacks to
-///   read at the call. See
+///   the trampoline. With `false`, the failure is recorded instead, and the calls are
+///   checked at the call. See
 ///   [Items that resolve in their module only](#items-that-resolve-in-their-module-only).
 ///
 /// ```ignore
@@ -424,6 +424,9 @@ use proc_macro::TokenStream;
 /// }
 /// ```
 ///
+/// (`Entry::item_resolved` does that, and also handles an item that is recorded: see
+/// [Items that resolve in their module only](#items-that-resolve-in-their-module-only).)
+///
 /// `Holder` then reads:
 ///
 /// ```text
@@ -515,7 +518,9 @@ use proc_macro::TokenStream;
 /// `META`; it has `type_leak_error(..)` instead, which records every relative type without
 /// a `repeater`, every relative trait or value path, a relative path in a type alias, and
 /// every type the analysis refuses or cannot encode. Each entry has the tokens as written,
-/// with their spans, and a short reason such as ``without `repeater` ``. The format is in the
+/// with their spans, and a short reason such as ``without `repeater` ``. The definition also
+/// emits a private marker next to the item, which only the module of the item (its function
+/// bodies, and the submodules that `use super::*`) can see. The format is in the
 /// [wire format]. A callback built with announce 0.2 does not know the record, and ignores it
 /// like any element it does not know: it takes the item for one that resolves everywhere, and
 /// emits it as written. That works in the module of the item; elsewhere rustc reports the
@@ -535,8 +540,62 @@ use proc_macro::TokenStream;
 ///   ```
 ///
 ///   A callback that can use the item as written in its module reads
-///   `Entry::leak_failure` instead.
+///   `Entry::item_resolved` (or `Entry::leak_failure`) instead.
 /// - `Entry::leak_failure()` returns the record to a callback that wants it.
+/// - `Entry::item_resolved(krate)` is the item to emit, and what goes with it. With a
+///   table it is the item rewritten, and nothing else. With a record it is the item as
+///   written, and a check (`LeakFailure::assume_success`) that fails to compile unless the
+///   call is in the item's module.
+///
+/// A caller that wants the check without a callback of its own puts `announce::same_context!`
+/// in the chain, in front of the macro that uses the items:
+///
+/// ```text
+/// deflib::lm::Leaky! { [deflib::lm::Leaky!, announce::same_context!, my::callback!] REST }
+/// ```
+///
+/// It checks each item that has a record, and calls the next element of the chain with its
+/// input unchanged. There is one error for each cause, at the type or path in the definition
+/// (the whole path that it names is underlined, `Wrap<'_>` and not `Wrap`), worded like the
+/// errors of type-leak. The call is in the note that rustc adds about the bound:
+///
+/// ```text
+/// error[E0277]: use absolute path: 'Base'
+///   --> deflib/src/lib.rs:14:18
+///    |
+/// 14 |     pub trait Sub: Base {
+///    |                    ^^^^ relative trait path, not in scope where `deflib::lm::Item!` is called
+///    |
+///    = note: `deflib::lm::Item` is used outside its module `deflib::lm`
+///    = note: write `Base` with an absolute path (e.g. `crate::Base`)
+/// note: required by a bound in `Check::used_outside_its_module`
+///   --> src/main.rs:11:18
+///    |
+/// 11 | deflib::lm::Item! { [deflib::lm::Item!, announce::same_context!, my::callback!] REST }
+///    |                                ^^^^ required by this bound in `Check::used_outside_its_module`
+/// ```
+///
+/// When the item is in another crate, the main location of the error is in the source of that
+/// crate. `cargo build` shows the call in the trailing note, but an editor may show only that
+/// note in your own file. A type that no table can carry (a type that type-leak refuses, a
+/// const generic that is not of a primitive type) says that it cannot be carried, and what to
+/// write instead. A callback that emits the item gets rustc's own "cannot find" errors for the
+/// names of the item first, at the same tokens. When the item has a relative trait path in a
+/// bound, rustc stops at the trait it cannot find before it reaches this check.
+///
+/// The check is a `const _: () = { .. };` item (a block in expression position). It stands at
+/// an item or statement position, never inside an `impl` or `trait` block, where Rust does not
+/// allow a `const _` among the associated items. A call that puts a callback's methods in an
+/// `impl` has the check beside the impl. The answer of the check depends on the module of the
+/// call only, so a call at module level gives the same one:
+///
+/// ```text
+/// Item! { [Item!, announce::same_context!] }          // module level: the check
+/// impl S { Item! { [Item!, my::method_callback!] } }  // the real call, no check
+/// ```
+///
+/// A callback that emits into an impl puts the check tokens of `Entry::item_resolved` beside
+/// the impl as well.
 ///
 /// Mistakes in the options stay errors, with or without `strict = false`: a `repeater` on a
 /// type alias or on an item that is not analysed, and a `repeater` of another crate.
@@ -636,6 +695,14 @@ pub fn __announce_runner(attr: TokenStream, item: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn finish(input: TokenStream) -> TokenStream {
     announce_core::finish(input.into()).into()
+}
+
+/// The body of `announce::same_context!`, a callback that a caller puts in the chain. Not part
+/// of the API: the `macro_rules!` of `announce` calls it with its `$crate`.
+#[doc(hidden)]
+#[proc_macro]
+pub fn same_context_impl(input: TokenStream) -> TokenStream {
+    announce_core::helper::same_context(input.into()).into()
 }
 
 #[doc(hidden)]

@@ -22,7 +22,11 @@
 //! - Use relative types as written: a definition with types that no table carries is an
 //!   error at the definition, unless it is announced with `strict = false`. Then it records
 //!   what it found, and [`Entry::type_leak`] returns that as an error.
-//!   [`Entry::leak_failure`] reads the [`LeakFailure`] instead.
+//!   [`Entry::leak_failure`] reads the [`LeakFailure`] instead, and
+//!   [`LeakFailure::assume_success`] writes the check that makes a call outside the module
+//!   of the item a compile error. [`Entry::item_resolved`] does all of it: the item to
+//!   emit, and that check. A caller that wants the check without a callback of its own
+//!   puts `announce::same_context!` in the chain ([`same_context()`] is its body).
 //!
 //! - Detect announce: every call that announce makes starts with the prefix
 //!   `@announce_format "1"` ([`format_prefix`], [`ANNOUNCE_FORMAT`], [`Input::format`]).
@@ -45,7 +49,7 @@ pub use kv::KvArgs;
 pub(crate) use leakfail::{
     cause_path, ALIAS, NOT_PRIMITIVE, REFUSED, TRAIT_PATH, VALUE_PATH, WITHOUT_REPEATER,
 };
-pub use leakfail::{LeakError, LeakFailure};
+pub use leakfail::{same_context, try_same_context, LeakError, LeakFailure};
 pub use transformer::{signature_only, transformer};
 /// The version of `type-leak` that [`TypeLeak`] uses. Name it through this crate,
 /// so there is never a second, incompatible copy.
@@ -491,7 +495,8 @@ impl Entry {
     /// ..` to its `#[announce]`, or write the path absolutely ``). It points at the last segment
     /// of the path that the caller wrote for the trampoline ([`LeakFailure::to_error`]). A
     /// callback that can use the item as written in its module reads
-    /// [`leak_failure`](Self::leak_failure) instead.
+    /// [`item_resolved`](Self::item_resolved) (or [`leak_failure`](Self::leak_failure) and
+    /// [`LeakFailure::assume_success`]) instead.
     pub fn type_leak(&self) -> Result<Option<TypeLeak>> {
         if let Some(failure) = self.leak_failure()? {
             return Err(failure.to_error());
@@ -510,7 +515,9 @@ impl Entry {
     /// Only an item announced with `strict = false` has it: `#[announce]` records the failure
     /// instead of failing at the definition, because a call in the item's own module can use
     /// the item as written. The failure belongs to the call:
-    /// [`LeakFailure::to_error`] is the error that [`type_leak`](Self::type_leak) returns.
+    /// [`LeakFailure::to_error`] is the error that [`type_leak`](Self::type_leak) returns, and
+    /// [`LeakFailure::assume_success`] is the check that is an error only outside the module
+    /// of the item.
     ///
     /// The path of the failure is the key of the entry, the item's name is read from the
     /// payload.
@@ -521,6 +528,44 @@ impl Entry {
         };
         let ident = leakfail::item_ident(&self.item()?)?;
         LeakFailure::from_kv(&mut m.kv()?, self.key.path(), ident).map(Some)
+    }
+
+    /// The item as a callback emits it, and what to emit next to it.
+    ///
+    /// - With a type table ([`type_leak`](Self::type_leak)), the item rewritten by
+    ///   [`TypeLeak::apply`], so that it resolves in any crate. Nothing else is needed.
+    /// - With a recorded failure ([`leak_failure`](Self::leak_failure)), the item as
+    ///   written, and [`LeakFailure::assume_success`]: a call outside the module of the item
+    ///   does not compile, with one error for each cause at its tokens in the definition. A
+    ///   callback that emits the item gets rustc's own "cannot find" errors for the same names
+    ///   first, and for a relative trait path in a bound rustc stops before it reaches the
+    ///   check.
+    /// - Otherwise the item as written (it resolves everywhere), and no tokens.
+    ///
+    /// `krate` is the path of the `announce` crate in the crate that emits the tokens
+    /// (`::announce`). The item is [`item`](Self::item): owned attributes are not removed
+    /// ([`item_without_owned_attrs`](Self::item_without_owned_attrs)).
+    ///
+    /// The check is an item (`const _: () = { .. };`), so it goes where an item can: it cannot
+    /// stand inside an `impl` or `trait` block. A callback that emits into an impl puts the
+    /// check tokens beside the impl, at the call's item position, and not inside it. The
+    /// answer of the check depends only on the module of the call.
+    ///
+    /// ```ignore
+    /// for entry in input.entries_in_order() {
+    ///     let (item, check) = entry.item_resolved(&krate)?;
+    ///     out.extend(quote! { #item #check });
+    /// }
+    /// ```
+    pub fn item_resolved(&self, krate: &Path) -> Result<(syn::Item, TokenStream)> {
+        let mut item = self.item()?;
+        if let Some(failure) = self.leak_failure()? {
+            return Ok((item, failure.assume_success(krate)));
+        }
+        if let Some(table) = self.type_leak()? {
+            table.try_apply(&mut item)?;
+        }
+        Ok((item, TokenStream::new()))
     }
 
     /// Whether META lists a check whose last path segment is `name`. Only the

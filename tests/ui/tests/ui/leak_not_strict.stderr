@@ -1,0 +1,90 @@
+error[E0277]: use absolute path: 'UiLocal'
+  --> tests/ui/leak_not_strict.rs:21:16
+   |
+21 |         pub a: UiLocal,
+   |                ^^^^^^^ relative type, not in scope where `d::Plain!` is called
+   |
+   = help: the trait `_::InModuleOf_Plain` is not implemented for `announce::__private::ThisCall`
+   = note: `d::Plain` is used outside its module `d`
+   = note: write `UiLocal` with an absolute path (e.g. `crate::UiLocal`), or add `repeater = ..` to the `#[announce]` of `Plain`
+note: required by a bound in `_::Check::used_outside_its_module`
+  --> tests/ui/leak_not_strict.rs:69:17
+   |
+69 | d::Plain! { [d::Plain!, announce::same_context!] }
+   |                 ^^^^^ required by this bound in `Check::used_outside_its_module`
+
+error[E0277]: use absolute path: 'UiLocal'
+  --> tests/ui/leak_not_strict.rs:27:16
+   |
+27 |         pub a: UiLocal,
+   |                ^^^^^^^ relative type, not in scope where `d::Runner!` is called
+   |
+   = help: the trait `_::InModuleOf_Runner` is not implemented for `announce::__private::ThisCall`
+   = note: `d::Runner` is used outside its module `d`
+   = note: write `UiLocal` with an absolute path (e.g. `crate::UiLocal`), or add `repeater = ..` to the `#[announce]` of `Runner`
+note: required by a bound in `_::Check::used_outside_its_module`
+  --> tests/ui/leak_not_strict.rs:70:18
+   |
+70 | d::Runner! { [d::Runner!, announce::same_context!] }
+   |                  ^^^^^^ required by this bound in `Check::used_outside_its_module`
+
+error[E0277]: use absolute path: 'UiLocal'
+  --> tests/ui/leak_not_strict.rs:32:16
+   |
+32 |         pub a: UiLocal,
+   |                ^^^^^^^ relative type, not in scope where `d::Two!` is called
+   |
+   = help: the trait `_::InModuleOf_Two` is not implemented for `announce::__private::ThisCall`
+   = note: `d::Two` is used outside its module `d`
+   = note: write `UiLocal` with an absolute path (e.g. `crate::UiLocal`), or add `repeater = ..` to the `#[announce]` of `Two`
+note: required by a bound in `_::Check::used_outside_its_module`
+  --> tests/ui/leak_not_strict.rs:71:15
+   |
+71 | d::Two! { [d::Two!, announce::same_context!] }
+   |               ^^^ required by this bound in `Check::used_outside_its_module`
+
+error[E0277]: use absolute path: 'UiOther'
+  --> tests/ui/leak_not_strict.rs:33:16
+   |
+33 |         pub b: UiOther,
+   |                ^^^^^^^ relative type, not in scope where `d::Two!` is called
+   |
+   = help: the trait `_::InModuleOf_Two` is not implemented for `announce::__private::ThisCall`
+   = note: `d::Two` is used outside its module `d`
+   = note: write `UiOther` with an absolute path (e.g. `crate::UiOther`), or add `repeater = ..` to the `#[announce]` of `Two`
+note: required by a bound in `_::Check::used_outside_its_module`
+  --> tests/ui/leak_not_strict.rs:71:15
+   |
+71 | d::Two! { [d::Two!, announce::same_context!] }
+   |               ^^^ required by this bound in `Check::used_outside_its_module`
+
+error[E0277]: use absolute path: 'Option<UiLocal>'
+  --> tests/ui/leak_not_strict.rs:42:22
+   |
+42 |     pub type Alias = Option<UiLocal>;
+   |                      ^^^^^^^^^^^^^^^ relative path in a type alias, not in scope where `d::Alias!` is called
+   |
+   = help: the trait `_::InModuleOf_Alias` is not implemented for `announce::__private::ThisCall`
+   = note: `d::Alias` is used outside its module `d`
+   = note: write `Option` with an absolute path (it is a name of the std prelude, which a caller may shadow), or add `allow_std_prelude = true` to the `#[announce]` of `Alias`
+note: required by a bound in `_::Check::used_outside_its_module`
+  --> tests/ui/leak_not_strict.rs:72:17
+   |
+72 | d::Alias! { [d::Alias!, announce::same_context!] }
+   |                 ^^^^^ required by this bound in `Check::used_outside_its_module`
+
+error[E0277]: const parameter of a non-primitive type: 'crate::inner::UiIdx'
+  --> tests/ui/leak_not_strict.rs:55:33
+   |
+55 |     pub struct ConstTy<const N: crate::inner::UiIdx>(pub UiArr<N>);
+   |                                 ^^^^^^^^^^^^^^^^^^^ cannot be carried, so `d::ConstTy!` works only in `d`
+   |
+   = help: the trait `_::InModuleOf_ConstTy` is not implemented for `announce::__private::ThisCall`
+   = note: `d::ConstTy` is used outside its module `d`
+   = note: a const parameter of a type that is not primitive cannot be carried
+   = note: use a primitive type for the const parameter
+note: required by a bound in `_::Check::used_outside_its_module`
+  --> tests/ui/leak_not_strict.rs:73:19
+   |
+73 | d::ConstTy! { [d::ConstTy!, announce::same_context!] }
+   |                   ^^^^^^^ required by this bound in `Check::used_outside_its_module`

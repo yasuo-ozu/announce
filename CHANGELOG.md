@@ -7,13 +7,16 @@
 - `#[announce(strict = false)]` (`strict` is a bool, default `true`). `strict` is the check at
   the definition: a type that cannot be named outside its module is an error there, as in 0.2,
   whether or not anything calls the trampoline. With `strict = false` the
-  definition does not fail: it records what it found, for the callbacks to read. The failures
+  definition does not fail: it records what it found, and the call checks it. The failures
   are a relative type without a `repeater`, a relative path in a type alias, a type that the
   analysis refuses (`Wrap<'_>`, `Local<Self>`, a prelude name around `Self::Out`, ..), a
   relative trait path, a relative value path, and a const generic that cannot be encoded. The
   item is announced as written; there is no type table for it (no repeater impls, no
-  `type_leak(..)` in `META`). `META` has `type_leak_error(..)` instead (below).
-  `Entry::type_leak()` returns the record as an error, so a
+  `type_leak(..)` in `META`). `META` has `type_leak_error(..)` instead (below), and the
+  definition emits a private marker next to the item (`__AnnounceHere_<16 hex digits>`, a trait
+  implemented for `announce::__private::Probe<R>`, `R` being the random number of the
+  announcement). Only the module of the item, its function bodies and its submodules that
+  `use super::*` have it in scope. `Entry::type_leak()` returns the record as an error, so a
   callback that needs a table and reads it with `?` still fails. The error is the same wherever
   the callback is called (a proc macro cannot tell where that is). There is one error for each
   cause, a plain line at the path of the trampoline in the call, that ends with what to do like
@@ -23,11 +26,51 @@
   error: this macro cannot use `m::Item`: `Local` cannot be named outside its module; add `repeater = ..` to its `#[announce]`, or write the path absolutely
   ```
 
-  A callback that can use the item as written in its module reads `Entry::leak_failure`
-  instead. Mistakes in the options stay errors at the definition: a
+  A callback that can use the item as written in its module reads `Entry::item_resolved` (or
+  `Entry::leak_failure`) instead. Mistakes in the options stay errors at the definition: a
   `repeater` on a type alias or on an item that is not analysed, and a `repeater` of another
   crate. When announcements of one item merge, `strict` is `true` unless one of them says
   `false`.
+- `announce::same_context!`: a callback for the chain of a trampoline call that requires the
+  call to be in the type context of the items it receives (their module, its function bodies and
+  the submodules that `use super::*`), and calls the next element of the chain with its input
+  unchanged. Items without a record pass with no check. There is one error for each cause, at
+  the type or path in the definition, worded like the errors of type-leak, and the call is in
+  the note that rustc adds about the bound (the texts need Rust 1.78 or later, through
+  `#[diagnostic::on_unimplemented]`; on 1.85 and later the impl is not in the list; earlier
+  compilers say that a trait is not implemented, at the same place):
+
+  ```text
+  error[E0277]: use absolute path: 'Base'
+    --> deflib/src/lib.rs:14:18
+     |
+  14 |     pub trait Sub: Base {
+     |                    ^^^^ relative trait path, not in scope where `deflib::lm::Item!` is called
+     |
+     = note: `deflib::lm::Item` is used outside its module `deflib::lm`
+     = note: write `Base` with an absolute path (e.g. `crate::Base`)
+  note: required by a bound in `Check::used_outside_its_module`
+    --> src/main.rs:11:18
+     |
+  11 | deflib::lm::Item! { [deflib::lm::Item!, announce::same_context!, my::callback!] REST }
+     |                                ^^^^ required by this bound in `Check::used_outside_its_module`
+  ```
+
+  A name that resolves in the module of the item only says that it is a relative type, trait
+  path, value path or path in a type alias, and is not in scope where the trampoline is called.
+  The texts name the path in the cause, and the error underlines the whole of it, from its first
+  token to its last (`inner::Local`, `Wrap<'_>`): for `&'static Local`, `*const Local`, `dyn Base`,
+  `(Local, u8)` and `[Local; 2]` that is `Local` (or `Base`), not the whole type.
+  What a table cannot carry (a type that type-leak refuses, a const generic that is not of a
+  primitive type) says that it cannot be carried, and what to write instead. When the item is in
+  another crate, the main location of the error is in the source of that crate: `cargo build`
+  shows the call in the trailing note, but an editor may show only that note in your own file.
+  A callback that emits the item gets rustc's own "cannot find" errors for its names first, at
+  the same tokens, and a relative trait path in a bound makes rustc stop before it reaches the
+  check. `announce::helper::same_context` is the function behind the macro. The check is a
+  `const _: () = { .. };`, so it cannot stand inside an `impl` or a `trait` block (Rust says
+  "`const` items in this context need a name"); put it in a call of its own beside the impl,
+  which gives the same answer.
 - `announce::helper::LeakFailure` and `LeakError`: the record, read from the new `META`
   element `type_leak_error(id = R, errors = [(TOKENS) "reason" { message = "..", notes = [".."],
   help = ".." }, ..], krate = "..")`. The part in braces is optional: it has the texts of the
@@ -39,8 +82,15 @@
   `$crate::m::Item`; a record without it leaves the `$crate::` out). A reader skips keys it
   does not know, in the record and in the braces of an error, whatever their values, and
   anything after the braces up to the next error, so a later version can add to the record.
-  `LeakFailure::to_error()` is the error that `Entry::type_leak()` returns.
-- `announce::helper::Entry::leak_failure()`, which reads the record.
+  `LeakFailure::to_error()` is the error that `Entry::type_leak()` returns, and
+  `LeakFailure::assume_success(&krate)` writes the check that is an error outside the module of
+  the item, one block for each cause. The error is at the
+  tokens of the cause in the definition, and the call is in the note that rustc adds about the
+  bound.
+- `announce::helper::Entry::leak_failure()`, which reads the record, and
+  `Entry::item_resolved(&krate)`, which gives the item to emit with what goes with it:
+  rewritten by the type table when there is one, as written with the
+  check of `assume_success` when a failure is recorded, as written otherwise.
 - A `type_leak_error(..)` element in `META`, the record, is the only difference between a
   recorded call and any other: the wire format is the same and `ANNOUNCE_FORMAT` is still
   `"1"`. A parser that does not know the element ignores it, so a callback built with announce

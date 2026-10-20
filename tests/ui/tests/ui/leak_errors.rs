@@ -1,6 +1,6 @@
 // With `strict = true` (the default) the definition is checked: nothing here calls a trampoline, and
 // each type that cannot be named outside its module is an error at its tokens, with no trampoline.
-// With `strict = false` the same items are recorded instead, for the callbacks to read.
+// With `strict = false` the same items are recorded, and the call checks them (`leak_not_strict.rs`).
 ::announce::define_repeater!(pub Repeater);
 pub mod inner {
     #[derive(Clone)]

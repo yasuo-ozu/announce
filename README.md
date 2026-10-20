@@ -91,8 +91,11 @@ path::Item! { [path::Item!, other::Def!, cb!] REST }
 - Types that are relative to the defining crate: [`repeater`](https://docs.rs/announce/latest/announce/attr.announce.html#type-context).
   A type that does not resolve outside its module is an error at the definition, at the type
   (`strict`, on by default, is that check: it needs no caller). An item that is meant for its
-  own module only is announced with `strict = false`: the definition records that, for the
-  callbacks to read.
+  own module only is announced with `strict = false`: the definition records that, and a
+  caller that requires that context puts
+  [`announce::same_context!`](https://docs.rs/announce/latest/announce/macro.same_context.html)
+  in its chain. A call from anywhere else fails there, at the type in the definition, with a
+  message that says why.
 - Transformers chosen by the caller, such as
   [`signature_only!`](https://docs.rs/announce/latest/announce/macro.signature_only.html).
 - A derive or attribute may own the name: rename the trampoline with `macro_name`.

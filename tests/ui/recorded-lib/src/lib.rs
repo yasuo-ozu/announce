@@ -1,6 +1,6 @@
 //! Items whose types do not resolve outside their module, and that have no `repeater`: with
-//! `strict = false` the definition records that. `tests/ui/tests/ui/recorded_type_leak.rs`
-//! calls them from another crate.
+//! `strict = false` the definition records that. `tests/ui/tests/ui/recorded_cross_crate.rs` calls them from
+//! another crate. The lines of the items are in the expected output of that test.
 
 pub mod m {
     use announce::announce;
@@ -45,9 +45,18 @@ macro_rules! announced {
 }
 
 /// A macro of the library that calls the trampoline of an item of the library through `$crate`,
-/// with a callback of the caller that needs a type table, which is an error wherever it is
-/// called. A proc macro cannot tell which crate that `$crate` is, so the texts of the error name
-/// the crate that defined the item (`tests/ui/tests/ui/recorded_dollar_crate.rs`).
+/// with the check of the module in the chain. A proc macro cannot tell which crate that `$crate`
+/// is, so the texts of the error name the crate that defined the item
+/// (`tests/ui/tests/ui/recorded_dollar_crate.rs`).
+#[macro_export]
+macro_rules! check_holder {
+    () => {
+        $crate::m::Holder! { [$crate::m::Holder!, $crate::announce::same_context!] }
+    };
+}
+
+/// The same for a callback of the caller that needs a type table, which is an error wherever it
+/// is called.
 #[macro_export]
 macro_rules! apply_pair {
     ($($callback:ident)::+, $name:ident) => {

@@ -61,5 +61,161 @@ pub mod machinery;
 
 #[doc(hidden)]
 pub mod __private {
-    pub use announce_macros::{__announce_runner, finish, remove, Capture};
+    pub use announce_macros::{__announce_runner, finish, remove, same_context_impl, Capture};
+
+    // The parts of the check that `announce::same_context!` (and
+    // `announce::helper::LeakFailure::assume_success`) writes. The definition of an item whose
+    // types do not resolve outside its module emits a private trait with a method
+    // `__announce_ctx` for `Probe<R>` (`R` is the number of the announcement), which only the
+    // module of the item has in scope. The check calls the method on that probe: inside the
+    // module the trait's by-value method is found and gives `ThisCallInTheModule`; anywhere
+    // else only `ContextFallback` is there, which is implemented for `&Probe<R>`, so it is
+    // found only after the autoref that the by-value method does not need, and gives
+    // `ThisCall`.
+
+    /// The value that the check calls the method on.
+    #[derive(Clone, Copy)]
+    pub struct Probe<const R: u64>;
+
+    /// The answer of the method of the definition's trait: the call is in the module of the item.
+    pub struct ThisCallInTheModule;
+
+    /// The answer of the fallback: it is not.
+    pub struct ThisCall;
+
+    /// In scope at every call, and found after the trait of the definition.
+    pub trait ContextFallback {
+        fn __announce_ctx(self) -> ThisCall;
+    }
+
+    impl<const R: u64> ContextFallback for &Probe<R> {
+        fn __announce_ctx(self) -> ThisCall {
+            ThisCall
+        }
+    }
+}
+
+/// A callback for the chain of a trampoline call: the call must be in the type context of the
+/// items it passes, or it does not compile.
+///
+/// An item announced with `strict = false`, whose types do not resolve outside its module (see
+/// [Items that resolve in their module only](macro@crate::announce#items-that-resolve-in-their-module-only)),
+/// can only be used as written in that module, in the bodies of its functions and in its
+/// submodules that `use super::*`. A caller that knows it is there, and wants a clear error
+/// when it is not, puts `same_context!` in the chain, in front of the macro that uses the
+/// items:
+///
+/// ```text
+/// m::Item! { [m::Item!, announce::same_context!, my::callback!] ARGS }
+/// ```
+///
+/// It receives the items that came before it, emits a check for each one whose definition
+/// recorded a failure, and calls the next element of the chain with its input unchanged. An
+/// item without a failure passes with no check. The check compiles where the names of the item
+/// resolve, and anywhere else it is an error:
+///
+/// ```
+/// mod m {
+///     pub struct Local(pub u8);
+///
+///     #[announce::announce(strict = false)]
+///     pub struct Item {
+///         pub a: Local,
+///     }
+///
+///     // In the module of `Item`: passes. (`same_context!` is the whole chain here.)
+///     Item! { [Item!, announce::same_context!] }
+/// }
+/// ```
+///
+/// ```compile_fail,E0277
+/// mod m {
+///     pub struct Local(pub u8);
+///
+///     #[announce::announce(strict = false)]
+///     pub struct Item {
+///         pub a: Local,
+///     }
+/// }
+///
+/// // Outside the module: `Local` is not in scope here.
+/// m::Item! { [m::Item!, announce::same_context!] }
+/// ```
+///
+/// There is one error for each cause, at the type in the definition (the whole path that it
+/// names is underlined, `Wrap<'_>` and not `Wrap`), worded like the errors of type-leak. The call
+/// is in the note that rustc adds about the bound:
+///
+/// ```text
+/// error[E0277]: use absolute path: 'Local'
+///   --> src/main.rs:6:16
+///    |
+///  6 |         pub a: Local,
+///    |                ^^^^^ relative type, not in scope where `m::Item!` is called
+///    |
+///    = note: `m::Item` is used outside its module `m`
+///    = note: write `Local` with an absolute path (e.g. `crate::Local`), or add `repeater = ..` to the `#[announce]` of `Item`
+/// note: required by a bound in `Check::used_outside_its_module`
+///   --> src/main.rs:11:4
+///    |
+/// 11 | m::Item! { [m::Item!, announce::same_context!] }
+///    |    ^^^^ required by this bound in `Check::used_outside_its_module`
+/// ```
+///
+/// When the item is in another crate, the error's main location is in the source of that crate.
+/// `cargo build` shows the call in the note that follows, but an editor may show only that note
+/// in your own file. A callback that emits the item (`Entry::item_resolved`) gets rustc's own
+/// "cannot find" errors for the names of the item first, at the same tokens. When the item has
+/// a relative trait path in a bound, rustc stops at the trait it cannot find before it reaches
+/// this check.
+///
+/// The check is emitted at an item or statement position (and in expression position, in a
+/// block). It never goes inside an `impl` or a `trait` block: Rust does not allow a
+/// `const _` among the associated items, so `impl S { Item! { [Item!, announce::same_context!,
+/// my::method_callback!] } }` fails with "`const` items in this context need a name", also in
+/// the module of the item. The answer of the check depends only on the module of the call, so a
+/// call at module level next to the impl gives the same one. Put the check there, and call the
+/// callback in the impl without it:
+///
+/// ```
+/// mod m {
+///     pub struct Local(pub u8);
+///
+///     #[announce::announce(strict = false)]
+///     pub struct Item {
+///         pub a: Local,
+///     }
+///
+///     pub struct S;
+///
+///     // A callback of the plain kind that makes a method.
+///     macro_rules! method {
+///         (@announce_format "1" [$($list:tt)*] $($rest:tt)*) => {
+///             pub fn made_from_item(&self) -> u8 {
+///                 7
+///             }
+///         };
+///     }
+///
+///     // At module level: the check.
+///     Item! { [Item!, announce::same_context!] }
+///
+///     // The real call, in the impl: no check.
+///     impl S {
+///         Item! { [Item!, method!] }
+///     }
+/// }
+///
+/// assert_eq!(m::S.made_from_item(), 7);
+/// ```
+///
+/// The check sees the items that have arrived at its place in the chain; an item that a later
+/// callback fetches (`Input::gather`) is not checked, so list the trampolines in front of
+/// `same_context!`. A callback of your own that wants the same check writes it with
+/// `announce::helper::Entry::item_resolved`.
+#[macro_export]
+macro_rules! same_context {
+    ($($input:tt)*) => {
+        $crate::__private::same_context_impl! { $crate, $($input)* }
+    };
 }

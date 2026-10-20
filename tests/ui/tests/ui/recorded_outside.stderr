@@ -1,0 +1,95 @@
+error[E0425]: cannot find type `UiLocal` in this scope
+  --> tests/ui/recorded_outside.rs:12:16
+   |
+12 |         pub a: UiLocal,
+   |                ^^^^^^^ not found in this scope
+...
+29 | m::Item! { [m::Item!, announce_test_derive::resolved_copy!] FromParent }
+   | ------------------------------------------------------------------------ in this macro invocation
+   |
+   = note: this error originates in the macro `m::Item` (in Nightly builds, run with -Z macro-backtrace for more info)
+help: consider importing one of these structs
+   |
+ 6 + use crate::m::UiLocal;
+   |
+ 6 + use announce_test_ui_lib::m::inner::UiLocal;
+   |
+
+error[E0425]: cannot find type `UiLocal` in this scope
+  --> tests/ui/recorded_outside.rs:17:16
+   |
+17 |         pub a: UiLocal,
+   |                ^^^^^^^ not found in this scope
+...
+33 |     super::m::Pair! { [super::m::Pair!, announce_test_derive::resolved_copy!] FromSibling }
+   |     --------------------------------------------------------------------------------------- in this macro invocation
+   |
+   = note: this error originates in the macro `super::m::Pair` (in Nightly builds, run with -Z macro-backtrace for more info)
+help: consider importing one of these structs
+   |
+33 +     use crate::m::UiLocal;
+   |
+33 +     use announce_test_ui_lib::m::inner::UiLocal;
+   |
+
+error[E0425]: cannot find type `UiOther` in this scope
+  --> tests/ui/recorded_outside.rs:18:16
+   |
+18 |         pub b: UiOther,
+   |                ^^^^^^^ not found in this scope
+...
+33 |     super::m::Pair! { [super::m::Pair!, announce_test_derive::resolved_copy!] FromSibling }
+   |     --------------------------------------------------------------------------------------- in this macro invocation
+   |
+   = note: this error originates in the macro `super::m::Pair` (in Nightly builds, run with -Z macro-backtrace for more info)
+help: consider importing one of these structs
+   |
+33 +     use crate::m::UiOther;
+   |
+33 +     use announce_test_ui_lib::m::inner::UiOther;
+   |
+
+error[E0277]: use absolute path: 'UiLocal'
+  --> tests/ui/recorded_outside.rs:12:16
+   |
+12 |         pub a: UiLocal,
+   |                ^^^^^^^ relative type, not in scope where `m::Item!` is called
+   |
+   = help: the trait `_::InModuleOf_Item` is not implemented for `announce::__private::ThisCall`
+   = note: `m::Item` is used outside its module `m`
+   = note: write `UiLocal` with an absolute path (e.g. `crate::UiLocal`), or add `repeater = ..` to the `#[announce]` of `Item`
+note: required by a bound in `_::Check::used_outside_its_module`
+  --> tests/ui/recorded_outside.rs:29:16
+   |
+29 | m::Item! { [m::Item!, announce_test_derive::resolved_copy!] FromParent }
+   |                ^^^^ required by this bound in `Check::used_outside_its_module`
+
+error[E0277]: use absolute path: 'UiLocal'
+  --> tests/ui/recorded_outside.rs:17:16
+   |
+17 |         pub a: UiLocal,
+   |                ^^^^^^^ relative type, not in scope where `super::m::Pair!` is called
+   |
+   = help: the trait `sibling::_::InModuleOf_Pair` is not implemented for `announce::__private::ThisCall`
+   = note: `super::m::Pair` is used outside its module `super::m`
+   = note: write `UiLocal` with an absolute path (e.g. `crate::UiLocal`), or add `repeater = ..` to the `#[announce]` of `Pair`
+note: required by a bound in `sibling::_::Check::used_outside_its_module`
+  --> tests/ui/recorded_outside.rs:33:34
+   |
+33 |     super::m::Pair! { [super::m::Pair!, announce_test_derive::resolved_copy!] FromSibling }
+   |                                  ^^^^ required by this bound in `Check::used_outside_its_module`
+
+error[E0277]: use absolute path: 'UiOther'
+  --> tests/ui/recorded_outside.rs:18:16
+   |
+18 |         pub b: UiOther,
+   |                ^^^^^^^ relative type, not in scope where `super::m::Pair!` is called
+   |
+   = help: the trait `sibling::_::InModuleOf_Pair` is not implemented for `announce::__private::ThisCall`
+   = note: `super::m::Pair` is used outside its module `super::m`
+   = note: write `UiOther` with an absolute path (e.g. `crate::UiOther`), or add `repeater = ..` to the `#[announce]` of `Pair`
+note: required by a bound in `sibling::_::Check::used_outside_its_module`
+  --> tests/ui/recorded_outside.rs:33:34
+   |
+33 |     super::m::Pair! { [super::m::Pair!, announce_test_derive::resolved_copy!] FromSibling }
+   |                                  ^^^^ required by this bound in `Check::used_outside_its_module`

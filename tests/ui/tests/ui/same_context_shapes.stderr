@@ -1,0 +1,89 @@
+error[E0277]: use absolute path: 'UiLocal'
+  --> tests/ui/same_context_shapes.rs:14:17
+   |
+14 |         pub a: (UiLocal, u8),
+   |                 ^^^^^^^ relative type, not in scope where `m::Item!` is called
+   |
+   = help: the trait `_::InModuleOf_Item` is not implemented for `announce::__private::ThisCall`
+   = note: `m::Item` is used outside its module `m`
+   = note: write `UiLocal` with an absolute path (e.g. `crate::UiLocal`), or add `repeater = ..` to the `#[announce]` of `Item`
+note: required by a bound in `_::Check::used_outside_its_module`
+  --> tests/ui/same_context_shapes.rs:37:16
+   |
+37 | m::Item! { [m::Item!, announce::same_context!] }
+   |                ^^^^ required by this bound in `Check::used_outside_its_module`
+
+error[E0277]: use absolute path: 'UiOther'
+  --> tests/ui/same_context_shapes.rs:17:16
+   |
+17 |         pub d: UiOther,
+   |                ^^^^^^^ relative type, not in scope where `m::Item!` is called
+   |
+   = help: the trait `_::InModuleOf_Item` is not implemented for `announce::__private::ThisCall`
+   = note: `m::Item` is used outside its module `m`
+   = note: write `UiOther` with an absolute path (e.g. `crate::UiOther`), or add `repeater = ..` to the `#[announce]` of `Item`
+note: required by a bound in `_::Check::used_outside_its_module`
+  --> tests/ui/same_context_shapes.rs:37:16
+   |
+37 | m::Item! { [m::Item!, announce::same_context!] }
+   |                ^^^^ required by this bound in `Check::used_outside_its_module`
+
+error[E0277]: use absolute path: 'UiShared'
+  --> tests/ui/same_context_shapes.rs:23:25
+   |
+23 |         pub a: &'static UiShared,
+   |                         ^^^^^^^^ relative type, not in scope where `m::Behind!` is called
+   |
+   = help: the trait `_::InModuleOf_Behind` is not implemented for `announce::__private::ThisCall`
+   = note: `m::Behind` is used outside its module `m`
+   = note: write `UiShared` with an absolute path (e.g. `crate::UiShared`), or add `repeater = ..` to the `#[announce]` of `Behind`
+note: required by a bound in `_::Check::used_outside_its_module`
+  --> tests/ui/same_context_shapes.rs:38:18
+   |
+38 | m::Behind! { [m::Behind!, announce::same_context!] }
+   |                  ^^^^^^ required by this bound in `Check::used_outside_its_module`
+
+error[E0277]: use absolute path: 'UiUnique'
+  --> tests/ui/same_context_shapes.rs:25:29
+   |
+25 |         pub c: &'static mut UiUnique,
+   |                             ^^^^^^^^ relative type, not in scope where `m::Behind!` is called
+   |
+   = help: the trait `_::InModuleOf_Behind` is not implemented for `announce::__private::ThisCall`
+   = note: `m::Behind` is used outside its module `m`
+   = note: write `UiUnique` with an absolute path (e.g. `crate::UiUnique`), or add `repeater = ..` to the `#[announce]` of `Behind`
+note: required by a bound in `_::Check::used_outside_its_module`
+  --> tests/ui/same_context_shapes.rs:38:18
+   |
+38 | m::Behind! { [m::Behind!, announce::same_context!] }
+   |                  ^^^^^^ required by this bound in `Check::used_outside_its_module`
+
+error[E0277]: use absolute path: 'UiRaw'
+  --> tests/ui/same_context_shapes.rs:24:23
+   |
+24 |         pub b: *const UiRaw,
+   |                       ^^^^^ relative type, not in scope where `m::Behind!` is called
+   |
+   = help: the trait `_::InModuleOf_Behind` is not implemented for `announce::__private::ThisCall`
+   = note: `m::Behind` is used outside its module `m`
+   = note: write `UiRaw` with an absolute path (e.g. `crate::UiRaw`), or add `repeater = ..` to the `#[announce]` of `Behind`
+note: required by a bound in `_::Check::used_outside_its_module`
+  --> tests/ui/same_context_shapes.rs:38:18
+   |
+38 | m::Behind! { [m::Behind!, announce::same_context!] }
+   |                  ^^^^^^ required by this bound in `Check::used_outside_its_module`
+
+error[E0277]: use absolute path: 'UiOther'
+  --> tests/ui/same_context_shapes.rs:31:17
+   |
+31 |         pub a: (UiOther, T),
+   |                 ^^^^^^^ relative type, not in scope where `m::Generic!` is called
+   |
+   = help: the trait `InModuleOf_Generic` is not implemented for `announce::__private::ThisCall`
+   = note: `m::Generic` is used outside its module `m`
+   = note: write `UiOther` with an absolute path (e.g. `crate::UiOther`), or add `repeater = ..` to the `#[announce]` of `Generic`
+note: required by a bound in `_::Check::used_outside_its_module`
+  --> tests/ui/same_context_shapes.rs:39:19
+   |
+39 | m::Generic! { [m::Generic!, announce::same_context!] }
+   |                   ^^^^^^^ required by this bound in `Check::used_outside_its_module`

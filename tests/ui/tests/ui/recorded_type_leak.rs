@@ -3,7 +3,7 @@
 // it is called, so the error is the same in the module of the item and anywhere else: a plain
 // line for each cause, that says what the item names and what to do, at the path of the
 // trampoline in the call, also for an item of another crate. A callback that can use the item
-// as written reads `Entry::leak_failure` instead.
+// as written reads `Entry::item_resolved` instead (recorded_outside.rs).
 ::announce::define_repeater!(pub Repeater);
 pub mod inner {
     pub struct UiLocal;

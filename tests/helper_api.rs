@@ -344,6 +344,54 @@ fn recorded_leak_failure() {
     );
     assert_eq!(failure.to_error().to_string(), e.to_string());
 
+    // `item_resolved`: the item as written, and the check.
+    let krate: syn::Path = syn::parse_quote!(::announce);
+    let (item, check) = leaky.item_resolved(&krate).unwrap();
+    assert_eq!(squash(&item), "pubstructLeaky{puba:Local}");
+    let check = squash(&check);
+    // A block of its own: the trait of the item, its impl and the call of the probe. The
+    // texts are those of the trait where the compiler knows `on_unimplemented`: the message and
+    // the help are what the record carries, and the notes are the way in, why and what to do.
+    assert!(
+        check.starts_with("const_:()={") && check.contains("traitInModuleOf_Leaky{}"),
+        "{}",
+        check
+    );
+    assert!(
+        check.ends_with(
+            "fn__check(){Check::used_outside_its_module(__AnnounceProbe::<42u64>.__announce_ctx());}};"
+        ),
+        "{}",
+        check
+    );
+    if check.contains("on_unimplemented") {
+        assert!(
+            check.contains("message=\"useabsolutepath:'Local'\","),
+            "{}",
+            check
+        );
+        assert!(
+            check.contains("label=\"relativetype,notinscopewhere`deflib::lm::Leaky!`iscalled\","),
+            "{}",
+            check
+        );
+        assert!(
+            check.contains("note=\"`deflib::lm::Leaky`isusedoutsideitsmodule`deflib::lm`\","),
+            "{}",
+            check
+        );
+        assert!(
+            check.contains("note=\"anote\",note=\"write`Local`withanabsolutepath\""),
+            "{}",
+            check
+        );
+    }
+    assert_eq!(squash(failure.assume_success(&krate)), check);
+    // Nothing for an item without a failure or a table.
+    let (item, check) = plain.item_resolved(&krate).unwrap();
+    assert_eq!(squash(&item), "pubstructPlain;");
+    assert!(check.is_empty());
+
     // The META that the definer writes is the one that is read.
     let written = LeakFailure::new(
         syn::parse_quote!(S),

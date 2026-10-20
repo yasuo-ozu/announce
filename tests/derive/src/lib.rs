@@ -832,6 +832,38 @@ pub fn pass_through_fn(input: TokenStream) -> TokenStream {
 
 // ---- items whose types do not resolve outside their module (tests/defs/src/recorded.rs) ----
 
+/// `resolved_copy! { [..] NAME }`: emits a copy of the item of every entry named `NAME` (a
+/// struct, enum, trait or type alias), as
+/// `Entry::item_resolved` gives it (rewritten by the table of a `repeater`, or as written),
+/// with the check that it is called in the module of the item, when the definition recorded
+/// that its types do not resolve elsewhere.
+#[proc_macro]
+pub fn resolved_copy(input: TokenStream) -> TokenStream {
+    announce::helper::callback(input.into(), |input| {
+        let name: syn::Ident = input.rest_as()?;
+        let krate: syn::Path = syn::parse_quote!(::announce);
+        let mut out = TokenStream2::new();
+        for e in input.entries_in_order() {
+            let (mut item, check) = e.item_resolved(&krate)?;
+            match &mut item {
+                syn::Item::Struct(i) => i.ident = name.clone(),
+                syn::Item::Enum(i) => i.ident = name.clone(),
+                syn::Item::Trait(i) => i.ident = name.clone(),
+                syn::Item::Type(i) => i.ident = name.clone(),
+                other => {
+                    return Err(syn::Error::new_spanned(
+                        other,
+                        "expected a struct, enum, trait or type alias",
+                    ))
+                }
+            }
+            out.extend(quote! { #item #check });
+        }
+        Ok(out)
+    })
+    .into()
+}
+
 /// Reads the META of the entries without emitting an item: `pub const <REST>: &[&str]` has one
 /// row for every entry in visiting order, `"table"` for an entry with a `type_leak(..)`,
 /// `"-"` for an entry with neither, and for an entry with `type_leak_error(..)`

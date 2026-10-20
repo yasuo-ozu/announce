@@ -931,6 +931,32 @@ fn trampoline_with(
     out
 }
 
+/// The marker of a recorded leak failure, next to the item: a private trait that only the
+/// module of the item (its blocks, and the modules that `use super::*`) has in scope, implemented
+/// for `Probe<random>`. The check of `LeakFailure::assume_success` calls its method on that
+/// probe, which finds this method inside the module and the `ContextFallback` of the
+/// `announce` crate everywhere else.
+fn here_marker(opts: &Options, random: u64) -> TokenStream {
+    let krate = opts.krate();
+    let name = Ident::new(
+        &format!("__AnnounceHere_{}", hex(random)),
+        Span::call_site(),
+    );
+    let id = syn::LitInt::new(&format!("{}u64", random), Span::call_site());
+    quote! {
+        #[doc(hidden)]
+        #[allow(non_camel_case_types, dead_code)]
+        trait #name {
+            fn __announce_ctx(self) -> #krate::__private::ThisCallInTheModule;
+        }
+        impl #name for #krate::__private::Probe<#id> {
+            fn __announce_ctx(self) -> #krate::__private::ThisCallInTheModule {
+                #krate::__private::ThisCallInTheModule
+            }
+        }
+    }
+}
+
 /// What stands in for the trampoline and the `Announce` impl when `generate` has failed
 /// (after its error), for the sentinel of the announcement (`runner::Sentinel`) to find: the
 /// impl, or a macro with the arm of the sentinel only. Without it the sentinel would report a
@@ -1058,22 +1084,25 @@ pub(crate) fn emit(
     // `repeater` carries the types of the item that do not resolve outside this
     // crate. When every path in the item certainly resolves everywhere there is
     // nothing to find, and type-leak is not run. What no table can carry is an error
-    // here, or, with `strict = false`, a record in the META.
+    // here, or, with `strict = false`, a record in the META with a marker that a call
+    // in the module of the item can find.
     let fast = opts.repeater.is_none() && crate::fastpath::accepts(item, opts);
-    let (leak_impls, leak_meta) = if fast {
+    let (leak_impls, leak_meta, here) = if fast {
         #[cfg(test)]
         crate::fastpath::assert_agrees(item, opts);
-        (TokenStream::new(), TokenStream::new())
+        (TokenStream::new(), TokenStream::new(), TokenStream::new())
     } else {
         match crate::leak::table(item, opts, random)? {
-            Some(crate::leak::Table::Leaked(l)) => (l.impls, l.meta),
+            Some(crate::leak::Table::Leaked(l)) => (l.impls, l.meta, TokenStream::new()),
             // The default: no record, the item fails here.
             Some(crate::leak::Table::Failed(f)) if opts.strict => {
                 return Err(f.to_definition_error())
             }
-            // `strict = false`: recorded, for the callbacks to read.
-            Some(crate::leak::Table::Failed(f)) => (TokenStream::new(), f.meta()),
-            None => (TokenStream::new(), TokenStream::new()),
+            // `strict = false`: recorded, and checked by a call.
+            Some(crate::leak::Table::Failed(f)) => {
+                (TokenStream::new(), f.meta(), here_marker(opts, random))
+            }
+            None => (TokenStream::new(), TokenStream::new(), TokenStream::new()),
         }
     };
     t.step_labelled("analysis", if fast { "fast" } else { "full" });
@@ -1104,6 +1133,7 @@ pub(crate) fn emit(
         #real_item
         #tramp
         #leak_impls
+        #here
         #(#checks)*
         #mock_copy
         #marker
@@ -1717,7 +1747,7 @@ mod tests {
     }
 
     #[test]
-    fn a_recorded_failure_has_its_meta() {
+    fn a_recorded_failure_has_its_meta_and_a_marker_next_to_the_item() {
         // `Local` does not resolve outside the module and there is no `repeater`; with
         // `strict = false` the failure is recorded.
         let out = generate_for(
@@ -1743,21 +1773,38 @@ mod tests {
             out
         );
         assert!(!out.contains("type_leak("), "{}", out);
-        // With a repeater there is a table, and no record.
+        // The marker, for the id of the announcement.
+        assert!(
+            out.contains(
+                "#[doc(hidden)]#[allow(non_camel_case_types,dead_code)]\
+                 trait__AnnounceHere_0000000000000003{\
+                 fn__announce_ctx(self)->::l::announce::__private::ThisCallInTheModule;}\
+                 impl__AnnounceHere_0000000000000003for::l::announce::__private::Probe<3u64>{\
+                 fn__announce_ctx(self)->::l::announce::__private::ThisCallInTheModule{\
+                 ::l::announce::__private::ThisCallInTheModule}}"
+            ),
+            "{}",
+            out
+        );
+        // With a repeater there is a table, and no marker.
         let out = generate_for(
             "crate = ::l::announce, strict = false, repeater = crate::R",
             &[],
             quote! { pub struct S { pub a: Local } },
         );
         assert!(out.contains("type_leak(repeater=$crate::R"), "{}", out);
-        assert!(!out.contains("type_leak_error"), "{}", out);
+        assert!(!out.contains("__AnnounceHere_"), "{}", out);
         // Nothing to record, nothing to emit.
         let out = generate_for(
             "crate = ::l::announce, strict = false",
             &[],
             quote! { pub struct S { pub a: u8, pub b: ::std::vec::Vec<u8> } },
         );
-        assert!(!out.contains("type_leak"), "{}", out);
+        assert!(
+            !out.contains("__AnnounceHere_") && !out.contains("type_leak"),
+            "{}",
+            out
+        );
         // A repeater on a type alias stays an error.
         let opts: Options = syn::parse2(quote! { strict = false, repeater = crate::R }).unwrap();
         let item: Item = syn::parse2(quote! { pub type A = u8; }).unwrap();
@@ -1811,7 +1858,7 @@ mod tests {
         let item: Item = syn::parse2(quote! { pub struct S { pub a: u8 } }).unwrap();
         let out = squash(generate(item, &opts, 3, &OwnedAttrs::new()).unwrap());
         assert!(
-            out.contains("macro_rules!__announce_S_") && !out.contains("type_leak_error"),
+            out.contains("macro_rules!__announce_S_") && !out.contains("__AnnounceHere_"),
             "{}",
             out
         );
