@@ -87,6 +87,9 @@ pub struct Options {
     /// `false`: they are removed there, which makes the trampoline smaller.
     /// The item that is compiled keeps its docs either way.
     pub docs: bool,
+    /// `strict = false`: a type that cannot be named outside its module is recorded in the
+    /// `META`, for the call to check, and not an error at the definition. Default `true`.
+    pub strict: bool,
     /// The option keys that were written (a value that is set is told from a default).
     pub(crate) given: Vec<String>,
     /// Checks: bare `path` / `path(args)` entries. They run at the definition.
@@ -107,6 +110,7 @@ impl Default for Options {
             emit_item: true,
             layout: Layout::Auto,
             docs: false,
+            strict: true,
             given: Vec::new(),
             checks: Vec::new(),
             metas: Vec::new(),
@@ -226,6 +230,7 @@ impl Options {
     /// |---|---|
     /// | checks, `meta` | the target's, then the folder's that are not in it yet (exact duplicates dropped) |
     /// | `allow_primitive`, `allow_std_prelude`, `docs` | the OR of the two effective values (the default of `allow_primitive` is `true`, so it is `false` only when both say so) |
+    /// | `strict` | the AND of the two effective values: the default is `true`, and `strict = false` in any announcement makes the item non-strict |
     /// | `crate` | the target's if set, else the folder's: two paths that both name `announce` do not conflict |
     /// | `macro_name` | the effective names must be equal (`macro_name`, else `item`): an explicit one is kept; different names are a conflict, as one item has one trampoline |
     /// | `mock`, `repeater` | the one that is set; both set and different is a conflict |
@@ -279,6 +284,7 @@ impl Options {
         out.allow_primitive = self.allow_primitive || folder.allow_primitive;
         out.allow_std_prelude = self.allow_std_prelude || folder.allow_std_prelude;
         out.docs = self.docs || folder.docs;
+        out.strict = self.strict && folder.strict;
         out.checks = union(&self.checks, &folder.checks);
         out.metas = union(&self.metas, &folder.metas);
         for key in &folder.given {
@@ -321,6 +327,9 @@ impl ToTokens for Options {
         }
         if self.docs {
             parts.push(quote! { docs = true });
+        }
+        if !self.strict {
+            parts.push(quote! { strict = false });
         }
         for m in &self.metas {
             parts.push(quote! { meta = #m });
@@ -390,6 +399,7 @@ impl Parse for Options {
                         };
                     }
                     "docs" => opts.docs = input.parse::<LitBool>()?.value,
+                    "strict" => opts.strict = input.parse::<LitBool>()?.value,
                     "allow_primitive" => opts.allow_primitive = input.parse::<LitBool>()?.value,
                     "allow_std_prelude" => opts.allow_std_prelude = input.parse::<LitBool>()?.value,
                     "meta" => {
@@ -407,7 +417,7 @@ impl Parse for Options {
                         return Err(Error::new(
                             key.span(),
                             "unknown announce option; expected one of `macro_name`, \
-                             `mock`, `repeater`, `allow_primitive`, `allow_std_prelude`, `crate`, `emit_item`, `layout`, `docs`, `meta` (a bare path is a check)",
+                             `mock`, `repeater`, `allow_primitive`, `allow_std_prelude`, `crate`, `emit_item`, `layout`, `docs`, `strict`, `meta` (a bare path is a check)",
                         ))
                     }
                 }
@@ -567,6 +577,54 @@ mod tests {
     }
 
     #[test]
+    fn strict_is_true_unless_an_announcement_says_false() {
+        // Parsing: `true` by default, a bool when written, and it is a written key.
+        assert!(opts("").strict);
+        assert!(opts("strict = true").strict);
+        assert!(!opts("strict = false").strict);
+        assert_eq!(opts("a::c, strict = false").given, ["strict"]);
+        let e = syn::parse_str::<Options>("strict = 1").err().unwrap();
+        assert!(e.to_string().contains("expected boolean"), "{}", e);
+        // The option is in the list of the unknown-option error.
+        let e = syn::parse_str::<Options>("stict = false").err().unwrap();
+        assert!(e.to_string().contains("`docs`, `strict`, `meta`"), "{}", e);
+        // Printing: only `false` is written, and it is read back.
+        assert_eq!(text(&opts("strict = true")), "");
+        assert_eq!(text(&opts("strict = false, a::c")), "strict=false,a::c");
+        assert_eq!(
+            text(&opts("docs = true, strict = false, meta = m::x, a::c")),
+            "docs=true,strict=false,meta=m::x,a::c"
+        );
+        let again: Options = syn::parse2(opts("strict = false").to_token_stream()).unwrap();
+        assert!(!again.strict);
+        let built = Options {
+            strict: false,
+            ..Options::default()
+        };
+        assert_eq!(text(&built), "strict=false");
+        // Merging: the permissive value wins, so the item is strict only when every
+        // announcement is.
+        assert_eq!(merged("strict = false", ""), "strict=false");
+        assert_eq!(merged("", "strict = false"), "strict=false");
+        assert_eq!(merged("strict = false", "strict = false"), "strict=false");
+        assert_eq!(merged("strict = false", "strict = true"), "strict=false");
+        assert_eq!(merged("strict = true", "strict = false"), "strict=false");
+        assert_eq!(merged("strict = true", ""), "");
+        assert_eq!(merged("", ""), "");
+        let m = opts("a::c")
+            .merge(&opts("strict = false"), &ident("S"))
+            .unwrap();
+        assert!(!m.strict);
+        assert_eq!(m.given, ["strict"]);
+        assert!(opts("").merge(&opts(""), &ident("S")).unwrap().strict);
+        // It does not conflict with anything: a merge that is not about it is unchanged.
+        assert_eq!(
+            merged("docs = true, a::c", "strict = false, b::c"),
+            "docs=true,strict=false,a::c,b::c"
+        );
+    }
+
+    #[test]
     fn crate_is_the_targets_else_the_folders() {
         assert_eq!(
             merged("crate = ::a::announce", "crate = ::b::announce"),
@@ -704,7 +762,7 @@ mod tests {
             "crate = ::a::announce, macro_name = N, allow_std_prelude = true, meta = m::x(1), a::c",
         )
         .merge(
-            &opts("docs = true, layout = single, meta = m::y, b::c(2), a::c"),
+            &opts("docs = true, layout = single, strict = false, meta = m::y, b::c(2), a::c"),
             // The folder has no `macro_name`: the item is named `N` as well.
             &ident("N"),
         )
@@ -715,7 +773,7 @@ mod tests {
         assert_eq!(
             text(&m),
             "crate=::a::announce,macro_name=N,allow_std_prelude=true,layout=single,docs=true,\
-             meta=m::x(1),meta=m::y,a::c,b::c(2)"
+             strict=false,meta=m::x(1),meta=m::y,a::c,b::c(2)"
         );
     }
 

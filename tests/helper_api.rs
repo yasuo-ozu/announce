@@ -32,6 +32,8 @@ use announce::helper::{
     Gather,
     Input,
     KvArgs,
+    LeakError,
+    LeakFailure,
     Meta,
     OwnedAttrs,
     Query,
@@ -294,6 +296,120 @@ fn type_leak_and_transformers() {
     let mut f: syn::Item = syn::parse_quote! { fn f() -> u8 { 1 } };
     signature_only(&mut f);
     assert!(!squash(&f).contains('1'));
+}
+
+#[test]
+fn recorded_leak_failure() {
+    // An entry whose definition recorded that its types do not resolve outside its module.
+    let input: Input = syn::parse_quote! {
+        [cb!]
+        deflib::lm::Leaky! => [
+            type_leak_error(id = 42u64,
+                            errors = [(Local) "without `repeater`" {
+                                message = "use absolute path: 'Local'",
+                                notes = ["a note"],
+                                help = "write `Local` with an absolute path"
+                            }])
+        ] { pub struct Leaky { pub a: Local } }
+        deflib::Plain! => [] { pub struct Plain; }
+    };
+    let (leaky, plain) = (&input.entries[0], &input.entries[1]);
+    assert!(plain.leak_failure().unwrap().is_none());
+    let failure: LeakFailure = leaky.leak_failure().unwrap().unwrap();
+    assert_eq!(failure.id.base10_digits(), "42");
+    assert_eq!(failure.ident, "Leaky");
+    assert_eq!(squash(&failure.path), "deflib::lm::Leaky");
+    let errors: &[LeakError] = &failure.errors;
+    assert_eq!(errors.len(), 1);
+    assert_eq!(squash(&errors[0].tokens), "Local");
+    assert_eq!(errors[0].reason, "without `repeater`");
+    // What the record carries for the cause, and nothing where it has none.
+    assert_eq!(
+        errors[0].message.as_deref(),
+        Some("use absolute path: 'Local'")
+    );
+    assert_eq!(errors[0].notes, ["a note"]);
+    assert_eq!(
+        errors[0].help.as_deref(),
+        Some("write `Local` with an absolute path")
+    );
+
+    // `type_leak()` fails, with a plain line for each cause that is true wherever the callback
+    // is called, and ends with what the definer can do.
+    let e = leaky.type_leak().err().unwrap();
+    assert_eq!(
+        e.to_string(),
+        "this macro cannot use `deflib::lm::Leaky`: `Local` cannot be named outside its module; \
+         add `repeater = ..` to its `#[announce]`, or write the path absolutely"
+    );
+    assert_eq!(failure.to_error().to_string(), e.to_string());
+
+    // The META that the definer writes is the one that is read.
+    let written = LeakFailure::new(
+        syn::parse_quote!(S),
+        syn::parse_quote!(7u64),
+        vec![LeakError::new(
+            "super::Other<u8>".parse::<TokenStream>().unwrap(),
+            "with a relative trait path in a bound",
+        )],
+    );
+    let meta: Meta = syn::parse2(written.meta()).unwrap();
+    let read = LeakFailure::from_kv(
+        &mut meta.kv().unwrap(),
+        syn::parse_quote!(a::S),
+        syn::parse_quote!(S),
+    )
+    .unwrap();
+    assert_eq!(squash(&read.errors[0].tokens), "super::Other<u8>");
+    assert_eq!(read.krate, None);
+
+    // With the crate of the definer, which is read back and written again.
+    let written = written.with_krate("deflib");
+    let meta: Meta = syn::parse2(written.meta()).unwrap();
+    let read = LeakFailure::from_kv(
+        &mut meta.kv().unwrap(),
+        syn::parse_quote!(a::S),
+        syn::parse_quote!(S),
+    )
+    .unwrap();
+    assert_eq!(read.krate.as_deref(), Some("deflib"));
+    assert!(squash(read.meta()).ends_with(",krate=\"deflib\")"));
+}
+
+#[test]
+fn recorded_leak_failure_is_read_with_what_a_later_version_adds() {
+    // A later version may add keys to the record, to the texts of an error, and tokens after
+    // them, with values of any shape. This one is read as if it had none of them.
+    let input: Input = syn::parse_quote! {
+        [cb!]
+        deflib::lm::Leaky! => [
+            type_leak_error(id = 42u64,
+                            future = Vec<u8, A>,
+                            errors = [(Local) "without `repeater`" {
+                                message = "m",
+                                span = a::b,
+                                level = -1,
+                                ty = Vec<u8, A>,
+                                internal,
+                                help = "h"
+                            } later = [1, 2] { x = 1 },
+                            (Other) "without `repeater`" flag],
+                            krate = "deflib")
+        ] { pub struct Leaky { pub a: Local, pub b: Other } }
+    };
+    let failure = input.entries[0].leak_failure().unwrap().unwrap();
+    assert_eq!(failure.krate.as_deref(), Some("deflib"));
+    assert_eq!(failure.errors.len(), 2);
+    assert_eq!(failure.errors[0].message.as_deref(), Some("m"));
+    assert_eq!(failure.errors[0].help.as_deref(), Some("h"));
+    assert_eq!(squash(&failure.errors[1].tokens), "Other");
+    // The error that a callback gets is for each cause, as before.
+    let err = input.entries[0].type_leak().unwrap_err().to_string();
+    assert!(
+        err.contains("`Local` cannot be named outside its module"),
+        "{}",
+        err
+    );
 }
 
 #[test]

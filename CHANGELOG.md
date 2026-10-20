@@ -2,6 +2,51 @@
 
 ## 0.3.0 (unreleased)
 
+### Added
+
+- `#[announce(strict = false)]` (`strict` is a bool, default `true`). `strict` is the check at
+  the definition: a type that cannot be named outside its module is an error there, as in 0.2,
+  whether or not anything calls the trampoline. With `strict = false` the
+  definition does not fail: it records what it found, for the callbacks to read. The failures
+  are a relative type without a `repeater`, a relative path in a type alias, a type that the
+  analysis refuses (`Wrap<'_>`, `Local<Self>`, a prelude name around `Self::Out`, ..), a
+  relative trait path, a relative value path, and a const generic that cannot be encoded. The
+  item is announced as written; there is no type table for it (no repeater impls, no
+  `type_leak(..)` in `META`). `META` has `type_leak_error(..)` instead (below).
+  `Entry::type_leak()` returns the record as an error, so a
+  callback that needs a table and reads it with `?` still fails. The error is the same wherever
+  the callback is called (a proc macro cannot tell where that is). There is one error for each
+  cause, a plain line at the path of the trampoline in the call, that ends with what to do like
+  the error at the definition:
+
+  ```text
+  error: this macro cannot use `m::Item`: `Local` cannot be named outside its module; add `repeater = ..` to its `#[announce]`, or write the path absolutely
+  ```
+
+  A callback that can use the item as written in its module reads `Entry::leak_failure`
+  instead. Mistakes in the options stay errors at the definition: a
+  `repeater` on a type alias or on an item that is not analysed, and a `repeater` of another
+  crate. When announcements of one item merge, `strict` is `true` unless one of them says
+  `false`.
+- `announce::helper::LeakFailure` and `LeakError`: the record, read from the new `META`
+  element `type_leak_error(id = R, errors = [(TOKENS) "reason" { message = "..", notes = [".."],
+  help = ".." }, ..], krate = "..")`. The part in braces is optional: it has the texts of the
+  error at a call for the cause, type-leak's own for what it refuses and announce's for the
+  others, and a reader that does not find it uses the texts that the reason has by default
+  (`LeakError` has the fields `message`, `notes` and `help`). `krate` is optional too: the name
+  of the crate that the definer compiled, as Cargo names it, which the texts use for a call that
+  a macro of the definer's library writes through `$crate` (`lib::m::Item` instead of
+  `$crate::m::Item`; a record without it leaves the `$crate::` out). A reader skips keys it
+  does not know, in the record and in the braces of an error, whatever their values, and
+  anything after the braces up to the next error, so a later version can add to the record.
+  `LeakFailure::to_error()` is the error that `Entry::type_leak()` returns.
+- `announce::helper::Entry::leak_failure()`, which reads the record.
+- A `type_leak_error(..)` element in `META`, the record, is the only difference between a
+  recorded call and any other: the wire format is the same and `ANNOUNCE_FORMAT` is still
+  `"1"`. A parser that does not know the element ignores it, so a callback built with announce
+  0.2 takes a `strict = false` item for one that resolves everywhere and emits it as written.
+  That works in the module of the item; elsewhere rustc reports the names it cannot find.
+
 ### Changed
 
 - The definition error for a failure of the analysis is one error for each offending type or

@@ -38,6 +38,13 @@ mod d {
     pub struct Plain {
         pub a: UiLocal,
     }
+
+    // `strict = false` records the same items: no error here.
+    #[announce::announce(announce_test_derive::lib_check, strict = false)]
+    pub struct Recorded {
+        #[my_lib(skip)]
+        pub a: UiLocal,
+    }
 }
 
 fn main() {
@@ -45,4 +52,5 @@ fn main() {
     let _ = d::Owned { a: inner::UiLocal };
     let _ = d::Between { a: inner::UiLocal };
     let _ = d::Plain { a: inner::UiLocal };
+    let _ = d::Recorded { a: inner::UiLocal };
 }

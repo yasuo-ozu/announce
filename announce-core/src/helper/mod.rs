@@ -19,6 +19,10 @@
 //!   [`Entry::type_leak`] reads the [`TypeLeak`] table of a definition announced with
 //!   `repeater = ..`. [`TypeLeak::apply`] rewrites an item so that its types resolve
 //!   in any crate.
+//! - Use relative types as written: a definition with types that no table carries is an
+//!   error at the definition, unless it is announced with `strict = false`. Then it records
+//!   what it found, and [`Entry::type_leak`] returns that as an error.
+//!   [`Entry::leak_failure`] reads the [`LeakFailure`] instead.
 //!
 //! - Detect announce: every call that announce makes starts with the prefix
 //!   `@announce_format "1"` ([`format_prefix`], [`ANNOUNCE_FORMAT`], [`Input::format`]).
@@ -39,8 +43,9 @@ mod typeleak;
 pub use attrs::{remove_attributes, CheckCall, OwnedAttrs, Query};
 pub use kv::KvArgs;
 pub(crate) use leakfail::{
-    LeakError, LeakFailure, ALIAS, NOT_PRIMITIVE, REFUSED, TRAIT_PATH, VALUE_PATH, WITHOUT_REPEATER,
+    cause_path, ALIAS, NOT_PRIMITIVE, REFUSED, TRAIT_PATH, VALUE_PATH, WITHOUT_REPEATER,
 };
+pub use leakfail::{LeakError, LeakFailure};
 pub use transformer::{signature_only, transformer};
 /// The version of `type-leak` that [`TypeLeak`] uses. Name it through this crate,
 /// so there is never a second, incompatible copy.
@@ -444,7 +449,8 @@ impl ToTokens for Meta {
 pub struct Entry {
     /// The continuation that produced this entry, as written in the list.
     pub key: Cont,
-    /// The META elements: checks, `meta =`, `mock(..)`, `type_leak(..)`.
+    /// The META elements: checks, `meta =`, `mock(..)`, `type_leak(..)`,
+    /// `type_leak_error(..)`.
     pub meta: Vec<Meta>,
     /// The raw item tokens.
     pub item: TokenStream,
@@ -475,12 +481,46 @@ impl Entry {
 
     /// The `type_leak(..)` META of an entry announced with `repeater = ..`.
     /// Unknown keys are ignored.
+    ///
+    /// It is an error when the definition recorded that its types do not resolve outside
+    /// its module ([`leak_failure`](Self::leak_failure)): there is no table then, and a
+    /// callback that needs one and reads it with `?` fails. The error is the same wherever
+    /// the callback is called, as a proc macro cannot tell where that is: one plain line for
+    /// each cause, that says what the item names that cannot be used and what to do (`` this
+    /// macro cannot use `m::Item`: `Local` cannot be named outside its module; add `repeater =
+    /// ..` to its `#[announce]`, or write the path absolutely ``). It points at the last segment
+    /// of the path that the caller wrote for the trampoline ([`LeakFailure::to_error`]). A
+    /// callback that can use the item as written in its module reads
+    /// [`leak_failure`](Self::leak_failure) instead.
     pub fn type_leak(&self) -> Result<Option<TypeLeak>> {
+        if let Some(failure) = self.leak_failure()? {
+            return Err(failure.to_error());
+        }
         let m = match self.find_meta("type_leak") {
             Some(m) => m,
             None => return Ok(None),
         };
         TypeLeak::from_kv(&mut m.kv()?).map(Some)
+    }
+
+    /// The `type_leak_error(..)` META of an entry whose definition has types that do not
+    /// resolve outside its module and no `repeater` that carries them: `Ok(None)` for an
+    /// entry without it. The item then has no [`TypeLeak`] table.
+    ///
+    /// Only an item announced with `strict = false` has it: `#[announce]` records the failure
+    /// instead of failing at the definition, because a call in the item's own module can use
+    /// the item as written. The failure belongs to the call:
+    /// [`LeakFailure::to_error`] is the error that [`type_leak`](Self::type_leak) returns.
+    ///
+    /// The path of the failure is the key of the entry, the item's name is read from the
+    /// payload.
+    pub fn leak_failure(&self) -> Result<Option<LeakFailure>> {
+        let m = match self.find_meta("type_leak_error") {
+            Some(m) => m,
+            None => return Ok(None),
+        };
+        let ident = leakfail::item_ident(&self.item()?)?;
+        LeakFailure::from_kv(&mut m.kv()?, self.key.path(), ident).map(Some)
     }
 
     /// Whether META lists a check whose last path segment is `name`. Only the
@@ -601,7 +641,29 @@ impl ToTokens for Entry {
 /// - `path(args)`: a `meta = path(args)` entry, never called ([`Entry::find_meta`]);
 /// - `mock(path)`: the item stands in for the item at `path` ([`Entry::mock`]);
 /// - `attrs(a, b)`: the attribute names that checks own ([`Entry::owned_attrs`]);
-/// - `type_leak(..)`: the type table of a `repeater` ([`Entry::type_leak`]).
+/// - `type_leak(..)`: the type table of a `repeater` ([`Entry::type_leak`]);
+/// - `type_leak_error(id = R, errors = [(TOKENS) "reason" { .. }, ..], krate = "..")`:
+///   instead of a table, what the definer found that does not resolve outside the module of
+///   the item, for an item announced with `strict = false` ([`Entry::leak_failure`],
+///   [`LeakFailure`]). `R` is the random number of the announcement. Each error is
+///   `(TOKENS) "reason"`: the offending tokens of the definition, with their spans, so that a
+///   call can report an error there, and a short phrase that tells a name that resolves in the
+///   module only from a type that no table can carry (``without `repeater` ``). It can be
+///   followed by a part in braces, with the texts of the error at a call: `message` (the
+///   headline), `notes` (why, each one a string) and `help` (what to write instead), each
+///   optional. They are type-leak's own for what it refuses and announce's for the other
+///   causes; a reader that does not find them uses the texts that the reason has by default.
+///   `krate` is optional: the name of the crate that the definer compiled, as Cargo names it
+///   (`CARGO_CRATE_NAME`), which the texts use for the `$crate` of a call that a macro of the
+///   definer's library writes (`$crate::m::Item!`; without it the texts leave `$crate::` out).
+///   A reader skips what it does not know: keys of the record, keys of the part in braces
+///   (whatever their value, as in [`KvArgs`], or none), and tokens after an error's braces up
+///   to the next error. An entry has this or `type_leak(..)`, never both. It is the only
+///   difference between such a call and any other: the format is the same, and
+///   `ANNOUNCE_FORMAT` is still `"1"`. A parser that does not know the element ignores it, as
+///   it ignores any element it does not know, so a callback built with announce 0.2 takes the
+///   item for one that resolves everywhere and emits it as written. That works in the module
+///   of the item; elsewhere rustc reports the names it cannot find.
 ///
 /// Ignore elements you do not know.
 ///

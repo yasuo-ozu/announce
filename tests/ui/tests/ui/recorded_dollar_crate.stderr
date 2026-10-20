@@ -1,0 +1,15 @@
+error: this macro cannot use `announce_test_ui_lib::m::Pair`: `UiLocal` cannot be named outside its module; add `repeater = ..` to its `#[announce]`, or write the path absolutely
+ --> tests/ui/recorded_dollar_crate.rs:5:1
+  |
+5 | announce_test_ui_lib::apply_pair!(announce_test_derive::apply_leak, FromTheLibrary);
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the macro `announce_test_ui_lib::apply_pair` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: this macro cannot use `announce_test_ui_lib::m::Pair`: `UiOther` cannot be named outside its module; add `repeater = ..` to its `#[announce]`, or write the path absolutely
+ --> tests/ui/recorded_dollar_crate.rs:5:1
+  |
+5 | announce_test_ui_lib::apply_pair!(announce_test_derive::apply_leak, FromTheLibrary);
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the macro `announce_test_ui_lib::apply_pair` (in Nightly builds, run with -Z macro-backtrace for more info)

@@ -3,3 +3,15 @@ error: `UiLocal` cannot be named outside its module: add `repeater = ..` to the 
    |
 12 |         pub a: UiLocal,
    |                ^^^^^^^
+
+error: `UiLocal` cannot be named outside its module: add `repeater = ..` to the `#[announce]`, or write the path absolutely
+  --> tests/ui/leak_errors_used.rs:18:16
+   |
+18 |         pub a: UiLocal,
+   |                ^^^^^^^
+
+error: `UiLocal` cannot be named outside its module: add `repeater = ..` to the `#[announce]`, or write the path absolutely
+  --> tests/ui/leak_errors_used.rs:26:16
+   |
+26 |         pub a: UiLocal,
+   |                ^^^^^^^

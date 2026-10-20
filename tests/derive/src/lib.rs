@@ -829,3 +829,75 @@ pub fn format_report_fn(input: TokenStream) -> TokenStream {
 pub fn pass_through_fn(input: TokenStream) -> TokenStream {
     announce::helper::transformer(input.into(), Ok).into()
 }
+
+// ---- items whose types do not resolve outside their module (tests/defs/src/recorded.rs) ----
+
+/// Reads the META of the entries without emitting an item: `pub const <REST>: &[&str]` has one
+/// row for every entry in visiting order, `"table"` for an entry with a `type_leak(..)`,
+/// `"-"` for an entry with neither, and for an entry with `type_leak_error(..)`
+/// `"TOKENS@REASON|TOKENS@REASON"` (the tokens without spaces). A second constant, `<REST>_ERR`,
+/// is `true` for an entry whose `Entry::type_leak()` is an error, in the same order. A third,
+/// `<REST>_TEXTS`, has for every entry the texts that the record carries for each cause,
+/// `"MESSAGE~NOTE / NOTE~HELP"` joined with `|` (empty where the record has none). A fourth,
+/// `<REST>_KRATE`, has for every entry the crate that the definer recorded for its calls through
+/// `$crate`, empty where the record has none (or there is no record).
+#[proc_macro]
+pub fn leak_failures(input: TokenStream) -> TokenStream {
+    announce::helper::callback(input.into(), |input| {
+        let name: syn::Ident = input.rest_as()?;
+        let err_name = syn::Ident::new(&format!("{}_ERR", name), name.span());
+        let texts_name = syn::Ident::new(&format!("{}_TEXTS", name), name.span());
+        let krate_name = syn::Ident::new(&format!("{}_KRATE", name), name.span());
+        let squash = |t: &dyn template_quote::ToTokens| {
+            template_quote::ToTokens::to_token_stream(t)
+                .to_string()
+                .split_whitespace()
+                .collect::<String>()
+        };
+        let (mut rows, mut errs, mut texts) = (Vec::new(), Vec::new(), Vec::new());
+        let mut krates: Vec<String> = Vec::new();
+        for e in input.entries_in_order() {
+            errs.push(e.type_leak().is_err());
+            krates.push(e.leak_failure()?.and_then(|f| f.krate).unwrap_or_default());
+            rows.push(match e.leak_failure()? {
+                Some(f) => {
+                    let errors: Vec<String> = f
+                        .errors
+                        .iter()
+                        .map(|x| format!("{}@{}", squash(&x.tokens), x.reason))
+                        .collect();
+                    texts.push(
+                        f.errors
+                            .iter()
+                            .map(|x| {
+                                format!(
+                                    "{}~{}~{}",
+                                    x.message.clone().unwrap_or_default(),
+                                    x.notes.join(" / "),
+                                    x.help.clone().unwrap_or_default()
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                            .join("|"),
+                    );
+                    errors.join("|")
+                }
+                None if e.type_leak()?.is_some() => {
+                    texts.push(String::new());
+                    "table".to_string()
+                }
+                None => {
+                    texts.push(String::new());
+                    "-".to_string()
+                }
+            });
+        }
+        Ok(quote! {
+            pub const #name: &[&str] = &[ #(#rows),* ];
+            pub const #err_name: &[bool] = &[ #(#errs),* ];
+            pub const #texts_name: &[&str] = &[ #(#texts),* ];
+            pub const #krate_name: &[&str] = &[ #(#krates),* ];
+        })
+    })
+    .into()
+}

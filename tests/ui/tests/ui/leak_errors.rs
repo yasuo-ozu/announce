@@ -1,6 +1,6 @@
-// The definition is checked: nothing here calls a trampoline, and
+// With `strict = true` (the default) the definition is checked: nothing here calls a trampoline, and
 // each type that cannot be named outside its module is an error at its tokens, with no trampoline.
-// The items are still emitted, so these are the only errors.
+// With `strict = false` the same items are recorded instead, for the callbacks to read.
 ::announce::define_repeater!(pub Repeater);
 pub mod inner {
     #[derive(Clone)]

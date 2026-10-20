@@ -82,6 +82,12 @@ use proc_macro::TokenStream;
 ///   item. Default: `auto`. See [Size and recursion](#size-and-recursion).
 /// - `docs = bool`: with `true`, the item that callbacks and checks receive keeps
 ///   its doc attributes. Default: `false`. See [Docs](#docs).
+/// - `strict = bool`: the check at the definition. With `true` (the default),
+///   `#[announce]` checks that every type and path of the item can be named outside its
+///   module, and fails at the definition when one cannot, whether or not anything ever calls
+///   the trampoline. With `false`, the failure is recorded instead, for the callbacks to
+///   read at the call. See
+///   [Items that resolve in their module only](#items-that-resolve-in-their-module-only).
 ///
 /// ```ignore
 /// #[announce(macro_name = ParseAnnounce, meta = my_lib::info(version = 1))]
@@ -129,7 +135,9 @@ use proc_macro::TokenStream;
 ///   (`use announce::announce as ann; #[ann] #[ann(..)]`) is an announcement like any other.
 /// - Merging options: checks and `meta` entries are united, the first announcement's
 ///   first, without duplicates. `allow_primitive`, `allow_std_prelude` and `docs` are on if
-///   any of them is on (`allow_primitive` is off only if all say so). `crate` is the
+///   any of them is on (`allow_primitive` is off only if all say so). `strict` is on unless
+///   an announcement says `strict = false`: the permissive value wins, so the merged item
+///   records its failures if any announcement of it does. `crate` is the
 ///   first announcement's, else the other's: two paths to `announce` do not conflict.
 ///   `mock`, `repeater`, `layout` and `emit_item` take the value that is set; two values
 ///   that differ are an error at the attribute that was expanded, and the item is kept.
@@ -342,7 +350,9 @@ use proc_macro::TokenStream;
 ///
 /// The item's tokens are used again in another crate, so every path in them must mean
 /// the same thing there. `#[announce]` checks this at the definition and reports an
-/// error at a path that would not resolve. Most items need nothing.
+/// error at a path that would not resolve. Most items need nothing. An item that is
+/// meant for its own module only can say so: see
+/// [Items that resolve in their module only](#items-that-resolve-in-their-module-only).
 ///
 /// ## What resolves everywhere
 ///
@@ -499,6 +509,37 @@ use proc_macro::TokenStream;
 /// ```text
 /// error: `crate::Idx` cannot be named outside its module (a const generic that is not of a primitive type): use a primitive type for the const parameter
 /// ```
+///
+/// An item that is meant to be used in its own module only is announced with
+/// `strict = false`. The definition is not an error then. It has no `type_leak(..)` in
+/// `META`; it has `type_leak_error(..)` instead, which records every relative type without
+/// a `repeater`, every relative trait or value path, a relative path in a type alias, and
+/// every type the analysis refuses or cannot encode. Each entry has the tokens as written,
+/// with their spans, and a short reason such as ``without `repeater` ``. The format is in the
+/// [wire format]. A callback built with announce 0.2 does not know the record, and ignores it
+/// like any element it does not know: it takes the item for one that resolves everywhere, and
+/// emits it as written. That works in the module of the item; elsewhere rustc reports the
+/// names it cannot find.
+///
+/// With `strict = false` the caller or the callback decides what the record means:
+///
+/// - `Entry::type_leak()` returns the record as an error, so a callback that needs a table
+///   and reads it with `?` fails. It fails wherever it is called, in the module of the item
+///   too, because a proc macro cannot tell where that is. There is one error for each
+///   cause, a plain line at the path of the trampoline in the call. It says what the item
+///   names that this macro cannot use, and ends with what to do, like the error at the
+///   definition:
+///
+///   ```text
+///   error: this macro cannot use `m::Item`: `Local` cannot be named outside its module; add `repeater = ..` to its `#[announce]`, or write the path absolutely
+///   ```
+///
+///   A callback that can use the item as written in its module reads
+///   `Entry::leak_failure` instead.
+/// - `Entry::leak_failure()` returns the record to a callback that wants it.
+///
+/// Mistakes in the options stay errors, with or without `strict = false`: a `repeater` on a
+/// type alias or on an item that is not analysed, and a `repeater` of another crate.
 ///
 /// ## What is not checked
 ///

@@ -337,6 +337,120 @@ pub(crate) fn tidy(text: &str) -> String {
     text.replace(LEADING, "::")
 }
 
+/// Names of type-leak's API that its messages use for the options a user of
+/// `#[announce]` does not have.
+const API_NAMES: &[&str] = &[
+    "LeakerConfig",
+    "allow_self",
+    "allowed_paths",
+    "Leaker",
+    "Visitor",
+    "Referrer",
+    "enter_type",
+    "enter_impl",
+    "enter_trait",
+];
+
+fn names_api(text: &str) -> bool {
+    API_NAMES.iter().any(|n| text.contains(n))
+}
+
+/// The help of type-leak without the options that name its API: "allow it
+/// with `LeakerConfig::allowed_paths`", "analyze the item with
+/// `allow_self = true`" (`Self` is never internable for `#[announce]`) and
+/// "enter a scope that declares `Self`". They are clauses of a ", or"-list, so
+/// the separator goes with them.
+fn without_api_options(help: &str) -> String {
+    let mut help = help.to_string();
+    for clause in [
+        "allow it with `LeakerConfig::allowed_paths`",
+        "analyze the item with `allow_self = true`",
+        "enter a scope that declares `Self` around it \
+         (`Leaker::enter_type`, `enter_impl` or `enter_trait`)",
+    ] {
+        for pattern in [
+            format!(", or {}", clause),
+            format!(", {}", clause),
+            format!("{}, or ", clause),
+            format!("{}, ", clause),
+            clause.to_string(),
+        ] {
+            help = help.replace(&pattern, "");
+        }
+    }
+    help
+}
+
+/// type-leak shows the absolute form of a relative path as an example in an
+/// invented crate: "(e.g. `::my_crate::inner::G`)". Inside the defining crate
+/// it is `crate::inner::G`; `::other_crate::..` is for another crate.
+fn crate_example(help: &str) -> String {
+    const EXAMPLE: &str = "(e.g. `::my_crate::";
+    let mut help = help.to_string();
+    if let Some(i) = help.find(EXAMPLE) {
+        let after = &help[i + EXAMPLE.len()..];
+        if let Some(j) = after.find("`)") {
+            let rest = &after[..j];
+            help = format!(
+                "{}(e.g. `crate::{rest}`, or `::other_crate::{rest}` for an item of another \
+                 crate){}",
+                &help[..i],
+                &after[j + 2..],
+                rest = rest
+            );
+        }
+    }
+    help.replace("::my_crate::", "crate::")
+}
+
+/// A note without type-leak's API in it.
+fn note_text(note: &str) -> Option<String> {
+    let note = note
+        .replace(" (`Visitor::with_self()`)", "")
+        .replace("the Leaker", "announce")
+        .replace("the Referrer", "the table");
+    if names_api(&note) {
+        None
+    } else {
+        Some(tidy(&note))
+    }
+}
+
+/// The start of the note of type-leak that names what stops a relative type from being
+/// leaked: "it cannot be leaked as a whole because of `Self::Out`".
+const WHOLE_NOTE: &str = "it cannot be leaked as a whole because of ";
+
+/// The help of one error, in terms of `#[announce]`.
+fn help_text(item: &type_leak::ErrorItem, opts: &crate::options::Options) -> String {
+    let mut help = without_api_options(item.help_text().unwrap_or_default());
+    if item.message.contains("has no meaning here") {
+        // `Self` in a type alias; type-leak: "or enter a scope that declares `Self`".
+        help = "write the type instead of `Self`".to_string();
+    } else if let Some(name) = prelude_name(item, opts) {
+        // type-leak: "use `::core::option::Option` instead of `Option`".
+        if let Some(absolute) = help.split('`').nth(1) {
+            let args = match crate::helper::cause_path(&item.tokens) {
+                Some(c) if c.generic => "<..>",
+                _ => "",
+            };
+            return format!(
+                "write `{}{}` instead of `{}{}`, or set `allow_std_prelude = true` to accept \
+                 prelude names",
+                absolute, args, name, args
+            );
+        }
+    }
+    let help = tidy(&crate_example(&help));
+    if help.trim().is_empty() || names_api(&help) {
+        format!(
+            "write the paths in `{}` as absolute paths",
+            tidy(&item.tokens.to_string())
+        )
+    } else {
+        help
+    }
+}
+
 /// The std prelude name that heads the offending type, when it is relative here
 /// (`allow_std_prelude` is off). type-leak then names the whole type, says why it
 /// cannot be leaked (`Self::Out`, `'_`, ..) and shows the absolute path of the
@@ -346,7 +460,7 @@ fn prelude_name(item: &type_leak::ErrorItem, opts: &crate::options::Options) -> 
     if opts.allow_std_prelude || !item.help_text()?.starts_with("use `") {
         return None;
     }
-    let name = item.tokens.clone().into_iter().next()?.to_string();
+    let name = crate::helper::cause_path(&item.tokens)?.path;
     if PRELUDE.contains(&name.as_str()) {
         Some(name)
     } else {
@@ -370,11 +484,33 @@ fn refusal_reason(item: &type_leak::ErrorItem, opts: &crate::options::Options) -
 /// The refusals of type-leak, one error for each offending path or type, at the tokens
 /// as written.
 fn refusals(e: type_leak::NotInternableError, opts: &crate::options::Options) -> Unleakable {
-    Unleakable(
-        e.items()
-            .map(|item| LeakError::new(item.tokens.clone(), refusal_reason(&item, opts)))
-            .collect(),
-    )
+    let mut out = Vec::new();
+    for item in e.items() {
+        // What type-leak says about the cause is what a call says: its message, why, and what
+        // to write instead, in terms of `#[announce]`.
+        let relative_prelude = prelude_name(&item, opts).is_some();
+        let mut notes: Vec<String> = Vec::new();
+        for note in item.notes.iter().filter_map(|(_, n)| note_text(n)) {
+            // The message says that the name is relative: say what that costs, not that the
+            // type "cannot be leaked".
+            let note = match note.strip_prefix(WHOLE_NOTE) {
+                Some(cause) if relative_prelude => {
+                    format!("a relative type cannot be carried with {} in it", cause)
+                }
+                _ => note,
+            };
+            if !notes.contains(&note) {
+                notes.push(note);
+            }
+        }
+        out.push(
+            LeakError::new(item.tokens.clone(), refusal_reason(&item, opts))
+                .with_message(tidy(&item.message))
+                .with_notes(notes)
+                .with_help(help_text(&item, opts)),
+        );
+    }
+    Unleakable(out)
 }
 
 /// Every const generic parameter declared anywhere in `item` (item, methods,
@@ -496,9 +632,20 @@ fn encode_error(e: &type_leak::EncodeError) -> LeakError {
     }
 }
 
-/// The failure of `errors`.
-fn failed(errors: Vec<LeakError>) -> Result<Option<Table>> {
-    Ok(Some(Table::Failed(LeakFailure::new(errors))))
+/// The record of `errors` for `item`: its name, the id of the announcement, and the texts of
+/// every cause (what a call says about it: its message, notes and help).
+fn failed(item: &Item, random: u64, errors: Vec<LeakError>) -> Result<Option<Table>> {
+    let (ident, _) = crate::generate::ident_vis(item)?;
+    let id = syn::LitInt::new(&format!("{}u64", random), Span::call_site());
+    let name = syn::ext::IdentExt::unraw(&ident).to_string();
+    let errors = errors.into_iter().map(|e| e.described(&name)).collect();
+    let mut failure = LeakFailure::new(ident, id, errors);
+    // The crate that `#[announce]` is compiling: the definer, which the texts name for a call
+    // that is written through `$crate`.
+    if let Ok(krate) = std::env::var("CARGO_CRATE_NAME") {
+        failure = failure.with_krate(krate);
+    }
+    Ok(Some(Table::Failed(failure)))
 }
 
 /// Builds the table, or records why there is none ([`Table::Failed`]). It is an error only
@@ -517,7 +664,7 @@ pub fn table(item: &Item, opts: &crate::options::Options, random: u64) -> Result
             ));
         }
         return match analyze(item, opts) {
-            Err(Unleakable(errors)) => failed(errors),
+            Err(Unleakable(errors)) => failed(item, random, errors),
             Ok(None) => Ok(None),
             Ok(Some(analysis)) => {
                 let errors: Vec<LeakError> = analysis
@@ -527,14 +674,14 @@ pub fn table(item: &Item, opts: &crate::options::Options, random: u64) -> Result
                 if errors.is_empty() {
                     Ok(None)
                 } else {
-                    failed(errors)
+                    failed(item, random, errors)
                 }
             }
         };
     }
     let analysis = match analyze(item, opts) {
         Ok(analysis) => analysis,
-        Err(Unleakable(errors)) => return failed(errors),
+        Err(Unleakable(errors)) => return failed(item, random, errors),
     };
     let (repeater, analysis) = match (repeater, analysis) {
         (Some(a), None) => {
@@ -552,7 +699,7 @@ pub fn table(item: &Item, opts: &crate::options::Options, random: u64) -> Result
             return if errors.is_empty() {
                 Ok(None)
             } else {
-                failed(errors)
+                failed(item, random, errors)
             };
         }
         (Some(a), Some(analysis)) => (a, analysis),
@@ -589,7 +736,7 @@ pub fn table(item: &Item, opts: &crate::options::Options, random: u64) -> Result
         });
     }
     if !errors.is_empty() {
-        return failed(errors);
+        return failed(item, random, errors);
     }
     let table = TypeLeak::new(repeater.clone(), id, referrer.clone(), analysis.context);
     // The consumer reads the META back and uses the same indices as the impls
@@ -746,10 +893,13 @@ mod tests {
                 REASON_ALIAS.to_string()
             )]
         );
-        // There is no table for the alias.
+        // The record is for the alias.
         match table(&item(quote! { type A = Local; }), &opts(), 7).unwrap() {
-            Some(Table::Failed(f)) => assert_eq!(f.errors.len(), 1),
-            _ => panic!("a failure"),
+            Some(Table::Failed(f)) => {
+                assert_eq!(f.ident.to_string(), "A");
+                assert_eq!(f.id.base10_digits(), "7");
+            }
+            _ => panic!("a record"),
         }
     }
 
@@ -1022,10 +1172,166 @@ mod tests {
             recorded(quote! { struct S { a: Local, b: Other, c: Local, d: u8 } }),
             [("Local".to_string(), wr.clone()), ("Other".to_string(), wr)]
         );
-        // There is no table for the item.
+        // The record is for the item, with the id of the announcement. There is no table.
         match table(&item(quote! { pub struct S { a: Local } }), &opts(), 99).unwrap() {
-            Some(Table::Failed(f)) => assert_eq!(f.errors.len(), 1),
-            _ => panic!("a failure"),
+            Some(Table::Failed(f)) => {
+                assert_eq!(f.ident.to_string(), "S");
+                assert_eq!(f.id.base10_digits(), "99");
+                let meta = squash(f.meta());
+                assert!(meta.starts_with("type_leak_error(id=99u64,"), "{}", meta);
+                // The cause, with the texts that a call says about it.
+                assert!(
+                    meta.contains(
+                        "errors=[(Local)\"without`repeater`\"{message=\"useabsolutepath:'Local'\",\
+                         help=\"write`Local`withanabsolutepath(e.g.`crate::Local`),oradd`repeater=..`\
+                         tothe`#[announce]`of`S`\"}]"
+                    ),
+                    "{}",
+                    meta
+                );
+            }
+            _ => panic!("a record"),
+        }
+    }
+
+    /// The record of `it`, by the options `o`, or a panic.
+    fn record(it: TokenStream, o: &Options) -> LeakFailure {
+        match table(&item(it), o, 1).unwrap() {
+            Some(Table::Failed(f)) => f,
+            _ => panic!("a record"),
+        }
+    }
+
+    #[test]
+    fn a_cause_carries_the_texts_that_a_call_says() {
+        // A relative type: the texts of announce, with the item named.
+        let f = record(quote! { pub struct S { pub a: Local } }, &opts());
+        let e = &f.errors[0];
+        assert_eq!(e.message.as_deref(), Some("use absolute path: 'Local'"));
+        assert!(e.notes.is_empty());
+        assert_eq!(
+            e.help.as_deref(),
+            Some(
+                "write `Local` with an absolute path (e.g. `crate::Local`), or add `repeater = ..` \
+                 to the `#[announce]` of `S`"
+            )
+        );
+        // A relative trait path.
+        let f = record(quote! { pub trait T: Base {} }, &opts());
+        assert_eq!(
+            f.errors[0].help.as_deref(),
+            Some("write `Base` with an absolute path (e.g. `crate::Base`)")
+        );
+        // A refusal of type-leak: its message and why, and what to write instead, without its
+        // API.
+        let f = record(
+            quote! { trait T { fn f(&self, a: Wrap<'_>); } },
+            &with_repeater(),
+        );
+        let e = &f.errors[0];
+        assert_eq!(e.message.as_deref(), Some("use absolute path: 'Wrap<'_>'"));
+        assert_eq!(e.notes, ["it cannot be leaked as a whole because of `'_`"]);
+        let help = e.help.as_deref().unwrap();
+        assert!(
+            help.starts_with("write `Wrap` with an absolute path (e.g. `crate::Wrap`"),
+            "{}",
+            help
+        );
+        assert!(
+            !help.contains("LeakerConfig") && !help.contains("my_crate"),
+            "{}",
+            help
+        );
+        // A prelude name: the absolute path to write, and what the name costs.
+        let f = record(
+            quote! { trait T { fn f(&self, a: Vec<&'_ u8>); } },
+            &with_repeater(),
+        );
+        let e = &f.errors[0];
+        assert_eq!(
+            e.notes,
+            ["a relative type cannot be carried with `'_` in it"]
+        );
+        assert_eq!(
+            e.help.as_deref(),
+            Some(
+                "write `::std::vec::Vec<..>` instead of `Vec<..>`, or set `allow_std_prelude = true` \
+                 to accept prelude names"
+            )
+        );
+        // A const generic that is not of a primitive type.
+        let f = record(
+            quote! { struct S<const N: crate::Idx> { a: Wrap<N> } },
+            &with_repeater(),
+        );
+        let e = &f.errors[0];
+        assert_eq!(
+            e.message.as_deref(),
+            Some("const parameter of a non-primitive type: 'crate::Idx'")
+        );
+        assert_eq!(
+            e.help.as_deref(),
+            Some("use a primitive type for the const parameter")
+        );
+    }
+
+    #[test]
+    fn the_texts_of_a_cause_name_the_path_in_it_and_the_record_has_them() {
+        // The tokens of a cause keep what stands around the type, and the texts name the path.
+        let f = record(
+            quote! {
+                pub struct S {
+                    pub a: &'static Local,
+                    pub b: *const Other,
+                    pub c: &'static mut inner::Third,
+                }
+            },
+            &opts(),
+        );
+        let text = |shown: &str| {
+            let e = f
+                .errors
+                .iter()
+                .find(|e| e.message.as_deref() == Some(&format!("use absolute path: '{}'", shown)))
+                .unwrap_or_else(|| panic!("no cause `{}`", shown));
+            e.help.clone().unwrap()
+        };
+        let help = |p: &str| {
+            format!(
+                "write `{p}` with an absolute path (e.g. `crate::{p}`), or add `repeater = ..` \
+                 to the `#[announce]` of `S`",
+                p = p
+            )
+        };
+        assert_eq!(f.errors.len(), 3);
+        for p in ["Local", "Other", "inner::Third"] {
+            assert_eq!(text(p), help(p));
+        }
+        // A trait path in the bound of a trait object has a record of its own.
+        let g = record(quote! { pub struct S { pub d: Box<dyn Fourth> } }, &opts());
+        assert_eq!(
+            g.errors[0].message.as_deref(),
+            Some("use absolute path: 'Fourth'")
+        );
+        assert_eq!(
+            g.errors[0].help.as_deref(),
+            Some("write `Fourth` with an absolute path (e.g. `crate::Fourth`)")
+        );
+        // They are in the record that the callbacks read.
+        let meta = squash(f.meta());
+        assert!(
+            meta.contains("message=\"useabsolutepath:'Local'\""),
+            "{}",
+            meta
+        );
+        assert!(
+            meta.contains("help=\"write`Other`withanabsolutepath(e.g.`crate::Other`)"),
+            "{}",
+            meta
+        );
+        // Nothing that stands before a path is written under `crate::`.
+        for before in ["&", "*", "dyn", "'static"] {
+            assert!(!meta.contains(&format!("crate::{}", before)), "{}", meta);
         }
     }
 
@@ -1043,7 +1349,7 @@ mod tests {
     fn leaked_with(it: &Item, o: &Options, random: u64) -> Leaked {
         match table(it, o, random).unwrap().unwrap() {
             Table::Leaked(l) => l,
-            Table::Failed(f) => panic!("a failure: {}", f.to_definition_error()),
+            Table::Failed(f) => panic!("a record: {}", f.to_error()),
         }
     }
 
