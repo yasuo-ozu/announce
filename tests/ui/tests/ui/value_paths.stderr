@@ -1,22 +1,22 @@
-error: announce: value paths in array lengths, enum discriminants, const generic arguments and const defaults must be absolute (`crate::N`, `::core::mem::size_of::<T>()`), start with `Self::` or be a const parameter; a repeater only covers types, not values
+error: `N` cannot be named outside its module (a relative value path): write the path absolutely
  --> tests/ui/value_paths.rs:7:9
   |
 7 |     A = N as isize,
   |         ^
 
-error: announce: value paths in array lengths, enum discriminants, const generic arguments and const defaults must be absolute (`crate::N`, `::core::mem::size_of::<T>()`), start with `Self::` or be a const parameter; a repeater only covers types, not values
+error: `N` cannot be named outside its module (a relative value path): write the path absolutely
   --> tests/ui/value_paths.rs:13:22
    |
 13 |     const M: usize = N;
    |                      ^
 
-error: announce: value paths in array lengths, enum discriminants, const generic arguments and const defaults must be absolute (`crate::N`, `::core::mem::size_of::<T>()`), start with `Self::` or be a const parameter; a repeater only covers types, not values
+error: `N` cannot be named outside its module (a relative value path): write the path absolutely
   --> tests/ui/value_paths.rs:18:38
    |
 18 | pub struct ConstArg(pub crate::Buf<{ N }>);
    |                                      ^
 
-error: announce: value paths in array lengths, enum discriminants, const generic arguments and const defaults must be absolute (`crate::N`, `::core::mem::size_of::<T>()`), start with `Self::` or be a const parameter; a repeater only covers types, not values
+error: `N` cannot be named outside its module (a relative value path): write the path absolutely
   --> tests/ui/value_paths.rs:22:47
    |
 22 | pub struct ConstParamDefault<const K: usize = N>;

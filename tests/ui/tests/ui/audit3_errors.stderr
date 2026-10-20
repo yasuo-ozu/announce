@@ -4,7 +4,7 @@ error: `repeater` must be a trait of this crate, written `crate::path::to::Repea
 6 | #[announce::announce(repeater = ::core::marker::PhantomData)]
   |                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-error: announce: value paths in array lengths, enum discriminants, const generic arguments and const defaults must be absolute (`crate::N`, `::core::mem::size_of::<T>()`), start with `Self::` or be a const parameter; a repeater only covers types, not values
+error: `N` cannot be named outside its module (a relative value path): write the path absolutely
   --> tests/ui/audit3_errors.rs:11:28
    |
 11 | pub struct RelLen(pub [u8; N]);

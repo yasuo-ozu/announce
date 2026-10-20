@@ -32,11 +32,15 @@
 pub mod attrs;
 mod kv;
 pub mod leak;
+mod leakfail;
 mod transformer;
 mod typeleak;
 
 pub use attrs::{remove_attributes, CheckCall, OwnedAttrs, Query};
 pub use kv::KvArgs;
+pub(crate) use leakfail::{
+    LeakError, LeakFailure, ALIAS, NOT_PRIMITIVE, REFUSED, TRAIT_PATH, VALUE_PATH, WITHOUT_REPEATER,
+};
 pub use transformer::{signature_only, transformer};
 /// The version of `type-leak` that [`TypeLeak`] uses. Name it through this crate,
 /// so there is never a second, incompatible copy.

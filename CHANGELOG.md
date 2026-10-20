@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.3.0 (unreleased)
+
+### Changed
+
+- The definition error for a failure of the analysis is one error for each offending type or
+  path, at its tokens in the item, and says what the definer can do:
+
+  ```text
+  error: `Local` cannot be named outside its module: add `repeater = ..` to the `#[announce]`, or write the path absolutely
+   --> src/lib.rs:6:16
+    |
+  6 |         pub a: Local,
+    |                ^^^^^
+  ```
+
+  (For a failure that a repeater does not fix, the message gives the reason and says to write
+  the path absolutely. For a const generic of a type that is not primitive it says to use a
+  primitive type for the const parameter: the path was already absolute.)
+
 ## 0.2.0
 
 ### Merging

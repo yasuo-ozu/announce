@@ -1,0 +1,5 @@
+error: `UiLocal` cannot be named outside its module: add `repeater = ..` to the `#[announce]`, or write the path absolutely
+  --> tests/ui/leak_errors_used.rs:12:16
+   |
+12 |         pub a: UiLocal,
+   |                ^^^^^^^

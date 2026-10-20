@@ -1055,9 +1055,10 @@ pub(crate) fn emit(
     let marker = marker_impl(item, opts);
     t.step("marker");
 
-    // `repeater` is required when the item has types that do not resolve
-    // outside this crate. When every path in the item certainly resolves
-    // everywhere there is nothing to find, and type-leak is not run.
+    // `repeater` carries the types of the item that do not resolve outside this
+    // crate. When every path in the item certainly resolves everywhere there is
+    // nothing to find, and type-leak is not run. What no table can carry is an error
+    // here.
     let fast = opts.repeater.is_none() && crate::fastpath::accepts(item, opts);
     let (leak_impls, leak_meta) = if fast {
         #[cfg(test)]
@@ -1065,7 +1066,8 @@ pub(crate) fn emit(
         (TokenStream::new(), TokenStream::new())
     } else {
         match crate::leak::table(item, opts, random)? {
-            Some(l) => (l.impls, l.meta),
+            Some(crate::leak::Table::Leaked(l)) => (l.impls, l.meta),
+            Some(crate::leak::Table::Failed(f)) => return Err(f.to_definition_error()),
             None => (TokenStream::new(), TokenStream::new()),
         }
     };
@@ -1707,6 +1709,60 @@ mod tests {
         let opts: Options = syn::parse2(opts.parse().unwrap()).unwrap();
         let item: Item = syn::parse2(item).unwrap();
         squash(generate(item, &opts, 3, &OwnedAttrs::from_strs(owned)).unwrap())
+    }
+
+    #[test]
+    fn a_failure_is_an_error_at_the_definition() {
+        let opts: Options = syn::parse2(quote! { crate = ::l::announce }).unwrap();
+        let item: Item =
+            syn::parse2(quote! { pub struct S { pub a: Local, pub b: Other } }).unwrap();
+        let errors: Vec<String> = generate(item, &opts, 3, &OwnedAttrs::new())
+            .err()
+            .unwrap()
+            .into_iter()
+            .map(|e| e.to_string())
+            .collect();
+        // One error for each thing, with what the definer can do.
+        assert_eq!(
+            errors,
+            [
+                "`Local` cannot be named outside its module: add `repeater = ..` to the `#[announce]`, \
+                 or write the path absolutely",
+                "`Other` cannot be named outside its module: add `repeater = ..` to the `#[announce]`, \
+                 or write the path absolutely"
+            ]
+        );
+        // A trait path is not the repeater's business.
+        let item: Item = syn::parse2(quote! { pub trait T: Base {} }).unwrap();
+        let errors = generate(item, &opts, 3, &OwnedAttrs::new()).err().unwrap();
+        assert_eq!(
+            errors.to_string(),
+            "`Base` cannot be named outside its module (a relative trait path in a bound): \
+             write the path absolutely"
+        );
+        // A const generic that is not primitive: the path may well be absolute, so the
+        // advice is about the type of the parameter.
+        let opts: Options =
+            syn::parse2(quote! { crate = ::l::announce, repeater = crate::R }).unwrap();
+        let item: Item =
+            syn::parse2(quote! { pub struct S<const N: crate::Idx> { pub a: Wrap<N> } }).unwrap();
+        let errors = generate(item, &opts, 3, &OwnedAttrs::new()).err().unwrap();
+        assert_eq!(
+            errors.to_string(),
+            "`crate::Idx` cannot be named outside its module (a const generic that is not of a \
+             primitive type): use a primitive type for the const parameter"
+        );
+        // Nothing to fail: no error.
+        let opts: Options = syn::parse2(quote! { crate = ::l::announce }).unwrap();
+        let item: Item = syn::parse2(quote! { pub struct S { pub a: u8 } }).unwrap();
+        let out = squash(generate(item, &opts, 3, &OwnedAttrs::new()).unwrap());
+        assert!(out.contains("macro_rules!__announce_S_"), "{}", out);
+        // A repeater carries the type: no failure.
+        let opts: Options =
+            syn::parse2(quote! { crate = ::l::announce, repeater = crate::R }).unwrap();
+        let item: Item = syn::parse2(quote! { pub struct S { pub a: Local } }).unwrap();
+        let out = squash(generate(item, &opts, 3, &OwnedAttrs::new()).unwrap());
+        assert!(out.contains("type_leak(repeater=$crate::R"), "{}", out);
     }
 
     #[test]

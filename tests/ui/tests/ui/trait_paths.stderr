@@ -1,22 +1,22 @@
-error: announce: trait paths must be absolute (`::core::fmt::Display`, `crate::Base`; `Sized` and `?Sized` may be bare); a repeater only covers types, not traits
+error: `Base` cannot be named outside its module (a relative trait path in a bound): write the path absolutely
  --> tests/ui/trait_paths.rs:5:16
   |
 5 | pub trait Sub: Base {}
   |                ^^^^
 
-error: announce: trait paths must be absolute (`::core::fmt::Display`, `crate::Base`; `Sized` and `?Sized` may be bare); a repeater only covers types, not traits
+error: `std::fmt::Display` cannot be named outside its module (a relative trait path in a bound): write the path absolutely
   --> tests/ui/trait_paths.rs:10:16
    |
 10 |     fn show<T: std::fmt::Display>(&self, t: T);
    |                ^^^^^^^^^^^^^^^^^
 
-error: announce: trait paths must be absolute (`::core::fmt::Display`, `crate::Base`; `Sized` and `?Sized` may be bare); a repeater only covers types, not traits
+error: `Clone` cannot be named outside its module (a relative trait path in a bound): write the path absolutely
   --> tests/ui/trait_paths.rs:27:22
    |
 27 | pub struct Cloned<T: Clone>(pub T);
    |                      ^^^^^
 
-error: announce: trait paths must be absolute (`::core::fmt::Display`, `crate::Base`; `Sized` and `?Sized` may be bare); a repeater only covers types, not traits
+error: `marker::Sized` cannot be named outside its module (a relative trait path in a bound): write the path absolutely
   --> tests/ui/trait_paths.rs:31:25
    |
 31 | pub struct Qualified<T: marker::Sized>(pub T);

@@ -476,6 +476,30 @@ use proc_macro::TokenStream;
 ///   have `'a` only inside a projection. Keep `'a` in another argument (`&'a self`,
 ///   `b: &'a u8`) or write `Local` with an absolute path.
 ///
+/// ## Items that resolve in their module only
+///
+/// A failure of the analysis is an error at the definition: a relative type without a
+/// `repeater`, a relative path in a type alias, a relative trait or value path, a type
+/// that the analysis refuses, a const generic that cannot be encoded. There is one error
+/// for each offending type or path, at its tokens in the item, and no trampoline. The
+/// message says what the definer can do:
+///
+/// ```text
+/// error: `Local` cannot be named outside its module: add `repeater = ..` to the `#[announce]`, or write the path absolutely
+///  --> src/lib.rs:6:16
+///   |
+/// 6 |         pub a: Local,
+///   |                ^^^^^
+/// ```
+///
+/// A repeater does not help with a trait path, so for a failure it does not fix the message
+/// gives the reason and says to write the path absolutely. A const parameter that is not of a
+/// primitive type (`const N: Idx`, even an absolute alias) needs a primitive type:
+///
+/// ```text
+/// error: `crate::Idx` cannot be named outside its module (a const generic that is not of a primitive type): use a primitive type for the const parameter
+/// ```
+///
 /// ## What is not checked
 ///
 /// - Bodies of provided trait methods. `fn g(&self) -> u8 { helper() }` passes, but a

@@ -622,7 +622,7 @@ impl<'ast> Visit<'ast> for Fast {
 pub(crate) fn check_analysis(
     item: &Item,
     opts: &Options,
-    result: &syn::Result<Option<crate::leak::Analysis>>,
+    result: &Result<Option<crate::leak::Analysis>, crate::leak::Unleakable>,
 ) {
     if !accepts(item, opts) {
         return;
