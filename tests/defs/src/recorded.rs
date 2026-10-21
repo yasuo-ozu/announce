@@ -48,6 +48,15 @@ pub mod m {
         fn f(&self, a: Wrap<'_>) -> u8;
     }
 
+    const LEN: usize = 4;
+
+    /// Every kind of cause in one item: a relative trait path, a relative value path, a type that
+    /// type-leak refuses and relative types. They are all in the record.
+    #[announce(strict = false)]
+    pub trait Many: Base {
+        fn f(&self, a: Wrap<'_>, b: Local, c: [u8; LEN]) -> Other;
+    }
+
     /// Nothing to record.
     #[announce(strict = false)]
     pub struct Plain(pub u8);

@@ -73,7 +73,7 @@ fn the_meta_records_what_does_not_resolve() {
         failure(rows[1]),
         ["Local@without `repeater`", "Other@without `repeater`"]
     );
-    // A relative trait path is recorded as that; the type `Local` is not looked at.
+    // A relative trait path is recorded as that.
     assert_eq!(
         failure(rows[2]),
         ["Base@with a relative trait path in a bound"]
@@ -84,6 +84,35 @@ fn the_meta_records_what_does_not_resolve() {
     assert_eq!(rows[4], "table");
     // `Entry::type_leak()` is an error exactly for the records.
     assert_eq!(errs, [true, true, true, false, false]);
+}
+
+// An item with every kind of cause has all of them in its record, not only the first kind that
+// the analysis finds.
+mod many {
+    pub mod rows {
+        ::announce_test_defs::recorded::m::Many! {
+            [
+                ::announce_test_defs::recorded::m::Many!,
+                ::announce_test_derive::leak_failures!
+            ] ROWS
+        }
+    }
+}
+
+#[test]
+fn the_record_has_every_cause_of_an_item() {
+    assert_eq!(many::rows::ROWS.len(), 1);
+    assert_eq!(
+        failure(many::rows::ROWS[0]),
+        [
+            "Base@with a relative trait path in a bound",
+            "LEN@with a relative value path",
+            "Wrap<'_>@with a type that cannot be carried",
+            "Local@without `repeater`",
+            "Other@without `repeater`",
+        ]
+    );
+    assert_eq!(many::rows::ROWS_ERR, [true]);
 }
 
 #[test]

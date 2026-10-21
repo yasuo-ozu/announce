@@ -495,9 +495,11 @@ use proc_macro::TokenStream;
 /// relative type without a `repeater`, a relative path in a type alias, a relative trait or
 /// value path, a type that the analysis refuses, a const generic that cannot be encoded. There
 /// is one error for each offending type or path, at its tokens in the item and with what the
-/// definer can do. A repeater does not help with a trait path or with a const parameter that
-/// is not of a primitive type, so for those the message says to write the path absolutely or
-/// to use a primitive type.
+/// definer can do. All of them are reported at once, whatever their kind (a relative trait path
+/// does not hide a relative type); with a `repeater` the relative types are carried, so they
+/// are no error and the rest still are. A repeater does not help with a trait path or with a
+/// const parameter that is not of a primitive type, so for those the message says to write the
+/// path absolutely or to use a primitive type.
 ///
 /// ```text
 /// error: `Local` cannot be named outside its module: add `repeater = ..` to the `#[announce]`, or write the path absolutely

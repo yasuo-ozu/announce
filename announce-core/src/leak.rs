@@ -43,7 +43,10 @@
 //!
 //! What a table cannot carry is a failure ([`Table::Failed`]): an error at the definition
 //! ([`LeakFailure::to_definition_error`]), or with `strict = false` a `type_leak_error(..)` META
-//! ([`LeakFailure`]) that the call checks. Misused options stay errors.
+//! ([`LeakFailure`]) that the call checks. Misused options stay errors. A failure has every cause
+//! of the item: type-leak stops at what it refuses and shows a relative type only on success, so
+//! the analysis goes on with a copy of the item in which the causes found are replaced by what
+//! type-leak accepts (`failures`).
 
 use crate::helper::{
     LeakError, LeakFailure, TypeLeak, ALIAS as REASON_ALIAS, NOT_PRIMITIVE,
@@ -51,9 +54,11 @@ use crate::helper::{
     WITHOUT_REPEATER as REASON_WITHOUT_REPEATER,
 };
 use proc_macro2::{Ident, Span, TokenStream};
+use std::collections::{HashMap, HashSet};
 use syn::visit::Visit;
-use syn::{Item, Path, Result, Type};
-use template_quote::quote;
+use syn::visit_mut::VisitMut;
+use syn::{Expr, Item, Path, Result, Type};
+use template_quote::{quote, ToTokens};
 use type_leak::{ContextId, ImplSelf, Referrer, RepeaterSlots};
 
 pub struct Leaked {
@@ -532,11 +537,25 @@ fn analyze_full(
     ) {
         return Ok(None);
     }
-    let mut errors = check_trait_paths(item, opts.allow_std_prelude);
-    errors.extend(check_values(item, &const_param_names(item)));
-    if !errors.is_empty() {
-        return Err(Unleakable(errors));
-    }
+    let mut own = check_trait_paths(item, opts.allow_std_prelude);
+    own.extend(check_values(item, &const_param_names(item)));
+    let first = if own.is_empty() {
+        match intern(item, opts) {
+            Some(Ok(analysis)) => return Ok(Some(analysis)),
+            Some(Err(e)) => Some(e),
+            None => return Ok(None),
+        }
+    } else {
+        None
+    };
+    Err(Unleakable(failures(item, opts, own, first)))
+}
+
+/// Runs type-leak over `item`; `None` for an item that is not analysed.
+fn intern(
+    item: &Item,
+    opts: &crate::options::Options,
+) -> Option<std::result::Result<Analysis, type_leak::NotInternableError>> {
     // Primitives (optionally), `crate::` paths and (optionally) the prelude
     // are allowed.
     let mut config = type_leak::LeakerConfig::new();
@@ -574,9 +593,12 @@ fn analyze_full(
         Item::Type(a) => leaker
             .enter_generics(&a.generics, |view| syn::visit::visit_item_type(view, a))
             .map(|(context, ())| context),
-        _ => return Ok(None),
+        _ => return None,
     };
-    let context = analysed.map_err(|e| refusals(e, opts))?;
+    let context = match analysed {
+        Ok(context) => context,
+        Err(e) => return Some(Err(e)),
+    };
     // Only the required entries need a repeater; absolute paths of other
     // crates (`::other::Wrap<u8>`) are optional entries, left as written by a
     // consumer's Referrer. The order is type-leak's own, which is
@@ -584,7 +606,221 @@ fn analyze_full(
     // generics with different bounds, a generic named like a type): each has
     // its own impl and its own arguments.
     let referrer = leaker.finish();
-    Ok(Some(Analysis { referrer, context }))
+    Some(Ok(Analysis { referrer, context }))
+}
+
+/// The tokens as one string, to match nodes by what they say.
+fn text(t: &impl ToTokens) -> String {
+    t.to_token_stream().to_string()
+}
+
+/// Rewrites what is an error already into what type-leak accepts, so that it goes on to find the
+/// rest: the relative trait paths and value paths that announce's own checks found, and the types
+/// that type-leak refused. Nodes are matched by their tokens: every one of the same text is
+/// equally an error.
+#[derive(Default, Clone)]
+struct Neutralise {
+    traits: HashSet<String>,
+    values: HashSet<String>,
+    types: HashSet<String>,
+    replaced: usize,
+}
+
+impl Neutralise {
+    fn refused(&self, ty: &Type) -> bool {
+        !self.types.is_empty()
+            && (self.types.contains(&text(ty))
+                || matches!(ty, Type::Macro(m) if self.types.contains(&text(&m.mac.path))))
+    }
+}
+
+impl VisitMut for Neutralise {
+    fn visit_trait_bound_mut(&mut self, b: &mut syn::TraitBound) {
+        if self.traits.contains(&text(&b.path)) {
+            // Absolute; the arguments stay, type-leak reads the types in them.
+            if let Some(last) = b.path.segments.last().cloned() {
+                let ident = |n| syn::PathSegment::from(Ident::new(n, Span::call_site()));
+                b.path = Path {
+                    leading_colon: Some(Default::default()),
+                    segments: [ident("core"), ident("marker"), last].into_iter().collect(),
+                };
+                self.replaced += 1;
+            }
+        }
+        syn::visit_mut::visit_trait_bound_mut(self, b);
+    }
+
+    fn visit_expr_mut(&mut self, e: &mut Expr) {
+        let hit = match &*e {
+            Expr::Path(p) => p.qself.is_none() && self.values.contains(&text(&p.path)),
+            Expr::Macro(m) => self.types.contains(&text(&m.mac.path)),
+            _ => false,
+        };
+        if hit {
+            *e = syn::parse_quote!(0);
+            self.replaced += 1;
+        } else {
+            syn::visit_mut::visit_expr_mut(self, e);
+        }
+    }
+
+    fn visit_type_mut(&mut self, ty: &mut Type) {
+        if self.refused(ty) {
+            *ty = syn::parse_quote!(::core::primitive::u8);
+            self.replaced += 1;
+        } else {
+            syn::visit_mut::visit_type_mut(self, ty);
+        }
+    }
+
+    // Neither type-leak nor `check_values` reads the bodies of provided methods.
+    fn visit_trait_item_fn_mut(&mut self, f: &mut syn::TraitItemFn) {
+        self.visit_signature_mut(&mut f.sig);
+    }
+
+    fn visit_attribute_mut(&mut self, _: &mut syn::Attribute) {}
+}
+
+/// The types and paths of an item by their text after `fixes` (what type-leak saw of them): an
+/// error found in the rewritten item is reported at the tokens as written.
+struct Originals {
+    fixes: Vec<Neutralise>,
+    found: HashMap<String, TokenStream>,
+}
+
+impl<'ast> Visit<'ast> for Originals {
+    fn visit_type(&mut self, ty: &'ast Type) {
+        for fix in &mut self.fixes {
+            let mut seen = ty.clone();
+            // Not the node itself, which an error may be about.
+            syn::visit_mut::visit_type_mut(fix, &mut seen);
+            self.found
+                .entry(text(&seen))
+                .or_insert_with(|| ty.to_token_stream());
+        }
+        syn::visit::visit_type(self, ty);
+    }
+
+    fn visit_path(&mut self, p: &'ast Path) {
+        for fix in &mut self.fixes {
+            let mut seen = p.clone();
+            syn::visit_mut::visit_path_mut(fix, &mut seen);
+            self.found
+                .entry(text(&seen))
+                .or_insert_with(|| p.to_token_stream());
+        }
+        syn::visit::visit_path(self, p);
+    }
+
+    fn visit_trait_item_fn(&mut self, f: &'ast syn::TraitItemFn) {
+        self.visit_signature(&f.sig);
+    }
+
+    fn visit_attribute(&mut self, _: &'ast syn::Attribute) {}
+}
+
+/// `error` at the tokens `at`, which its texts quote.
+fn moved_to(mut error: LeakError, at: TokenStream) -> LeakError {
+    let (from, to) = (tidy(&text(&error.tokens)), tidy(&text(&at)));
+    if from != to {
+        let swap = |s: &str| s.replace(&from, &to);
+        error.message = error.message.as_deref().map(swap);
+        error.notes = error.notes.iter().map(|n| swap(n)).collect();
+        error.help = error.help.as_deref().map(swap);
+    }
+    error.tokens = at;
+    error
+}
+
+/// Every cause in an item that cannot be carried, at once. `own` is what announce's checks found,
+/// `first` what type-leak found on the item as it is, when `own` is empty.
+///
+/// type-leak reports every refusal of a pass, but a relative type (which needs a repeater) only
+/// shows in a pass that succeeds. So what is an error is replaced by what type-leak accepts
+/// ([`Neutralise`]) in a copy of the item, the paths of `own` first and the refused types after
+/// each pass, until a pass succeeds or finds nothing new. Its relative types are errors where
+/// there is no repeater. Errors are at the tokens of `item`.
+fn failures(
+    item: &Item,
+    opts: &crate::options::Options,
+    own: Vec<LeakError>,
+    first: Option<type_leak::NotInternableError>,
+) -> Vec<LeakError> {
+    let mut fix = Neutralise::default();
+    for e in &own {
+        let set = if e.reason == REASON_TRAIT_PATH {
+            &mut fix.traits
+        } else {
+            &mut fix.values
+        };
+        set.insert(text(&e.tokens));
+    }
+    let mut work = item.clone();
+    fix.visit_item_mut(&mut work);
+    let plain = fix.clone();
+    let mut refused: Vec<LeakError> = Vec::new();
+    let mut pending = first;
+    let required: Vec<Type> = loop {
+        let result = match pending.take() {
+            Some(e) => Err(e),
+            None => match intern(&work, opts) {
+                Some(result) => result,
+                None => break Vec::new(),
+            },
+        };
+        let e = match result {
+            Ok(analysis) => break analysis.required().map(|(_, t)| t.clone()).collect(),
+            Err(e) => e,
+        };
+        let mut found = 0;
+        for r in refusals(e, opts).0 {
+            let known = refused
+                .iter()
+                .any(|o| o.reason == r.reason && text(&o.tokens) == text(&r.tokens));
+            if !known {
+                fix.types.insert(text(&r.tokens));
+                refused.push(r);
+                found += 1;
+            }
+        }
+        fix.replaced = 0;
+        fix.visit_item_mut(&mut work);
+        if found == 0 || fix.replaced == 0 {
+            break Vec::new();
+        }
+    };
+    let mut originals = Originals {
+        fixes: vec![plain, fix],
+        found: HashMap::new(),
+    };
+    originals.visit_item(item);
+    let at = |e: LeakError| match originals.found.get(&text(&e.tokens)).cloned() {
+        Some(tokens) => moved_to(e, tokens),
+        None => e,
+    };
+    let mut errors = own;
+    errors.extend(refused.into_iter().map(&at));
+    if let Some(reason) = unrepeated_reason(item, opts) {
+        errors.extend(relative_errors(required.iter(), reason).into_iter().map(at));
+    }
+    errors
+}
+
+/// Why the relative types of `item` are errors, if they are: there is no repeater to carry them
+/// (a type alias has none).
+fn unrepeated_reason(item: &Item, opts: &crate::options::Options) -> Option<&'static str> {
+    if matches!(item, Item::Type(_)) {
+        Some(REASON_ALIAS)
+    } else if opts.repeater.is_none() {
+        Some(REASON_WITHOUT_REPEATER)
+    } else {
+        None
+    }
+}
+
+/// The relative types `types` as errors with `reason`.
+fn relative_errors<'a>(types: impl Iterator<Item = &'a Type>, reason: &str) -> Vec<LeakError> {
+    types.map(|ty| LeakError::new(ty, reason)).collect()
 }
 
 /// An error of type-leak's encoders, as a recorded thing.
@@ -629,10 +865,7 @@ fn unrepeated(
     analysis: &Analysis,
     reason: &str,
 ) -> Result<Option<Table>> {
-    let errors: Vec<LeakError> = analysis
-        .required()
-        .map(|(_, ty)| LeakError::new(ty, reason))
-        .collect();
+    let errors = relative_errors(analysis.required().map(|(_, ty)| ty), reason);
     if errors.is_empty() {
         Ok(None)
     } else {
@@ -1619,15 +1852,19 @@ mod tests {
 
     #[test]
     fn self_has_no_meaning_in_a_type_alias() {
-        for it in [
-            quote! { type A = Self; },
-            quote! { type A = inner::G<Self>; },
-        ] {
-            let errors = refused(it);
-            assert_eq!(errors.len(), 1);
-            assert_eq!(errors[0].0, "Self");
-            assert_eq!(errors[0].1, "with `Self` in a type alias");
-        }
+        let self_in_alias = "with `Self` in a type alias".to_string();
+        assert_eq!(
+            refused(quote! { type A = Self; }),
+            [("Self".to_string(), self_in_alias.clone())]
+        );
+        // `inner::G` is relative too, which is no less an error in an alias.
+        assert_eq!(
+            refused(quote! { type A = inner::G<Self>; }),
+            [
+                ("Self".to_string(), self_in_alias),
+                ("inner::G<Self>".to_string(), REASON_ALIAS.to_string())
+            ]
+        );
     }
 
     #[test]
@@ -1749,20 +1986,198 @@ mod tests {
         );
     }
 
+    /// What the analysis of `it` finds, as `(tokens, reason)`, in order.
+    fn causes(it: TokenStream, o: &Options) -> Vec<(String, String)> {
+        let found = refused_with(it.clone(), o);
+        // The definition records the same.
+        assert_eq!(recorded_with(it, o), found);
+        found
+    }
+
+    fn pairs(expected: &[(&str, &str)]) -> Vec<(String, String)> {
+        expected
+            .iter()
+            .map(|(t, r)| (t.to_string(), r.to_string()))
+            .collect()
+    }
+
     #[test]
-    fn other_checks_stop_before_type_leak_runs() {
-        // The relative trait path is the one thing recorded: the type is not looked at.
-        let errors = recorded(quote! { struct S<T: Base> { a: Local, b: T } });
-        assert_eq!(errors.len(), 1);
-        assert_eq!(errors[0].0, "Base");
-        // A repeater does not carry a trait path either.
-        let errors = recorded_with(
-            quote! { trait T: Base { fn f(&self) -> Local; } },
-            &with_repeater(),
+    fn every_cause_of_an_item_is_reported_at_once() {
+        let (tp, vp) = (REASON_TRAIT_PATH, REASON_VALUE_PATH);
+        let (wr, refused) = (REASON_WITHOUT_REPEATER, REASON_REFUSED);
+        // A relative trait path hides no relative type.
+        assert_eq!(
+            causes(quote! { struct S<T: Base> { a: Local, t: T } }, &opts()),
+            pairs(&[("Base", tp), ("Local", wr)])
+        );
+        // Trait path, value path, refusal and relative type.
+        let sub = quote! { trait Sub: Base { fn f(&self, a: Wrap<'_>, b: Local, c: [u8; N]); } };
+        assert_eq!(
+            causes(sub.clone(), &opts()),
+            pairs(&[
+                ("Base", tp),
+                ("N", vp),
+                ("Wrap<'_>", refused),
+                ("Local", wr)
+            ])
+        );
+        // A repeater carries the relative type: it is no error, the rest still are.
+        assert_eq!(
+            causes(sub, &with_repeater()),
+            pairs(&[("Base", tp), ("N", vp), ("Wrap<'_>", refused)])
         );
         assert_eq!(
-            errors,
-            [("Base".to_string(), REASON_TRAIT_PATH.to_string())]
+            causes(
+                quote! { struct S<T: Base> { a: Local, t: T } },
+                &with_repeater()
+            ),
+            pairs(&[("Base", tp)])
+        );
+        // A type alias is no target of type-leak: the relative type has its own reason.
+        assert_eq!(
+            causes(quote! { type A<T: Base> = Option<Local>; }, &opts()),
+            pairs(&[("Base", tp), ("Option<Local>", REASON_ALIAS)])
+        );
+        // Every relative type, every refusal.
+        assert_eq!(
+            causes(
+                quote! { struct S { a: Local, b: Wrap<'_>, c: Other, d: Vec<&'_ u8> } },
+                &opts()
+            ),
+            pairs(&[
+                ("Wrap<'_>", refused),
+                ("Vec<&'_u8>", "with the relative prelude name `Vec`"),
+                ("Local", wr),
+                ("Other", wr),
+            ])
+        );
+        // The same type twice is one error.
+        assert_eq!(
+            causes(
+                quote! { struct S { a: Local, b: Local, c: Wrap<'_>, d: Wrap<'_> } },
+                &opts()
+            ),
+            pairs(&[("Wrap<'_>", refused), ("Local", wr)])
+        );
+    }
+
+    #[test]
+    fn every_kind_of_cause_is_reported_with_the_others() {
+        let (tp, vp) = (REASON_TRAIT_PATH, REASON_VALUE_PATH);
+        let wr = REASON_WITHOUT_REPEATER;
+        let kinds = [
+            (quote! { enum E { A = N, B(Local) } }, ("N", vp)),
+            (quote! { struct S<const M: usize = N>(Local); }, ("N", vp)),
+            (
+                quote! { struct S<T>(T, Local) where T: Base; },
+                ("Base", tp),
+            ),
+            (
+                quote! { trait T { fn f(&self, x: impl Base) -> Local; } },
+                ("Base", tp),
+            ),
+            (
+                quote! { struct S(::std::boxed::Box<dyn Base>, Local); },
+                ("Base", tp),
+            ),
+            (quote! { union U { a: [u8; N], b: Local } }, ("N", vp)),
+        ];
+        for (it, cause) in kinds {
+            assert_eq!(
+                causes(it.clone(), &opts()),
+                pairs(&[cause, ("Local", wr)]),
+                "{}",
+                it
+            );
+        }
+    }
+
+    #[test]
+    fn a_neutralised_cause_does_not_change_what_is_reported_of_the_types_around() {
+        let (tp, vp) = (REASON_TRAIT_PATH, REASON_VALUE_PATH);
+        let wr = REASON_WITHOUT_REPEATER;
+        // The relative type is reported as written, with the cause in it.
+        assert_eq!(
+            causes(quote! { struct S { a: Local<[u8; N]> } }, &opts()),
+            pairs(&[("N", vp), ("Local<[u8;N]>", wr)])
+        );
+        assert_eq!(
+            causes(quote! { struct S { a: Wrap<dyn Base> } }, &opts()),
+            pairs(&[("Base", tp), ("Wrap<dynBase>", wr)])
+        );
+        // The arguments of a relative trait path are still read.
+        assert_eq!(
+            causes(quote! { struct S<T: Base<Local>>(T); }, &opts()),
+            pairs(&[("Base<Local>", tp), ("Local", wr)])
+        );
+        assert_eq!(
+            causes(
+                quote! { struct S<F: for<'a> MyFn(&'a Local) -> u8>(F); },
+                &opts()
+            ),
+            pairs(&[("MyFn(&'aLocal)->u8", tp), ("Local", wr)])
+        );
+        // A relative macro in an array length is a refusal.
+        assert_eq!(
+            causes(quote! { struct S { a: [u8; two!()], b: Local } }, &opts()),
+            pairs(&[("two", REASON_REFUSED), ("Local", wr)])
+        );
+    }
+
+    #[test]
+    fn a_refused_type_around_a_relative_one_is_reported_with_it() {
+        let wr = REASON_WITHOUT_REPEATER;
+        assert_eq!(
+            causes(quote! { struct S { a: Wrap<Foo<'_>>, b: Local } }, &opts()),
+            pairs(&[("Wrap<Foo<'_>>", REASON_REFUSED), ("Local", wr)])
+        );
+    }
+
+    #[test]
+    fn the_texts_of_a_cause_in_a_rewritten_item_are_of_the_item_as_written() {
+        let f = record(quote! { struct S { a: Local<[u8; N]> } }, &opts());
+        let local = f
+            .errors
+            .iter()
+            .find(|e| e.reason == REASON_WITHOUT_REPEATER)
+            .unwrap();
+        assert_eq!(
+            local.message.as_deref(),
+            Some("use absolute path: 'Local<[u8 ; N]>'")
+        );
+        assert!(local.help.as_deref().unwrap().contains("`Local`"));
+        assert_eq!(squash(&local.tokens), "Local<[u8;N]>");
+    }
+
+    #[test]
+    fn a_repeater_still_makes_a_table_when_only_relative_types_are_left() {
+        let it = item(quote! { struct S<T: ::core::fmt::Debug> { a: Local, b: Wrap<T> } });
+        let leaked = leaked_with(&it, &with_repeater(), 5);
+        let impls = squash(&leaked.impls);
+        assert!(impls.contains("typeType=Local;"), "{}", impls);
+        assert!(impls.contains("typeType=Wrap<T>;"), "{}", impls);
+        // A failure anywhere else is no table, and the relative types are not in the record.
+        let f = record(
+            quote! { struct S<T: Base> { a: Local, b: Wrap<T> } },
+            &with_repeater(),
+        );
+        assert_eq!(f.errors.len(), 1);
+        assert_eq!(f.errors[0].reason, REASON_TRAIT_PATH);
+    }
+
+    #[test]
+    fn the_trait_paths_are_all_reported_with_the_types() {
+        assert_eq!(
+            causes(
+                quote! { trait T: Base + inner::Other<u8> where Self: Third { fn f(&self) -> Local; } },
+                &opts()
+            ),
+            pairs(&[
+                ("Third", REASON_TRAIT_PATH),
+                ("Base", REASON_TRAIT_PATH),
+                ("inner::Other<u8>", REASON_TRAIT_PATH),
+                ("Local", REASON_WITHOUT_REPEATER),
+            ])
         );
     }
 

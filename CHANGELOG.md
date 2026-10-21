@@ -36,7 +36,9 @@
 - The definition error for a failure of the analysis is one error for each offending type or
   path, at its tokens in the item, saying what the definer can do (``add `repeater = ..` to
   the `#[announce]`, or write the path absolutely``; for a const generic that is not of a
-  primitive type, to use a primitive type).
+  primitive type, to use a primitive type). All the causes of an item are reported at once (also
+  in the record of `strict = false`): a relative trait path or value path no longer hides the
+  relative types and the refused types of the item.
 
 ## 0.2.0
 
