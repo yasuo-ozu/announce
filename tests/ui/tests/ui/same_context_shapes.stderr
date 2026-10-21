@@ -87,3 +87,18 @@ note: required by a bound in `_::Check::used_outside_its_module`
    |
 39 | m::Generic! { [m::Generic!, announce::same_context!] }
    |                   ^^^^^^^ required by this bound in `Check::used_outside_its_module`
+
+error[E0277]: use absolute path: 'UiLocal2'
+  --> tests/ui/same_context_shapes.rs:48:25
+   |
+48 |         pub a: &'static UiLocal2,
+   |                         ^^^^^^^^ relative type, not in scope where `n::Twice!` is called
+   |
+   = help: the trait `InModuleOf_Twice` is not implemented for `announce::__private::ThisCall`
+   = note: `n::Twice` is used outside its module `n`
+   = note: write `UiLocal2` with an absolute path (e.g. `crate::UiLocal2`), or add `repeater = ..` to the `#[announce]` of `Twice`
+note: required by a bound in `_::Check::used_outside_its_module`
+  --> tests/ui/same_context_shapes.rs:53:17
+   |
+53 | n::Twice! { [n::Twice!, announce::same_context!] }
+   |                 ^^^^^ required by this bound in `Check::used_outside_its_module`

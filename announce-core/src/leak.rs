@@ -41,17 +41,15 @@
 //! the payload with that `Referrer` (`announce::helper::TypeLeak::apply`), so the
 //! consumer's arguments are type-leak's too.
 //!
-//! What a table cannot carry is a failure ([`Table::Failed`]): relative types without a
-//! `repeater`, a relative path in a type alias, a type that type-leak refuses, a relative
-//! trait or value path, a const generic that cannot be encoded. By default it is an error at
-//! the definition ([`LeakFailure::to_definition_error`]). With `strict = false` it is
-//! **recorded**, not refused: a call in the module of the item can use it as written, and the
-//! call is where it fails otherwise. There is no table then: the META gets
-//! `type_leak_error(..)` ([`LeakFailure`]) instead, and the definition emits a marker that
-//! tells a call in its module from any other. Option misuse stays an error: a `repeater` on a
-//! type alias or on an item that is not analysed, and a `repeater` of another crate.
+//! What a table cannot carry is a failure ([`Table::Failed`]): an error at the definition
+//! ([`LeakFailure::to_definition_error`]), or with `strict = false` a `type_leak_error(..)` META
+//! ([`LeakFailure`]) that the call checks. Misused options stay errors.
 
-use crate::helper::{LeakError, LeakFailure, TypeLeak};
+use crate::helper::{
+    LeakError, LeakFailure, TypeLeak, ALIAS as REASON_ALIAS, NOT_PRIMITIVE,
+    REFUSED as REASON_REFUSED, TRAIT_PATH as REASON_TRAIT_PATH, VALUE_PATH as REASON_VALUE_PATH,
+    WITHOUT_REPEATER as REASON_WITHOUT_REPEATER,
+};
 use proc_macro2::{Ident, Span, TokenStream};
 use syn::visit::Visit;
 use syn::{Item, Path, Result, Type};
@@ -97,26 +95,13 @@ pub struct Unleakable(pub Vec<LeakError>);
 
 impl std::fmt::Display for Unleakable {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        for (i, e) in self.0.iter().enumerate() {
-            if i > 0 {
-                f.write_str("; ")?;
-            }
-            write!(f, "`{}` {}", tidy(&e.tokens.to_string()), e.reason)?;
-        }
-        Ok(())
+        let each = self
+            .0
+            .iter()
+            .map(|e| format!("`{}` {}", tidy(&e.tokens.to_string()), e.reason));
+        f.write_str(&each.collect::<Vec<_>>().join("; "))
     }
 }
-
-/// The reason of a relative type in a definition without a `repeater`.
-const REASON_WITHOUT_REPEATER: &str = crate::helper::WITHOUT_REPEATER;
-/// The reason of a relative trait path.
-const REASON_TRAIT_PATH: &str = crate::helper::TRAIT_PATH;
-/// The reason of a relative value path.
-const REASON_VALUE_PATH: &str = crate::helper::VALUE_PATH;
-/// The reason of a relative path on the right-hand side of a type alias.
-const REASON_ALIAS: &str = crate::helper::ALIAS;
-/// The reason of a type that type-leak refuses to carry (`Wrap<'_>`, `Local<Self>`, ..).
-const REASON_REFUSED: &str = crate::helper::REFUSED;
 
 /// The repeater must be a local trait (`crate::..` / `$crate::..`): the table
 /// implements it for `()`, which the orphan rule only allows for a local
@@ -309,6 +294,24 @@ fn check_values(item: &Item, const_params: &[String]) -> Vec<LeakError> {
     v.errors
 }
 
+/// Names of type-leak's API that its messages use for the options a user of
+/// `#[announce]` does not have.
+const API_NAMES: &[&str] = &[
+    "LeakerConfig",
+    "allow_self",
+    "allowed_paths",
+    "Leaker",
+    "Visitor",
+    "Referrer",
+    "enter_type",
+    "enter_impl",
+    "enter_trait",
+];
+
+fn names_api(text: &str) -> bool {
+    API_NAMES.iter().any(|n| text.contains(n))
+}
+
 /// Token streams print a space between every token (`inner :: G < Self :: A >`,
 /// `T : :: core :: convert :: From < G < T > >`); text with such types in it
 /// printed as one writes them.
@@ -335,24 +338,6 @@ pub(crate) fn tidy(text: &str) -> String {
         text = text.replace(from, to);
     }
     text.replace(LEADING, "::")
-}
-
-/// Names of type-leak's API that its messages use for the options a user of
-/// `#[announce]` does not have.
-const API_NAMES: &[&str] = &[
-    "LeakerConfig",
-    "allow_self",
-    "allowed_paths",
-    "Leaker",
-    "Visitor",
-    "Referrer",
-    "enter_type",
-    "enter_impl",
-    "enter_trait",
-];
-
-fn names_api(text: &str) -> bool {
-    API_NAMES.iter().any(|n| text.contains(n))
 }
 
 /// The help of type-leak without the options that name its API: "allow it
@@ -416,6 +401,19 @@ fn note_text(note: &str) -> Option<String> {
     }
 }
 
+/// The std prelude name that heads the offending type, when it is relative here
+/// (`allow_std_prelude` is off). type-leak then names the whole type, says why it
+/// cannot be leaked (`Self::Out`, `'_`, ..) and shows the absolute path of the
+/// prelude name: "use `::core::option::Option` instead of `Option`". The reason
+/// to act on is the relative name, which this finds.
+fn prelude_name(item: &type_leak::ErrorItem, opts: &crate::options::Options) -> Option<String> {
+    if opts.allow_std_prelude || !item.help_text()?.starts_with("use `") {
+        return None;
+    }
+    let name = crate::helper::cause_path(&item.tokens)?.path;
+    PRELUDE.contains(&name.as_str()).then(|| name)
+}
+
 /// The start of the note of type-leak that names what stops a relative type from being
 /// leaked: "it cannot be leaked as a whole because of `Self::Out`".
 const WHOLE_NOTE: &str = "it cannot be leaked as a whole because of ";
@@ -451,41 +449,22 @@ fn help_text(item: &type_leak::ErrorItem, opts: &crate::options::Options) -> Str
     }
 }
 
-/// The std prelude name that heads the offending type, when it is relative here
-/// (`allow_std_prelude` is off). type-leak then names the whole type, says why it
-/// cannot be leaked (`Self::Out`, `'_`, ..) and shows the absolute path of the
-/// prelude name: "use `::core::option::Option` instead of `Option`". The reason
-/// to act on is the relative name, which this finds.
-fn prelude_name(item: &type_leak::ErrorItem, opts: &crate::options::Options) -> Option<String> {
-    if opts.allow_std_prelude || !item.help_text()?.starts_with("use `") {
-        return None;
-    }
-    let name = crate::helper::cause_path(&item.tokens)?.path;
-    if PRELUDE.contains(&name.as_str()) {
-        Some(name)
-    } else {
-        None
-    }
-}
-
 /// The reason to record for one refusal of type-leak. For a prelude name it says that the
 /// name is relative, which is what the definer can change.
 fn refusal_reason(item: &type_leak::ErrorItem, opts: &crate::options::Options) -> String {
     if let Some(name) = prelude_name(item, opts) {
-        return format!("with the relative prelude name `{}`", name);
+        format!("with the relative prelude name `{}`", name)
+    } else if item.message.contains("has no meaning here") {
+        "with `Self` in a type alias".to_string()
+    } else {
+        REASON_REFUSED.to_string()
     }
-    if item.message.contains("has no meaning here") {
-        // `Self` in a type alias.
-        return "with `Self` in a type alias".to_string();
-    }
-    REASON_REFUSED.to_string()
 }
 
 /// The refusals of type-leak, one error for each offending path or type, at the tokens
 /// as written.
 fn refusals(e: type_leak::NotInternableError, opts: &crate::options::Options) -> Unleakable {
-    let mut out = Vec::new();
-    for item in e.items() {
+    let errors = e.items().map(|item| {
         // What type-leak says about the cause is what a call says: its message, why, and what
         // to write instead, in terms of `#[announce]`.
         let relative_prelude = prelude_name(&item, opts).is_some();
@@ -503,14 +482,12 @@ fn refusals(e: type_leak::NotInternableError, opts: &crate::options::Options) ->
                 notes.push(note);
             }
         }
-        out.push(
-            LeakError::new(item.tokens.clone(), refusal_reason(&item, opts))
-                .with_message(tidy(&item.message))
-                .with_notes(notes)
-                .with_help(help_text(&item, opts)),
-        );
-    }
-    Unleakable(out)
+        LeakError::new(item.tokens.clone(), refusal_reason(&item, opts))
+            .with_message(tidy(&item.message))
+            .with_notes(notes)
+            .with_help(help_text(&item, opts))
+    });
+    Unleakable(errors.collect())
 }
 
 /// Every const generic parameter declared anywhere in `item` (item, methods,
@@ -614,7 +591,7 @@ fn analyze_full(
 fn encode_error(e: &type_leak::EncodeError) -> LeakError {
     use type_leak::EncodeError;
     match e {
-        EncodeError::UnsupportedConstType(ty) => LeakError::new(ty, crate::helper::NOT_PRIMITIVE),
+        EncodeError::UnsupportedConstType(ty) => LeakError::new(ty, NOT_PRIMITIVE),
         EncodeError::UnexpectedArgument(arg) => {
             LeakError::new(arg, "with a generic argument that cannot be encoded")
         }
@@ -640,12 +617,27 @@ fn failed(item: &Item, random: u64, errors: Vec<LeakError>) -> Result<Option<Tab
     let name = syn::ext::IdentExt::unraw(&ident).to_string();
     let errors = errors.into_iter().map(|e| e.described(&name)).collect();
     let mut failure = LeakFailure::new(ident, id, errors);
-    // The crate that `#[announce]` is compiling: the definer, which the texts name for a call
-    // that is written through `$crate`.
-    if let Ok(krate) = std::env::var("CARGO_CRATE_NAME") {
-        failure = failure.with_krate(krate);
-    }
+    // The crate that `#[announce]` compiles is the definer, which the texts name for `$crate`.
+    failure.krate = std::env::var("CARGO_CRATE_NAME").ok();
     Ok(Some(Table::Failed(failure)))
+}
+
+/// The record for the types of `analysis` that need a repeater and have none, if there are any.
+fn unrepeated(
+    item: &Item,
+    random: u64,
+    analysis: &Analysis,
+    reason: &str,
+) -> Result<Option<Table>> {
+    let errors: Vec<LeakError> = analysis
+        .required()
+        .map(|(_, ty)| LeakError::new(ty, reason))
+        .collect();
+    if errors.is_empty() {
+        Ok(None)
+    } else {
+        failed(item, random, errors)
+    }
 }
 
 /// Builds the table, or records why there is none ([`Table::Failed`]). It is an error only
@@ -654,35 +646,22 @@ fn failed(item: &Item, random: u64, errors: Vec<LeakError>) -> Result<Option<Tab
 /// `None` when there is nothing to carry and nothing to record.
 pub fn table(item: &Item, opts: &crate::options::Options, random: u64) -> Result<Option<Table>> {
     let repeater = opts.repeater.as_ref();
+    let alias = matches!(item, Item::Type(_));
     // Type aliases are not a type-leak target: their right-hand side must be
     // written with paths that resolve everywhere.
-    if let Item::Type(_) = item {
-        if let Some(a) = repeater {
-            return Err(syn::Error::new_spanned(
-                a,
-                "`repeater` is not supported on type aliases; write the right-hand side with absolute paths",
-            ));
-        }
-        return match analyze(item, opts) {
-            Err(Unleakable(errors)) => failed(item, random, errors),
-            Ok(None) => Ok(None),
-            Ok(Some(analysis)) => {
-                let errors: Vec<LeakError> = analysis
-                    .required()
-                    .map(|(_, ty)| LeakError::new(ty, REASON_ALIAS))
-                    .collect();
-                if errors.is_empty() {
-                    Ok(None)
-                } else {
-                    failed(item, random, errors)
-                }
-            }
-        };
+    if let (true, Some(a)) = (alias, repeater) {
+        return Err(syn::Error::new_spanned(
+            a,
+            "`repeater` is not supported on type aliases; write the right-hand side with absolute paths",
+        ));
     }
     let analysis = match analyze(item, opts) {
         Ok(analysis) => analysis,
         Err(Unleakable(errors)) => return failed(item, random, errors),
     };
+    if alias {
+        return analysis.map_or(Ok(None), |a| unrepeated(item, random, &a, REASON_ALIAS));
+    }
     let (repeater, analysis) = match (repeater, analysis) {
         (Some(a), None) => {
             return Err(syn::Error::new_spanned(
@@ -691,17 +670,7 @@ pub fn table(item: &Item, opts: &crate::options::Options, random: u64) -> Result
             ))
         }
         (None, None) => return Ok(None),
-        (None, Some(analysis)) => {
-            let errors: Vec<LeakError> = analysis
-                .required()
-                .map(|(_, ty)| LeakError::new(ty, REASON_WITHOUT_REPEATER))
-                .collect();
-            return if errors.is_empty() {
-                Ok(None)
-            } else {
-                failed(item, random, errors)
-            };
-        }
+        (None, Some(a)) => return unrepeated(item, random, &a, REASON_WITHOUT_REPEATER),
         (Some(a), Some(analysis)) => (a, analysis),
     };
     let id = syn::LitInt::new(&format!("{}u64", random), Span::call_site());

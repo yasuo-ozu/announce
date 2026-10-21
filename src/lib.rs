@@ -63,15 +63,10 @@ pub mod machinery;
 pub mod __private {
     pub use announce_macros::{__announce_runner, finish, remove, same_context_impl, Capture};
 
-    // The parts of the check that `announce::same_context!` (and
-    // `announce::helper::LeakFailure::assume_success`) writes. The definition of an item whose
-    // types do not resolve outside its module emits a private trait with a method
-    // `__announce_ctx` for `Probe<R>` (`R` is the number of the announcement), which only the
-    // module of the item has in scope. The check calls the method on that probe: inside the
-    // module the trait's by-value method is found and gives `ThisCallInTheModule`; anywhere
-    // else only `ContextFallback` is there, which is implemented for `&Probe<R>`, so it is
-    // found only after the autoref that the by-value method does not need, and gives
-    // `ThisCall`.
+    // The parts of the check of `same_context!` and `LeakFailure::assume_success`. It calls
+    // `__announce_ctx` on a `Probe<R>`: inside the item's module the definition's private trait
+    // answers `ThisCallInTheModule`; elsewhere only `ContextFallback` is found, after an autoref,
+    // and answers `ThisCall`.
 
     /// The value that the check calls the method on.
     #[derive(Clone, Copy)]
@@ -100,19 +95,17 @@ pub mod __private {
 ///
 /// An item announced with `strict = false`, whose types do not resolve outside its module (see
 /// [Items that resolve in their module only](macro@crate::announce#items-that-resolve-in-their-module-only)),
-/// can only be used as written in that module, in the bodies of its functions and in its
-/// submodules that `use super::*`. A caller that knows it is there, and wants a clear error
-/// when it is not, puts `same_context!` in the chain, in front of the macro that uses the
-/// items:
+/// can only be used as written in that module, its function bodies and its submodules that
+/// `use super::*`. A caller that wants a clear error when it is not puts `same_context!` in
+/// the chain, in front of the macro that uses the items:
 ///
 /// ```text
 /// m::Item! { [m::Item!, announce::same_context!, my::callback!] ARGS }
 /// ```
 ///
-/// It receives the items that came before it, emits a check for each one whose definition
-/// recorded a failure, and calls the next element of the chain with its input unchanged. An
-/// item without a failure passes with no check. The check compiles where the names of the item
-/// resolve, and anywhere else it is an error:
+/// It emits a check for each item whose definition recorded a failure, and calls the next
+/// element of the chain with its input unchanged. The check compiles where the names of the
+/// item resolve, and anywhere else it is an error:
 ///
 /// ```
 /// mod m {
@@ -142,9 +135,9 @@ pub mod __private {
 /// m::Item! { [m::Item!, announce::same_context!] }
 /// ```
 ///
-/// There is one error for each cause, at the type in the definition (the whole path that it
-/// names is underlined, `Wrap<'_>` and not `Wrap`), worded like the errors of type-leak. The call
-/// is in the note that rustc adds about the bound:
+/// There is one error for each cause, at the type in the definition (the whole path is
+/// underlined), worded like the errors of type-leak. The call is in rustc's note about the
+/// bound:
 ///
 /// ```text
 /// error[E0277]: use absolute path: 'Local'
@@ -162,20 +155,19 @@ pub mod __private {
 ///    |    ^^^^ required by this bound in `Check::used_outside_its_module`
 /// ```
 ///
-/// When the item is in another crate, the error's main location is in the source of that crate.
-/// `cargo build` shows the call in the note that follows, but an editor may show only that note
-/// in your own file. A callback that emits the item (`Entry::item_resolved`) gets rustc's own
-/// "cannot find" errors for the names of the item first, at the same tokens. When the item has
-/// a relative trait path in a bound, rustc stops at the trait it cannot find before it reaches
-/// this check.
+/// When the item is in another crate, the main location is in that crate's source, and an
+/// editor may show only the note with your call.
 ///
-/// The check is emitted at an item or statement position (and in expression position, in a
-/// block). It never goes inside an `impl` or a `trait` block: Rust does not allow a
-/// `const _` among the associated items, so `impl S { Item! { [Item!, announce::same_context!,
-/// my::method_callback!] } }` fails with "`const` items in this context need a name", also in
-/// the module of the item. The answer of the check depends only on the module of the call, so a
-/// call at module level next to the impl gives the same one. Put the check there, and call the
-/// callback in the impl without it:
+/// A callback later in the chain that emits the item (`Entry::item_resolved`) outside its
+/// module gets rustc's own "cannot find type" errors for the names of the item first, at the
+/// same tokens, and the error of this check follows. When the item has a relative trait path in
+/// a bound (`trait Sub: Base`, `T: Base`), rustc stops at its "cannot find trait" error (E0405)
+/// before it reaches this check, so only rustc's error appears. `same_context!` on its own,
+/// without a callback that emits the item, is not affected.
+///
+/// The check is a `const _` item, so it never goes inside an `impl` or a `trait` block
+/// ("`const` items in this context need a name"). Put it at module level beside the impl; its
+/// answer depends only on the module of the call. Call the callback in the impl without it:
 ///
 /// ```
 /// mod m {
@@ -209,10 +201,9 @@ pub mod __private {
 /// assert_eq!(m::S.made_from_item(), 7);
 /// ```
 ///
-/// The check sees the items that have arrived at its place in the chain; an item that a later
-/// callback fetches (`Input::gather`) is not checked, so list the trampolines in front of
-/// `same_context!`. A callback of your own that wants the same check writes it with
-/// `announce::helper::Entry::item_resolved`.
+/// The check sees the items that have arrived at its place in the chain, not ones that a later
+/// callback fetches (`Input::gather`), so list the trampolines in front of it. A callback of
+/// your own that wants the same check uses `announce::helper::Entry::item_resolved`.
 #[macro_export]
 macro_rules! same_context {
     ($($input:tt)*) => {

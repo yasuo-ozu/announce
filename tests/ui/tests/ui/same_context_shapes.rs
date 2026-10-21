@@ -38,4 +38,18 @@ m::Item! { [m::Item!, announce::same_context!] }
 m::Behind! { [m::Behind!, announce::same_context!] }
 m::Generic! { [m::Generic!, announce::same_context!] }
 
+// The error shows the path of a cause only, so `&'static UiLocal2` and `UiLocal2` are one error,
+// at the first of them.
+mod n {
+    pub struct UiLocal2(pub u8);
+
+    #[announce::announce(strict = false)]
+    pub struct Twice {
+        pub a: &'static UiLocal2,
+        pub b: UiLocal2,
+    }
+}
+
+n::Twice! { [n::Twice!, announce::same_context!] }
+
 fn main() {}

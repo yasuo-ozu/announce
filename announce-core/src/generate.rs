@@ -931,18 +931,15 @@ fn trampoline_with(
     out
 }
 
-/// The marker of a recorded leak failure, next to the item: a private trait that only the
-/// module of the item (its blocks, and the modules that `use super::*`) has in scope, implemented
-/// for `Probe<random>`. The check of `LeakFailure::assume_success` calls its method on that
-/// probe, which finds this method inside the module and the `ContextFallback` of the
-/// `announce` crate everywhere else.
-fn here_marker(opts: &Options, random: u64) -> TokenStream {
+/// The marker of a recorded failure `id`, next to the item: a private trait implemented for
+/// `Probe<id>`, in scope only in the item's module. The check of `LeakFailure::assume_success`
+/// calls its method on that probe, so it finds this one there and `ContextFallback` elsewhere.
+fn here_marker(opts: &Options, random: u64, id: &syn::LitInt) -> TokenStream {
     let krate = opts.krate();
     let name = Ident::new(
         &format!("__AnnounceHere_{}", hex(random)),
         Span::call_site(),
     );
-    let id = syn::LitInt::new(&format!("{}u64", random), Span::call_site());
     quote! {
         #[doc(hidden)]
         #[allow(non_camel_case_types, dead_code)]
@@ -1083,26 +1080,25 @@ pub(crate) fn emit(
 
     // `repeater` carries the types of the item that do not resolve outside this
     // crate. When every path in the item certainly resolves everywhere there is
-    // nothing to find, and type-leak is not run. What no table can carry is an error
-    // here, or, with `strict = false`, a record in the META with a marker that a call
-    // in the module of the item can find.
+    // nothing to find, and type-leak is not run. What no table can carry fails here, or
+    // with `strict = false` is recorded in the META, with a marker for the call to find.
     let fast = opts.repeater.is_none() && crate::fastpath::accepts(item, opts);
     let (leak_impls, leak_meta, here) = if fast {
         #[cfg(test)]
         crate::fastpath::assert_agrees(item, opts);
-        (TokenStream::new(), TokenStream::new(), TokenStream::new())
+        Default::default()
     } else {
         match crate::leak::table(item, opts, random)? {
             Some(crate::leak::Table::Leaked(l)) => (l.impls, l.meta, TokenStream::new()),
-            // The default: no record, the item fails here.
             Some(crate::leak::Table::Failed(f)) if opts.strict => {
                 return Err(f.to_definition_error())
             }
-            // `strict = false`: recorded, and checked by a call.
-            Some(crate::leak::Table::Failed(f)) => {
-                (TokenStream::new(), f.meta(), here_marker(opts, random))
-            }
-            None => (TokenStream::new(), TokenStream::new(), TokenStream::new()),
+            Some(crate::leak::Table::Failed(f)) => (
+                TokenStream::new(),
+                f.meta(),
+                here_marker(opts, random, &f.id),
+            ),
+            None => Default::default(),
         }
     };
     t.step_labelled("analysis", if fast { "fast" } else { "full" });

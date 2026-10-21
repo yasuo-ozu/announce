@@ -39,10 +39,9 @@ use type_leak::{ContextId, Referrer, RepeaterSlots, UseSite};
 /// encoded too (`&'a T`), and the impl does not declare it. [`apply`](Self::apply)
 /// rewrites an item that way.
 ///
-/// A definition that could not be given a table (a relative type without a `repeater`, a
-/// relative trait path, ..) has no `type_leak(..)`. It has `type_leak_error(..)`
-/// instead ([`LeakFailure`](crate::helper::LeakFailure)), and
-/// [`Entry::type_leak`](crate::helper::Entry::type_leak) returns that as an error.
+/// A definition with no table (a failure it could not carry) has `type_leak_error(..)` instead
+/// ([`LeakFailure`](crate::helper::LeakFailure)); [`Entry::type_leak`](crate::helper::Entry::type_leak)
+/// returns that as an error.
 ///
 /// The META element is
 ///

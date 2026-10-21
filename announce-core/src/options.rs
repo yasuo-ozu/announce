@@ -87,8 +87,8 @@ pub struct Options {
     /// `false`: they are removed there, which makes the trampoline smaller.
     /// The item that is compiled keeps its docs either way.
     pub docs: bool,
-    /// `strict = false`: a type that cannot be named outside its module is recorded in the
-    /// `META`, for the call to check, and not an error at the definition. Default `true`.
+    /// `strict = false` records a type that cannot be named outside its module in the `META`
+    /// for the call to check, instead of failing at the definition. Default `true`.
     pub strict: bool,
     /// The option keys that were written (a value that is set is told from a default).
     pub(crate) given: Vec<String>,
@@ -230,7 +230,7 @@ impl Options {
     /// |---|---|
     /// | checks, `meta` | the target's, then the folder's that are not in it yet (exact duplicates dropped) |
     /// | `allow_primitive`, `allow_std_prelude`, `docs` | the OR of the two effective values (the default of `allow_primitive` is `true`, so it is `false` only when both say so) |
-    /// | `strict` | the AND of the two effective values: the default is `true`, and `strict = false` in any announcement makes the item non-strict |
+    /// | `strict` | the AND of the two effective values (`strict = false` in any announcement wins) |
     /// | `crate` | the target's if set, else the folder's: two paths that both name `announce` do not conflict |
     /// | `macro_name` | the effective names must be equal (`macro_name`, else `item`): an explicit one is kept; different names are a conflict, as one item has one trampoline |
     /// | `mock`, `repeater` | the one that is set; both set and different is a conflict |
@@ -578,17 +578,14 @@ mod tests {
 
     #[test]
     fn strict_is_true_unless_an_announcement_says_false() {
-        // Parsing: `true` by default, a bool when written, and it is a written key.
         assert!(opts("").strict);
         assert!(opts("strict = true").strict);
         assert!(!opts("strict = false").strict);
         assert_eq!(opts("a::c, strict = false").given, ["strict"]);
         let e = syn::parse_str::<Options>("strict = 1").err().unwrap();
         assert!(e.to_string().contains("expected boolean"), "{}", e);
-        // The option is in the list of the unknown-option error.
         let e = syn::parse_str::<Options>("stict = false").err().unwrap();
         assert!(e.to_string().contains("`docs`, `strict`, `meta`"), "{}", e);
-        // Printing: only `false` is written, and it is read back.
         assert_eq!(text(&opts("strict = true")), "");
         assert_eq!(text(&opts("strict = false, a::c")), "strict=false,a::c");
         assert_eq!(
@@ -602,8 +599,6 @@ mod tests {
             ..Options::default()
         };
         assert_eq!(text(&built), "strict=false");
-        // Merging: the permissive value wins, so the item is strict only when every
-        // announcement is.
         assert_eq!(merged("strict = false", ""), "strict=false");
         assert_eq!(merged("", "strict = false"), "strict=false");
         assert_eq!(merged("strict = false", "strict = false"), "strict=false");
@@ -617,7 +612,6 @@ mod tests {
         assert!(!m.strict);
         assert_eq!(m.given, ["strict"]);
         assert!(opts("").merge(&opts(""), &ident("S")).unwrap().strict);
-        // It does not conflict with anything: a merge that is not about it is unchanged.
         assert_eq!(
             merged("docs = true, a::c", "strict = false, b::c"),
             "docs=true,strict=false,a::c,b::c"
