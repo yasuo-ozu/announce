@@ -22,7 +22,8 @@ pub trait ImplRet {
     fn f(&self) -> impl Rel;
 }
 
-// ... and in `dyn` (an item reports its first such path).
+// ... but a trait object is a type, carried like one: with no `repeater` it is a relative type
+// (an error on `dyn Rel`), with one it is fine (tests/defs/src/carried.rs).
 #[announce::announce]
 pub trait DynRel {
     fn g(&self) -> ::std::boxed::Box<dyn Rel>;

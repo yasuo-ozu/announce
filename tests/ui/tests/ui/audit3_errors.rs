@@ -6,7 +6,7 @@ pub const N: usize = 3;
 #[announce::announce(repeater = ::core::marker::PhantomData)]
 pub struct NonLocal(pub Local);
 
-// #5: relative value paths cannot be covered by a repeater.
+// #5: a relative array length makes the type relative: it needs a repeater or an absolute path.
 #[announce::announce]
 pub struct RelLen(pub [u8; N]);
 

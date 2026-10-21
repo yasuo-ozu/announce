@@ -592,26 +592,51 @@ impl LeakFailure {
 
 /// Keywords that only qualify a type.
 const QUALIFIERS: &[&str] = &[
-    "dyn", "impl", "mut", "const", "for", "fn", "unsafe", "extern",
+    "dyn", "impl", "mut", "const", "for", "fn", "unsafe", "extern", "as",
 ];
 
 /// The level of `ts` (a group is its own level) that holds the first identifier that names
-/// something, and its index. `quote` is whether the previous token was a lifetime's `'`.
-fn locate(ts: &TokenStream, quote: &mut bool) -> Option<(Vec<TokenTree>, usize)> {
+/// something, and its index. With `named`, a primitive type (`u8` in `[u8; N]`) is not one, nor
+/// is an absolute path (`crate::Buf` in `crate::Buf<{ N }>`): they name nothing that could be
+/// written absolutely. `quote` is whether the previous token was a lifetime's `'`.
+fn locate(ts: &TokenStream, quote: &mut bool, named: bool) -> Option<(Vec<TokenTree>, usize)> {
     let level: Vec<TokenTree> = ts.clone().into_iter().collect();
+    let is_ident = |i: usize| matches!(level.get(i), Some(TokenTree::Ident(_)));
+    // In the segments of an absolute path.
+    let mut absolute = false;
     let mut hit = None;
     for (i, tt) in level.iter().enumerate() {
         match tt {
             TokenTree::Group(g) => {
                 *quote = false;
-                if let Some(found) = locate(&g.stream(), quote) {
+                absolute = false;
+                if let Some(found) = locate(&g.stream(), quote, named) {
                     return Some(found);
                 }
             }
-            TokenTree::Punct(p) => *quote = p.as_char() == '\'',
-            TokenTree::Literal(_) => *quote = false,
+            TokenTree::Punct(p) => {
+                *quote = p.as_char() == '\'';
+                absolute &= p.as_char() == ':';
+            }
+            TokenTree::Literal(_) => {
+                *quote = false;
+                absolute = false;
+            }
             TokenTree::Ident(id) => {
-                let skip = *quote || QUALIFIERS.contains(&id.to_string().as_str());
+                let name = id.to_string();
+                let colons = i >= 2 && is_colon(level.get(i - 1)) && is_colon(level.get(i - 2));
+                // `::a`, but not the `b` of `a::b`; a keyword such as `dyn` may come before.
+                let leading = colons
+                    && (i < 3
+                        || !(is_ident(i - 3) || is_punct(level.get(i - 3), '>'))
+                        || matches!(&level[i - 3], TokenTree::Ident(q)
+                            if QUALIFIERS.contains(&q.to_string().as_str())));
+                let head = name == "crate" || name == "$crate" || leading;
+                absolute = named && (head || (absolute && colons));
+                let skip = *quote
+                    || QUALIFIERS.contains(&name.as_str())
+                    || absolute
+                    || (named && crate::leak::PRIMITIVES.contains(&name.as_str()));
                 *quote = false;
                 if !skip {
                     hit = Some(i);
@@ -643,7 +668,8 @@ struct PathAt {
 /// Finds the path of a cause: the first identifier that names something ([`locate`]) with the
 /// leading `::`, the `::` segments and the angle-bracketed arguments around it (also `Vec::<T>`).
 fn find_path(ts: &TokenStream) -> Option<PathAt> {
-    let (level, i) = locate(ts, &mut false)?;
+    // A type of primitives only (`&'static u8`) is its primitive.
+    let (level, i) = locate(ts, &mut false, true).or_else(|| locate(ts, &mut false, false))?;
     let start = if i >= 2 && is_colon(level.get(i - 1)) && is_colon(level.get(i - 2)) {
         i - 2
     } else {
@@ -1203,6 +1229,18 @@ mod tests {
             path("Wrap < fn (u8) -> Local > :: Out"),
             some("Wrap", "Wrap<fn (u8) -> Local>", true)
         );
+        // A primitive type names nothing that can be written absolutely.
+        assert_eq!(path("[u8 ; N]"), some("N", "N", false));
+        assert_eq!(path("(u8 , Local)"), some("Local", "Local", false));
+        assert_eq!(
+            path("[u8 ; inner :: N]"),
+            some("inner::N", "inner::N", false)
+        );
+        assert_eq!(path("dyn Base"), some("Base", "Base", false));
+        assert_eq!(path("crate :: Buf < { N } >"), some("N", "N", false));
+        // ... unless there is no other path.
+        assert_eq!(path("& 'static u8"), some("u8", "u8", false));
+        assert_eq!(path("[u8 ; 4]"), some("u8", "u8", false));
         // Parenthesized arguments are not generic arguments.
         assert_eq!(path("Fn (Local) -> u8"), some("Fn", "Fn", false));
         assert_eq!(path("& 'static"), None);
@@ -1374,6 +1412,20 @@ mod tests {
             ("inner :: Wrap < fn (u8) -> Local >", "inner", ">"),
             ("* const UiWrap < '_ >", "UiWrap", ">"),
             ("Fn (Local) -> u8", "Fn", "Fn"),
+            // A primitive names nothing: the path is the constant or the type next to it.
+            ("[u8 ; N]", "N", "N"),
+            ("[u8 ; inner :: N]", "inner", "N"),
+            ("& 'a [bool ; N]", "N", "N"),
+            ("(u8 , Local)", "Local", "Local"),
+            ("(u8 , (usize , Local))", "Local", "Local"),
+            ("Wrap < { N } >", "Wrap", ">"),
+            // An absolute path names nothing relative either: the constant in it does.
+            ("crate :: Buf < { N } >", "N", "N"),
+            (":: std :: vec :: Vec < [u8 ; N] >", "N", "N"),
+            ("crate :: inner :: Buf < Local >", "Local", "Local"),
+            ("dyn :: core :: fmt :: Debug + Local", "Local", "Local"),
+            ("dyn Base + Send", "Base", "Base"),
+            ("< u8 as Tr > :: X", "Tr", "Tr"),
         ] {
             assert_eq!(
                 extent(cause),
@@ -1382,7 +1434,10 @@ mod tests {
                 cause
             );
         }
+        // Only primitives: the primitive is the path.
         assert_eq!(extent("&'static u8"), ("u8".into(), "u8".into()));
+        assert_eq!(extent("[u8 ; 4]"), ("u8".into(), "u8".into()));
+        assert_eq!(extent("(u8 , bool)"), ("u8".into(), "u8".into()));
         assert_eq!(extent("&'static"), ("&".into(), "static".into()));
         assert_eq!(extent("'a"), ("'".into(), "a".into()));
         assert_eq!(extent("* const"), ("*".into(), "const".into()));

@@ -110,6 +110,7 @@ fn the_record_has_every_cause_of_an_item() {
             "Wrap<'_>@with a type that cannot be carried",
             "Local@without `repeater`",
             "Other@without `repeater`",
+            "[u8;LEN]@without `repeater`",
         ]
     );
     assert_eq!(many::rows::ROWS_ERR, [true]);

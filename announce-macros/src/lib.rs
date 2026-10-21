@@ -444,15 +444,17 @@ use proc_macro::TokenStream;
 /// A repeater carries types only. The rest must resolve by itself:
 ///
 /// - **Trait paths**: supertraits, bounds in generics and `where` clauses, and
-///   `impl` and `dyn` bounds must be absolute. `trait Sub: Base` is an error; write
+///   `impl` bounds must be absolute. `trait Sub: Base` is an error; write
 ///   `crate::Base`. `T: std::fmt::Display` is an error too; write
 ///   `::core::fmt::Display`. `Sized` and `?Sized` may be written bare (`T: ?Sized`,
 ///   `where Self: Sized`). With `allow_std_prelude = true`, the other bare prelude
-///   traits (`Clone`, `Send`, ...) pass.
-/// - **Value paths** in array lengths, enum discriminants, const generic arguments
-///   and const defaults must be absolute (`crate::N`), start with `Self::`, or be a
-///   const parameter. `[u8; N]` with a const parameter `N` is fine; with a relative
-///   constant `N` it is an error.
+///   traits (`Clone`, `Send`, ...) pass. A trait object (`::std::boxed::Box<dyn Base>`)
+///   is a type, which the repeater carries whole.
+/// - **Value paths** in enum discriminants, const defaults and the const arguments of a
+///   bound (`T: crate::Tr<{ N }>`) must be absolute (`crate::N`), start with `Self::`, or
+///   be a const parameter. An array length or a const argument inside a type
+///   (`[u8; N]`, `Wrap<{ N }>`) is carried with the type: with a relative constant `N`
+///   the type is relative, and needs a `repeater`.
 /// - **Type aliases** must use absolute paths on the right-hand side, and take no
 ///   `repeater`. `type A = Option<Local>` is an error; write
 ///   `::core::option::Option<crate::Local>`.

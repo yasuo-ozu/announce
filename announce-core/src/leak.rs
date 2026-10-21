@@ -14,13 +14,16 @@
 //! type-leak sees the item as written. `Self` is not internable
 //! (`allow_self = false`): it has no meaning in an `impl .. for ()`, and it
 //! resolves everywhere. On top of type-leak, announce checks
-//! - trait paths (supertraits, bounds, `impl`/`dyn` bounds): absolute only,
-//! - value paths in array lengths, enum discriminants, const generic arguments
-//!   and const defaults: absolute, `Self::..` or a const parameter (a repeater
-//!   only carries types; the types named inside such an expression, as in
+//! - trait paths (supertraits, bounds, `impl` bounds): absolute only. A trait
+//!   object is a type, which type-leak carries whole,
+//! - value paths in enum discriminants, const defaults and the const arguments
+//!   of a bound: absolute, `Self::..` or a const parameter (a repeater only
+//!   carries types; the types named inside such an expression, as in
 //!   `size_of::<Local>()`, are carried like any other: type-leak reads array
 //!   lengths, const arguments, discriminants and the defaults of const
-//!   parameters, not the defaults of associated consts).
+//!   parameters, not the defaults of associated consts). An array length or a
+//!   const argument inside a type (`[u8; N]`, `Wrap<{ N }>`) is carried with
+//!   the type, which is a relative type.
 //!
 //! If any relative type remains, `repeater = ..` carries it (for type aliases,
 //! which are not a type-leak target, it is an error instead). The repeater is the
@@ -166,6 +169,12 @@ pub(crate) const PRELUDE: &[&str] = &[
     "FromIterator",
 ];
 
+/// The primitive types, as type-leak's `allow_primitive()` lists them.
+pub(crate) const PRIMITIVES: &[&str] = &[
+    "bool", "char", "str", "u8", "u16", "u32", "u64", "u128", "usize", "i8", "i16", "i32", "i64",
+    "i128", "isize", "f32", "f64",
+];
+
 fn is_absolute(p: &Path) -> bool {
     let first = p
         .segments
@@ -188,10 +197,11 @@ fn is_bare_sized(p: &Path) -> bool {
         && p.segments[0].arguments.is_none()
 }
 
-/// Trait paths (supertraits, generic and where-clause bounds, `impl`/`dyn`
-/// bounds) must be absolute: a repeater only carries *types*, so a relative
-/// trait path could never resolve at a caller (decided 2026-10-01). Bare
-/// `Sized` and `?Sized` are accepted ([`is_bare_sized`]); with
+/// Trait paths (supertraits, generic and where-clause bounds, `impl` bounds) must be
+/// absolute: a repeater only carries *types*, so a relative trait path could never
+/// resolve at a caller (decided 2026-10-01). A trait object (`dyn Base`,
+/// `Box<dyn Base + Send>`) is a type: it is carried whole, with the bounds in it, and
+/// not checked here. Bare `Sized` and `?Sized` are accepted ([`is_bare_sized`]); with
 /// `allow_std_prelude = true`, bare prelude traits are accepted too. The relative
 /// ones are returned.
 fn check_trait_paths(item: &Item, allow_prelude: bool) -> Vec<LeakError> {
@@ -214,6 +224,7 @@ fn check_trait_paths(item: &Item, allow_prelude: bool) -> Vec<LeakError> {
             }
             syn::visit::visit_trait_bound(self, b);
         }
+        fn visit_type_trait_object(&mut self, _: &'ast syn::TypeTraitObject) {}
     }
     let mut v = V {
         allow_prelude,
@@ -223,22 +234,35 @@ fn check_trait_paths(item: &Item, allow_prelude: bool) -> Vec<LeakError> {
     v.errors
 }
 
-/// Value expressions inside types and signatures (array lengths, enum
-/// discriminants, const generic arguments, const defaults) are copied to
-/// callers like the types around them, but a repeater cannot carry values:
-/// every path in them must be absolute, `Self::..`, or a const parameter. A
-/// relative array length would make type-leak carry the whole
-/// array type. The types named inside a value (`size_of::<Local>()`) are
-/// type-leak's business, not checked here. The relative paths are returned.
+/// Value expressions that are not inside a type (enum discriminants, the defaults of
+/// const parameters and of associated consts, a const argument written in the path of
+/// a bound) are copied to callers as they are, but a repeater cannot carry values:
+/// every path in them must be absolute, `Self::..`, or a const parameter. An array
+/// length or a const argument inside a type (`[u8; N]`, `Wrap<{ N }>`) is carried with
+/// the type, which then is a relative type; the types named inside a value
+/// (`size_of::<Local>()`) are type-leak's business too. The relative paths are
+/// returned.
 fn check_values(item: &Item, const_params: &[String]) -> Vec<LeakError> {
     struct V<'a> {
         consts: &'a [String],
+        in_type: usize,
         errors: Vec<LeakError>,
     }
     impl V<'_> {
         fn check(&mut self, e: &syn::Expr) {
-            struct P<'b, 'a>(&'b mut V<'a>);
+            if self.in_type > 0 {
+                return;
+            }
+            struct P<'b, 'a> {
+                v: &'b mut V<'a>,
+                in_type: usize,
+            }
             impl<'ast> Visit<'ast> for P<'_, '_> {
+                fn visit_type(&mut self, t: &'ast Type) {
+                    self.in_type += 1;
+                    syn::visit::visit_type(self, t);
+                    self.in_type -= 1;
+                }
                 fn visit_expr_path(&mut self, p: &'ast syn::ExprPath) {
                     let path = &p.path;
                     let first = path
@@ -246,23 +270,31 @@ fn check_values(item: &Item, const_params: &[String]) -> Vec<LeakError> {
                         .first()
                         .map(|s| s.ident.to_string())
                         .unwrap_or_default();
-                    let ok = p.qself.is_some()
+                    let ok = self.in_type > 0
+                        || p.qself.is_some()
                         || is_absolute(path)
                         || first == "Self"
-                        || (path.segments.len() == 1 && self.0.consts.contains(&first));
+                        || (path.segments.len() == 1 && self.v.consts.contains(&first));
                     if !ok {
-                        self.0.errors.push(LeakError::new(path, REASON_VALUE_PATH));
+                        self.v.errors.push(LeakError::new(path, REASON_VALUE_PATH));
                     }
                     syn::visit::visit_expr_path(self, p);
                 }
             }
-            Visit::visit_expr(&mut P(self), e);
+            Visit::visit_expr(
+                &mut P {
+                    v: self,
+                    in_type: 0,
+                },
+                e,
+            );
         }
     }
     impl<'ast> Visit<'ast> for V<'_> {
-        fn visit_type_array(&mut self, a: &'ast syn::TypeArray) {
-            self.check(&a.len);
-            syn::visit::visit_type_array(self, a);
+        fn visit_type(&mut self, t: &'ast Type) {
+            self.in_type += 1;
+            syn::visit::visit_type(self, t);
+            self.in_type -= 1;
         }
         fn visit_variant(&mut self, v: &'ast syn::Variant) {
             if let Some((_, e)) = &v.discriminant {
@@ -293,6 +325,7 @@ fn check_values(item: &Item, const_params: &[String]) -> Vec<LeakError> {
     }
     let mut v = V {
         consts: const_params,
+        in_type: 0,
         errors: Vec::new(),
     };
     Visit::visit_item(&mut v, item);
@@ -617,13 +650,16 @@ fn text(t: &impl ToTokens) -> String {
 /// Rewrites what is an error already into what type-leak accepts, so that it goes on to find the
 /// rest: the relative trait paths and value paths that announce's own checks found, and the types
 /// that type-leak refused. Nodes are matched by their tokens: every one of the same text is
-/// equally an error.
+/// equally an error. Where the checks look (`check_trait_paths`, `check_values`) is where this
+/// rewrites: not in a trait object, and not in a type.
 #[derive(Default, Clone)]
 struct Neutralise {
     traits: HashSet<String>,
     values: HashSet<String>,
     types: HashSet<String>,
     replaced: usize,
+    in_dyn: usize,
+    in_type: usize,
 }
 
 impl Neutralise {
@@ -636,7 +672,7 @@ impl Neutralise {
 
 impl VisitMut for Neutralise {
     fn visit_trait_bound_mut(&mut self, b: &mut syn::TraitBound) {
-        if self.traits.contains(&text(&b.path)) {
+        if self.in_dyn == 0 && self.traits.contains(&text(&b.path)) {
             // Absolute; the arguments stay, type-leak reads the types in them.
             if let Some(last) = b.path.segments.last().cloned() {
                 let ident = |n| syn::PathSegment::from(Ident::new(n, Span::call_site()));
@@ -652,7 +688,9 @@ impl VisitMut for Neutralise {
 
     fn visit_expr_mut(&mut self, e: &mut Expr) {
         let hit = match &*e {
-            Expr::Path(p) => p.qself.is_none() && self.values.contains(&text(&p.path)),
+            Expr::Path(p) => {
+                self.in_type == 0 && p.qself.is_none() && self.values.contains(&text(&p.path))
+            }
             Expr::Macro(m) => self.types.contains(&text(&m.mac.path)),
             _ => false,
         };
@@ -669,8 +707,16 @@ impl VisitMut for Neutralise {
             *ty = syn::parse_quote!(::core::primitive::u8);
             self.replaced += 1;
         } else {
+            self.in_type += 1;
             syn::visit_mut::visit_type_mut(self, ty);
+            self.in_type -= 1;
         }
+    }
+
+    fn visit_type_trait_object_mut(&mut self, t: &mut syn::TypeTraitObject) {
+        self.in_dyn += 1;
+        syn::visit_mut::visit_type_trait_object_mut(self, t);
+        self.in_dyn -= 1;
     }
 
     // Neither type-leak nor `check_values` reads the bodies of provided methods.
@@ -1237,6 +1283,19 @@ mod tests {
             recorded(quote! { trait T: Base {} }),
             [("Base".to_string(), REASON_TRAIT_PATH.to_string())]
         );
+        // `impl Trait` and the `Fn(..)` sugar of a bound are bounds.
+        assert_eq!(
+            refused(quote! { trait T { fn f(&self, x: impl Base); } }),
+            pairs(&[("Base", REASON_TRAIT_PATH)])
+        );
+        assert_eq!(
+            refused(quote! { struct S<F: Call(u8) -> u8>(F); }),
+            pairs(&[("Call(u8)->u8", REASON_TRAIT_PATH)])
+        );
+        assert_eq!(
+            refused(quote! { trait T { fn f<U: Base>(&self, u: U); } }),
+            pairs(&[("Base", REASON_TRAIT_PATH)])
+        );
         assert!(analyze(&item(quote! { trait T: crate::Base {} }), &opts()).is_ok());
         assert!(analyze(
             &item(quote! { struct S<T: ::core::fmt::Debug>(T); }),
@@ -1256,6 +1315,60 @@ mod tests {
             }
         )
         .is_ok());
+    }
+
+    #[test]
+    fn a_trait_object_is_a_type_that_is_carried() {
+        let wr = REASON_WITHOUT_REPEATER;
+        for (it, ty) in [
+            (
+                quote! { struct S { a: ::std::boxed::Box<dyn Base> } },
+                "dynBase",
+            ),
+            (
+                quote! { struct S { a: ::std::boxed::Box<dyn Base + Send> } },
+                "dynBase+Send",
+            ),
+            (
+                quote! { struct S<T> { a: ::std::boxed::Box<dyn Base<T>>, t: T } },
+                "dynBase<T>",
+            ),
+            (
+                quote! { trait T { fn f(&self, a: &(dyn Base + 'static)); } },
+                "dynBase+'static",
+            ),
+            (
+                quote! { struct S { a: ::std::boxed::Box<dyn Fn(Local) -> u8> } },
+                "dynFn(Local)->u8",
+            ),
+        ] {
+            assert!(analyze(&item(it.clone()), &opts()).is_ok(), "{}", it);
+            // No repeater: the type is a relative type, as a whole.
+            let found = causes(it.clone(), &opts());
+            assert_eq!(found.len(), 1, "{}: {:?}", it, found);
+            assert_eq!(found[0], (ty.to_string(), wr.to_string()), "{}", it);
+            // A repeater carries it.
+            assert_eq!(analysed(it.clone(), &with_repeater()), [ty], "{}", it);
+            let impls = squash(&leaked(it.clone()).impls);
+            assert!(
+                impls.contains(&format!("typeType={};", ty)),
+                "{}: {}",
+                it,
+                impls
+            );
+        }
+        // A bound in a trait object is no more looked at than the object.
+        let it = quote! { struct S<T: Base> { a: ::std::boxed::Box<dyn Base>, t: T } };
+        assert_eq!(
+            refused_with(it.clone(), &with_repeater()),
+            pairs(&[("Base", REASON_TRAIT_PATH)])
+        );
+        // An absolute trait object is no entry.
+        assert!(analysed(
+            quote! { struct S { a: ::std::boxed::Box<dyn crate::Base> } },
+            &with_repeater()
+        )
+        .is_empty());
     }
 
     #[test]
@@ -1322,32 +1435,98 @@ mod tests {
     }
 
     #[test]
-    fn value_paths_must_be_absolute() {
+    fn value_paths_must_be_absolute_outside_types() {
         for bad in [
-            quote! { struct S([u8; N]); },
             quote! { enum E { A = N } },
             quote! { struct S<const M: usize = N>; },
-            quote! { struct S(crate::Buf<{ N }>); },
             quote! { trait T { const M: usize = N; } },
+            quote! { struct S<T: ::x::Tr<{ N }>>(T); },
+            quote! { struct S<T>(T) where T: ::x::Tr<{ N }>; },
         ] {
+            let expected = pairs(&[("N", REASON_VALUE_PATH)]);
+            assert_eq!(refused(bad.clone()), expected, "{}", bad);
+            // A repeater does not carry a value.
             assert_eq!(
-                refused(bad.clone()),
-                [("N".to_string(), REASON_VALUE_PATH.to_string())],
+                refused_with(bad.clone(), &with_repeater()),
+                expected,
                 "{}",
                 bad
             );
         }
         assert_eq!(
-            recorded(quote! { struct S([u8; N]); }),
-            [("N".to_string(), REASON_VALUE_PATH.to_string())]
+            recorded(quote! { enum E { A = N } }),
+            pairs(&[("N", REASON_VALUE_PATH)])
         );
         for ok in [
             quote! { struct S([u8; crate::N]); },
             quote! { struct S<const N: usize>([u8; N]); },
             quote! { enum E { A = ::core::mem::size_of::<u8>() as isize } },
+            quote! { enum E { A = crate::N, B = 2 } },
+            quote! { struct S<const M: usize = { crate::N }>; },
+            quote! { struct S<T: ::x::Tr<{ crate::N }>>(T); },
         ] {
-            assert!(analyze(&item(ok), &opts()).is_ok());
+            let a = analyze(&item(ok.clone()), &opts());
+            assert!(a.is_ok(), "{}: {}", ok, a.err().unwrap());
         }
+    }
+
+    #[test]
+    fn values_inside_a_type_are_carried_with_it() {
+        let wr = REASON_WITHOUT_REPEATER;
+        for (it, ty) in [
+            (quote! { struct S([u8; N]); }, "[u8;N]"),
+            (quote! { struct S(crate::Buf<{ N }>); }, "crate::Buf<{N}>"),
+            (quote! { struct S(Wrap<{ N }>); }, "Wrap<{N}>"),
+            (
+                quote! { struct S { a: ::std::boxed::Box<[u8; N]> } },
+                "[u8;N]",
+            ),
+            (
+                quote! { struct S<T: ::core::convert::From<[u8; N]>>(T); },
+                "[u8;N]",
+            ),
+            (
+                quote! { trait T { fn f(&self, a: [u8; N]) -> u8; } },
+                "[u8;N]",
+            ),
+            (quote! { struct S { a: fn([u8; N]) -> u8 } }, "[u8;N]"),
+        ] {
+            assert_eq!(causes(it.clone(), &opts()), pairs(&[(ty, wr)]), "{}", it);
+            // With a repeater it is a table, and the type is the entry.
+            assert_eq!(analysed(it.clone(), &with_repeater()), [ty], "{}", it);
+            let impls = squash(&leaked(it.clone()).impls);
+            assert!(
+                impls.contains(&format!("typeType={};", ty)),
+                "{}: {}",
+                it,
+                impls
+            );
+        }
+        // Constants that are fine on their own stay so inside a type.
+        for ok in [
+            quote! { struct S<const N: usize>([u8; N]); },
+            quote! { struct S([u8; crate::N]); },
+            quote! { struct S(::std::boxed::Box<[u8; Self::N]>); },
+        ] {
+            assert!(analysed(ok, &with_repeater()).is_empty());
+        }
+        // Values outside of types are checked where a type holds one.
+        assert_eq!(
+            causes(quote! { enum E { A = M, B([u8; N]) } }, &opts()),
+            pairs(&[("M", REASON_VALUE_PATH), ("[u8;N]", wr)])
+        );
+        assert_eq!(
+            causes(quote! { enum E { A = M, B([u8; N]) } }, &with_repeater()),
+            pairs(&[("M", REASON_VALUE_PATH)])
+        );
+        // The types named in a value are carried like the others.
+        assert_eq!(
+            analysed(
+                quote! { enum E { A = ::core::mem::size_of::<[u8; N]>() as isize } },
+                &with_repeater()
+            ),
+            ["[u8;N]"]
+        );
     }
 
     #[test]
@@ -1509,15 +1688,45 @@ mod tests {
         for p in ["Local", "Other", "inner::Third"] {
             assert_eq!(text(p), help(p));
         }
-        // A trait path in the bound of a trait object has a record of its own.
-        let g = record(quote! { pub struct S { pub d: Box<dyn Fourth> } }, &opts());
+        // A trait object is a type: the trait in it is the path that the cause names.
+        let g = record(
+            quote! { pub struct S { pub d: ::std::boxed::Box<dyn Fourth> } },
+            &opts(),
+        );
         assert_eq!(
             g.errors[0].message.as_deref(),
             Some("use absolute path: 'Fourth'")
         );
         assert_eq!(
             g.errors[0].help.as_deref(),
-            Some("write `Fourth` with an absolute path (e.g. `crate::Fourth`)")
+            Some(
+                "write `Fourth` with an absolute path (e.g. `crate::Fourth`), or add \
+                 `repeater = ..` to the `#[announce]` of `S`"
+            )
+        );
+        // A primitive in the type names nothing: the path is the constant.
+        let g = record(quote! { pub struct S { pub d: [u8; N] } }, &opts());
+        assert_eq!(
+            g.errors[0].message.as_deref(),
+            Some("use absolute path: 'N'")
+        );
+        assert_eq!(
+            g.errors[0].help.as_deref(),
+            Some(
+                "write `N` with an absolute path (e.g. `crate::N`), or add `repeater = ..` to \
+                 the `#[announce]` of `S`"
+            )
+        );
+        // So does an absolute path around it.
+        let g = record(quote! { pub struct S(pub crate::Buf<{ N }>); }, &opts());
+        assert_eq!(
+            g.errors[0].message.as_deref(),
+            Some("use absolute path: 'N'")
+        );
+        let g = record(quote! { pub struct S { pub d: (u8, Local) } }, &opts());
+        assert_eq!(
+            g.errors[0].message.as_deref(),
+            Some("use absolute path: 'Local'")
         );
         // They are in the record that the callbacks read.
         let meta = squash(f.meta());
@@ -1986,11 +2195,13 @@ mod tests {
         );
     }
 
-    /// What the analysis of `it` finds, as `(tokens, reason)`, in order.
+    /// What the definition records for `it`, as `(tokens, reason)`, in order; the refusals of the
+    /// analysis are the same, where it refuses.
     fn causes(it: TokenStream, o: &Options) -> Vec<(String, String)> {
-        let found = refused_with(it.clone(), o);
-        // The definition records the same.
-        assert_eq!(recorded_with(it, o), found);
+        let found = recorded_with(it.clone(), o);
+        if analyze(&item(it.clone()), o).is_err() {
+            assert_eq!(refused_with(it, o), found);
+        }
         found
     }
 
@@ -2011,14 +2222,17 @@ mod tests {
             pairs(&[("Base", tp), ("Local", wr)])
         );
         // Trait path, value path, refusal and relative type.
-        let sub = quote! { trait Sub: Base { fn f(&self, a: Wrap<'_>, b: Local, c: [u8; N]); } };
+        let sub = quote! {
+            trait Sub: Base { const M: usize = N; fn f(&self, a: Wrap<'_>, b: Local, c: [u8; N]); }
+        };
         assert_eq!(
             causes(sub.clone(), &opts()),
             pairs(&[
                 ("Base", tp),
                 ("N", vp),
                 ("Wrap<'_>", refused),
-                ("Local", wr)
+                ("Local", wr),
+                ("[u8;N]", wr)
             ])
         );
         // A repeater carries the relative type: it is no error, the rest still are.
@@ -2069,6 +2283,11 @@ mod tests {
             (quote! { enum E { A = N, B(Local) } }, ("N", vp)),
             (quote! { struct S<const M: usize = N>(Local); }, ("N", vp)),
             (
+                quote! { trait T { const M: usize = N; fn f(&self) -> Local; } },
+                ("N", vp),
+            ),
+            (quote! { struct S<U: ::x::Tr<{ N }>>(U, Local); }, ("N", vp)),
+            (
                 quote! { struct S<T>(T, Local) where T: Base; },
                 ("Base", tp),
             ),
@@ -2077,18 +2296,24 @@ mod tests {
                 ("Base", tp),
             ),
             (
-                quote! { struct S(::std::boxed::Box<dyn Base>, Local); },
+                quote! { struct S<T: Base>(::std::boxed::Box<[u8; 2]>, T, Local); },
                 ("Base", tp),
             ),
-            (quote! { union U { a: [u8; N], b: Local } }, ("N", vp)),
+            (
+                quote! { struct S<T: Base>(::std::boxed::Box<dyn Base>, T); },
+                ("Base", tp),
+            ),
         ];
         for (it, cause) in kinds {
-            assert_eq!(
-                causes(it.clone(), &opts()),
-                pairs(&[cause, ("Local", wr)]),
-                "{}",
-                it
-            );
+            let mut expected = pairs(&[cause]);
+            // The trait object is a type: it is carried, not looked into.
+            let last = if it.to_string().contains("dyn") {
+                ("dynBase", wr)
+            } else {
+                ("Local", wr)
+            };
+            expected.extend(pairs(&[last]));
+            assert_eq!(causes(it.clone(), &opts()), expected, "{}", it);
         }
     }
 
@@ -2096,14 +2321,17 @@ mod tests {
     fn a_neutralised_cause_does_not_change_what_is_reported_of_the_types_around() {
         let (tp, vp) = (REASON_TRAIT_PATH, REASON_VALUE_PATH);
         let wr = REASON_WITHOUT_REPEATER;
-        // The relative type is reported as written, with the cause in it.
+        // Where a cause is not looked at (in a type), its text is not replaced elsewhere.
         assert_eq!(
-            causes(quote! { struct S { a: Local<[u8; N]> } }, &opts()),
+            causes(quote! { enum E { A = N, B(Local<[u8; N]>) } }, &opts()),
             pairs(&[("N", vp), ("Local<[u8;N]>", wr)])
         );
         assert_eq!(
-            causes(quote! { struct S { a: Wrap<dyn Base> } }, &opts()),
-            pairs(&[("Base", tp), ("Wrap<dynBase>", wr)])
+            causes(
+                quote! { struct S<T: Base> { a: ::std::boxed::Box<dyn Base>, b: Wrap<dyn Base>, t: T } },
+                &opts()
+            ),
+            pairs(&[("Base", tp), ("Wrap<dynBase>", wr), ("dynBase", wr)])
         );
         // The arguments of a relative trait path are still read.
         assert_eq!(
@@ -2135,7 +2363,10 @@ mod tests {
 
     #[test]
     fn the_texts_of_a_cause_in_a_rewritten_item_are_of_the_item_as_written() {
-        let f = record(quote! { struct S { a: Local<[u8; N]> } }, &opts());
+        let f = record(
+            quote! { struct S<T: Base> { a: Local<[u8; N]>, t: T } },
+            &opts(),
+        );
         let local = f
             .errors
             .iter()
