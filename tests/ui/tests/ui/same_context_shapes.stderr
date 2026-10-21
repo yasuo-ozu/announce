@@ -29,10 +29,10 @@ note: required by a bound in `_::Check::used_outside_its_module`
    |                ^^^^ required by this bound in `Check::used_outside_its_module`
 
 error[E0277]: use absolute path: 'UiShared'
-  --> tests/ui/same_context_shapes.rs:23:25
+  --> tests/ui/same_context_shapes.rs:23:16
    |
 23 |         pub a: &'static UiShared,
-   |                         ^^^^^^^^ relative type, not in scope where `m::Behind!` is called
+   |                ^^^^^^^^^^^^^^^^^ relative type, not in scope where `m::Behind!` is called
    |
    = help: the trait `_::InModuleOf_Behind` is not implemented for `announce::__private::ThisCall`
    = note: `m::Behind` is used outside its module `m`
@@ -44,10 +44,10 @@ note: required by a bound in `_::Check::used_outside_its_module`
    |                  ^^^^^^ required by this bound in `Check::used_outside_its_module`
 
 error[E0277]: use absolute path: 'UiUnique'
-  --> tests/ui/same_context_shapes.rs:25:29
+  --> tests/ui/same_context_shapes.rs:25:16
    |
 25 |         pub c: &'static mut UiUnique,
-   |                             ^^^^^^^^ relative type, not in scope where `m::Behind!` is called
+   |                ^^^^^^^^^^^^^^^^^^^^^ relative type, not in scope where `m::Behind!` is called
    |
    = help: the trait `_::InModuleOf_Behind` is not implemented for `announce::__private::ThisCall`
    = note: `m::Behind` is used outside its module `m`
@@ -89,10 +89,10 @@ note: required by a bound in `_::Check::used_outside_its_module`
    |                   ^^^^^^^ required by this bound in `Check::used_outside_its_module`
 
 error[E0277]: use absolute path: 'UiLocal2'
-  --> tests/ui/same_context_shapes.rs:48:25
+  --> tests/ui/same_context_shapes.rs:48:16
    |
 48 |         pub a: &'static UiLocal2,
-   |                         ^^^^^^^^ relative type, not in scope where `n::Twice!` is called
+   |                ^^^^^^^^^^^^^^^^^ relative type, not in scope where `n::Twice!` is called
    |
    = help: the trait `InModuleOf_Twice` is not implemented for `announce::__private::ThisCall`
    = note: `n::Twice` is used outside its module `n`

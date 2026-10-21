@@ -50,4 +50,19 @@ mod d {
     }
 }
 
+// The trait of a trait object under a reference and the trait of a qualified path cannot be
+// carried: the errors are at those paths, next to the relative type.
+mod e {
+    use super::inner::{UiBase, UiLocal};
+
+    pub trait UiAssoc {
+        type X;
+    }
+
+    #[announce::announce]
+    pub trait Objects: crate::e::UiAssoc {
+        fn f(&self, a: &dyn UiBase, b: UiLocal) -> <Self as UiAssoc>::X;
+    }
+}
+
 fn main() {}

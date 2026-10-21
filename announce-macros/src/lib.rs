@@ -497,11 +497,11 @@ use proc_macro::TokenStream;
 /// relative type without a `repeater`, a relative path in a type alias, a relative trait or
 /// value path, a type that the analysis refuses, a const generic that cannot be encoded. There
 /// is one error for each offending type or path, at its tokens in the item and with what the
-/// definer can do. All of them are reported at once, whatever their kind (a relative trait path
-/// does not hide a relative type); with a `repeater` the relative types are carried, so they
-/// are no error and the rest still are. A repeater does not help with a trait path or with a
-/// const parameter that is not of a primitive type, so for those the message says to write the
-/// path absolutely or to use a primitive type.
+/// definer can do. All of them are reported at once, whatever their kind (neither a relative
+/// trait path nor a type that the analysis refuses hides a relative type); with a `repeater` the
+/// relative types are carried, so they are no error and the rest still are. A repeater does not
+/// help with a trait path or with a const parameter that is not of a primitive type, so for those
+/// the message says to write the path absolutely or to use a primitive type.
 ///
 /// ```text
 /// error: `Local` cannot be named outside its module: add `repeater = ..` to the `#[announce]`, or write the path absolutely
@@ -522,8 +522,9 @@ use proc_macro::TokenStream;
 ///
 /// - `Entry::type_leak()` returns it as an error, wherever it is called, as a proc macro cannot
 ///   tell where that is: one plain line for each cause at the path of the trampoline in the
-///   call, such as ``this macro cannot use `m::Item`: `Local` cannot be named outside its
-///   module; add `repeater = ..` to its `#[announce]`, or write the path absolutely``.
+///   call (all of it underlined), such as ``this macro cannot use `m::Item`: `Local` cannot be
+///   named outside its module; add `repeater = ..` to its `#[announce]`, or write the path
+///   absolutely``.
 /// - `Entry::leak_failure()` returns the record.
 /// - `Entry::item_resolved(krate)` is the item to emit and what goes with it: with a table the
 ///   item rewritten, with a record the item as written and a check
@@ -539,11 +540,12 @@ use proc_macro::TokenStream;
 /// A caller that wants only the check puts `announce::same_context!` in the chain, in front of
 /// the macro that uses the items (`deflib::lm::Leaky! { [deflib::lm::Leaky!,
 /// announce::same_context!, my::callback!] REST }`). It gives one error for each cause, at the
-/// type or path in the definition (all of it underlined) and with the call in rustc's note
-/// about the bound; a type that no table can carry says so, and what to write instead. The
-/// docs of that macro show the error. The check is a `const _` item, so it never goes inside an
-/// `impl` or a `trait` block, where Rust does not allow it. Put it beside the impl, and call
-/// the callback in the impl without it; the answer depends on the module of the call only:
+/// type or path in the definition (all of it underlined, as in the error of a strict
+/// definition) and with the call in rustc's note about the bound; a type that no table can
+/// carry says so, and what to write instead. The docs of that macro show the error. The check
+/// is a `const _` item, so it never goes inside an `impl` or a `trait` block, where Rust does
+/// not allow it. Put it beside the impl, and call the callback in the impl without it; the
+/// answer depends on the module of the call only:
 ///
 /// ```text
 /// Item! { [Item!, announce::same_context!] }          // module level: the check

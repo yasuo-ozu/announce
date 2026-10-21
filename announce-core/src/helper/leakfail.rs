@@ -255,7 +255,8 @@ pub struct LeakFailure {
     /// What does not resolve.
     pub errors: Vec<LeakError>,
     /// The path the caller wrote for the trampoline, without the `!`. Its last segment carries
-    /// the call's span. The definer sets the item's name.
+    /// the call's span, and an error about the call underlines all of it. The definer sets the
+    /// item's name.
     pub path: Path,
     /// The item's name; the check's trait is named after it.
     pub ident: Ident,
@@ -316,6 +317,13 @@ impl LeakFailure {
             .map_or_else(Span::call_site, |s| s.ident.span())
     }
 
+    /// The first and the last token of [`path`](Self::path), where an error about the call starts
+    /// and ends.
+    fn call_range(&self) -> (Span, Span) {
+        cause_range(&self.path.to_token_stream())
+            .unwrap_or_else(|| (self.call_span(), self.call_span()))
+    }
+
     /// The trampoline path as the texts show it (`a::b::Item`), and its module's path (`a::b`)
     /// when it has one. A leading `$crate` is the definer's crate, or is left out when unknown.
     fn call_path(&self) -> (String, Option<String>) {
@@ -331,8 +339,9 @@ impl LeakFailure {
         (join(&segments), module)
     }
 
-    /// One error per cause at the call's span, for a callback that needs a table and has none:
-    /// "this macro cannot use `PATH`: `TYPE` cannot be named outside its module (WHY); FIX".
+    /// One error per cause at the call (all of its path is underlined), for a callback that needs
+    /// a table and has none: "this macro cannot use `PATH`: `TYPE` cannot be named outside its
+    /// module (WHY); FIX".
     pub fn to_error(&self) -> syn::Error {
         let lead = format!("this macro cannot use `{}`", self.call_path().0);
         let mut messages: Vec<String> = Vec::new();
@@ -357,9 +366,12 @@ impl LeakFailure {
                 lead
             ));
         }
-        let span = self.call_span();
-        combine(messages.into_iter().map(|m| syn::Error::new(span, m)))
-            .expect("at least one message")
+        combine(
+            messages
+                .into_iter()
+                .map(|m| syn::Error::new_spanned(&self.path, m)),
+        )
+        .expect("at least one message")
     }
 
     /// One error per cause at its tokens in the item:
@@ -416,8 +428,8 @@ impl LeakFailure {
 
     /// The check that a callback emits next to an item it uses as written. It compiles where the
     /// item's own names resolve (its module, function bodies and `use super::*` submodules) and
-    /// fails elsewhere, with one error per distinct cause that underlines the cause's whole path
-    /// in the definition. Causes are distinct by the headline of their error and their reason:
+    /// fails elsewhere, with one error per distinct cause that underlines all of the cause in the
+    /// definition. Causes are distinct by the headline of their error and their reason:
     /// `&'static Local` and `[Local; 2]` both read `'Local'` and are one cause, `Wrap<u8>` and
     /// `Wrap<u16>` are two. The first of equal causes in the order of the record gives the place.
     /// The call is in rustc's note about the bound:
@@ -450,11 +462,14 @@ impl LeakFailure {
                 label: format!("`{}!` is used outside its module", self.call_path().0),
                 notes: Vec::new(),
             };
-            return self.check(krate, text, None);
+            return self.check(krate, text, self.call_range());
         }
         causes
             .into_iter()
-            .map(|e| self.check(krate, self.cause_text(e), cause_range(&e.tokens)))
+            .map(|e| {
+                let range = cause_range(&e.tokens).unwrap_or_else(|| self.call_range());
+                self.check(krate, self.cause_text(e), range)
+            })
             .collect()
     }
 
@@ -477,9 +492,9 @@ impl LeakFailure {
         causes
     }
 
-    /// The check for one cause; `cause` is where it starts and ends in the definition. Without
-    /// it the error is at the caller's path.
-    fn check(&self, krate: &Path, text: CauseText, cause: Option<(Span, Span)>) -> TokenStream {
+    /// The check for one cause; `range` is where it starts and ends in the definition, or the
+    /// path of the call for a failure without a cause.
+    fn check(&self, krate: &Path, text: CauseText, range: (Span, Span)) -> TokenStream {
         let span = self.call_span();
         let tr = Ident::new(
             &format!("InModuleOf_{}", self.ident.unraw()),
@@ -507,10 +522,7 @@ impl LeakFailure {
         // last at the end, so the error underlines all of it. `located_at` keeps the caller's
         // hygiene, so names still resolve there.
         let respan = crate::runner::respan;
-        let (first, last) = match cause {
-            Some((start, end)) => (span.located_at(start), span.located_at(end)),
-            None => (span, span),
-        };
+        let (first, last) = (span.located_at(range.0), span.located_at(range.1));
         let paren = |inner: TokenStream, span: Span| {
             let mut group = Group::new(Delimiter::Parenthesis, inner);
             group.set_span(span);
@@ -670,17 +682,13 @@ fn find_path(ts: &TokenStream) -> Option<PathAt> {
     })
 }
 
-/// The first and last token of the path a cause names, where its error starts and ends:
-/// `Local` to `Local` for `&'static Local`, `Wrap` to `>` for `Wrap<'a, Local>`, `inner` to
-/// `Local` for `inner::Local`. A cause without a path is whole; `None` without tokens.
+/// The first and last token of a cause, where its error starts and ends: all of it, as the error
+/// at the definition ([`LeakFailure::to_definition_error`]) is. `None` without tokens.
 fn cause_extent(ts: &TokenStream) -> Option<(TokenTree, TokenTree)> {
-    match find_path(ts) {
-        Some(p) => Some((p.level[p.start].clone(), p.level[p.end - 1].clone())),
-        None => {
-            let all: Vec<TokenTree> = ts.clone().into_iter().collect();
-            Some((all.first()?.clone(), all.last()?.clone()))
-        }
-    }
+    let mut all = ts.clone().into_iter();
+    let first = all.next()?;
+    let last = all.last().unwrap_or_else(|| first.clone());
+    Some((first, last))
 }
 
 fn cause_range(ts: &TokenStream) -> Option<(Span, Span)> {
@@ -1415,71 +1423,35 @@ mod tests {
         );
     }
 
-    /// The text of the first and of the last token of a cause where its error is reported.
-    fn extent(cause: &str) -> (String, String) {
-        let (first, last) = cause_extent(&cause.parse().unwrap()).unwrap();
-        (first.to_string(), last.to_string())
-    }
-
     #[test]
-    fn the_error_of_a_cause_is_from_the_start_of_the_path_in_it_to_its_end() {
+    fn the_error_of_a_cause_is_all_of_it() {
         for (cause, first, last) in [
             ("Local", "Local", "Local"),
-            ("&'static Local", "Local", "Local"),
-            ("& 'a mut Local", "Local", "Local"),
-            ("&'static mut UiUnique", "UiUnique", "UiUnique"),
-            ("&'static UiShared", "UiShared", "UiShared"),
-            ("*const UiRaw", "UiRaw", "UiRaw"),
-            ("*mut Local", "Local", "Local"),
-            ("dyn Base", "Base", "Base"),
-            ("&'a dyn Base", "Base", "Base"),
-            ("impl Base", "Base", "Base"),
-            ("for<'a> fn(&'a Local)", "Local", "Local"),
-            ("unsafe extern \"C\" fn(Local)", "Local", "Local"),
-            ("[Local; 2]", "Local", "Local"),
-            ("(Local, u8)", "Local", "Local"),
-            ("((Local, u8), Other)", "Local", "Local"),
+            ("&'static Local", "&", "Local"),
+            ("*const UiRaw", "*", "UiRaw"),
+            ("dyn Base", "dyn", "Base"),
+            ("[Local; 2]", "[Local ; 2]", "[Local ; 2]"),
+            ("(u8 , Local)", "(u8 , Local)", "(u8 , Local)"),
             ("inner :: Local", "inner", "Local"),
-            ("crate :: inner :: Local", "crate", "Local"),
-            ("&inner :: Local", "inner", "Local"),
-            ("dyn :: core :: fmt :: Debug", ":", "Debug"),
+            (":: std :: vec :: Vec < [u8 ; N] >", ":", ">"),
             ("Wrap < 'a , Local >", "Wrap", ">"),
-            ("Wrap < Pair < Local , u8 > >", "Wrap", ">"),
-            ("& 'a Wrap < u8 > :: Out", "Wrap", ">"),
-            ("Vec :: < Local >", "Vec", ">"),
-            ("inner :: Wrap < fn (u8) -> Local >", "inner", ">"),
-            ("* const UiWrap < '_ >", "UiWrap", ">"),
-            ("Fn (Local) -> u8", "Fn", "Fn"),
-            // A primitive names nothing: the path is the constant or the type next to it.
-            ("[u8 ; N]", "N", "N"),
-            ("[u8 ; inner :: N]", "inner", "N"),
-            ("& 'a [bool ; N]", "N", "N"),
-            ("(u8 , Local)", "Local", "Local"),
-            ("(u8 , (usize , Local))", "Local", "Local"),
-            ("Wrap < { N } >", "Wrap", ">"),
-            // An absolute path names nothing relative either: the constant in it does.
-            ("crate :: Buf < { N } >", "N", "N"),
-            (":: std :: vec :: Vec < [u8 ; N] >", "N", "N"),
-            ("crate :: inner :: Buf < Local >", "Local", "Local"),
-            ("dyn :: core :: fmt :: Debug + Local", "Local", "Local"),
-            ("dyn Base + Send", "Base", "Base"),
-            ("< u8 as Tr > :: X", "Tr", "Tr"),
+            ("& 'a Wrap < u8 > :: Out", "&", "Out"),
+            ("Fn (Local) -> u8", "Fn", "u8"),
+            ("< u8 as Tr > :: X", "<", "X"),
+            ("[u8 ; N]", "[u8 ; N]", "[u8 ; N]"),
+            ("Local < N >", "Local", ">"),
+            ("&'static", "&", "static"),
+            ("'a", "'", "a"),
+            ("()", "()", "()"),
         ] {
+            let (start, end) = cause_extent(&cause.parse().unwrap()).unwrap();
             assert_eq!(
-                extent(cause),
+                (start.to_string(), end.to_string()),
                 (first.to_string(), last.to_string()),
                 "{}",
                 cause
             );
         }
-        // Only primitives: the primitive is the path.
-        assert_eq!(extent("&'static u8"), ("u8".into(), "u8".into()));
-        assert_eq!(extent("[u8 ; 4]"), ("u8".into(), "u8".into()));
-        assert_eq!(extent("(u8 , bool)"), ("u8".into(), "u8".into()));
-        assert_eq!(extent("&'static"), ("&".into(), "static".into()));
-        assert_eq!(extent("'a"), ("'".into(), "a".into()));
-        assert_eq!(extent("* const"), ("*".into(), "const".into()));
-        assert_eq!(extent("()"), ("()".into(), "()".into()));
         assert!(cause_extent(&TokenStream::new()).is_none());
         assert!(cause_range(&TokenStream::new()).is_none());
         assert!(cause_range(&"Local".parse().unwrap()).is_some());

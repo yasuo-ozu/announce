@@ -135,9 +135,9 @@ pub mod __private {
 /// m::Item! { [m::Item!, announce::same_context!] }
 /// ```
 ///
-/// There is one error for each cause, at the type in the definition (the whole path is
-/// underlined), worded like the errors of type-leak. The call is in rustc's note about the
-/// bound:
+/// There is one error for each cause, at the type in the definition (all of it is underlined,
+/// as in the error of a strict definition), worded like the errors of type-leak. The call is in
+/// rustc's note about the bound:
 ///
 /// ```text
 /// error[E0277]: use absolute path: 'Local'

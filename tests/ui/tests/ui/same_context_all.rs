@@ -16,4 +16,21 @@ mod m {
 
 m::Many! { [m::Many!, announce::same_context!] }
 
+// The trait of a trait object under a reference and the trait of a qualified path cannot be
+// carried: the check says each of them, next to the relative type.
+mod o {
+    pub struct UiLocal;
+    pub trait UiBase {}
+    pub trait UiAssoc {
+        type X;
+    }
+
+    #[announce::announce(strict = false)]
+    pub trait Objects: crate::o::UiAssoc {
+        fn f(&self, a: &dyn UiBase, b: UiLocal) -> <Self as UiAssoc>::X;
+    }
+}
+
+o::Objects! { [o::Objects!, announce::same_context!] }
+
 fn main() {}

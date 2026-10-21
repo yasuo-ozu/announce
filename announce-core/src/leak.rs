@@ -56,7 +56,7 @@ use crate::helper::{
     REFUSED as REASON_REFUSED, TRAIT_PATH as REASON_TRAIT_PATH, VALUE_PATH as REASON_VALUE_PATH,
     WITHOUT_REPEATER as REASON_WITHOUT_REPEATER,
 };
-use proc_macro2::{Ident, Span, TokenStream};
+use proc_macro2::{Ident, Span, TokenStream, TokenTree};
 use std::collections::{HashMap, HashSet};
 use syn::visit::Visit;
 use syn::visit_mut::VisitMut;
@@ -647,26 +647,87 @@ fn text(t: &impl ToTokens) -> String {
     t.to_token_stream().to_string()
 }
 
+/// The tokens of `ts` one by one, groups opened.
+fn leaves(ts: TokenStream) -> Vec<TokenTree> {
+    ts.into_iter()
+        .flat_map(|t| match t {
+            TokenTree::Group(g) => leaves(g.stream()),
+            t => vec![t],
+        })
+        .collect()
+}
+
+/// Where the tokens of `needle` (by text) are in a row in `hay`.
+fn find_tokens(hay: &[TokenTree], needle: &[String]) -> Option<usize> {
+    let same = |w: &[TokenTree]| w.iter().map(|t| t.to_string()).eq(needle.iter().cloned());
+    if needle.is_empty() {
+        return None;
+    }
+    hay.windows(needle.len()).position(same)
+}
+
 /// Rewrites what is an error already into what type-leak accepts, so that it goes on to find the
-/// rest: the relative trait paths and value paths that announce's own checks found, and the types
-/// that type-leak refused. Nodes are matched by their tokens: every one of the same text is
-/// equally an error. Where the checks look (`check_trait_paths`, `check_values`) is where this
-/// rewrites: not in a trait object, and not in a type.
+/// rest: the relative trait paths and value paths that announce's own checks found, and what
+/// type-leak refused. Nodes are matched by their tokens: every one of the same text is equally an
+/// error. A type or a value is replaced as a whole. Where only a path in it is refused (the bound
+/// of a trait object, the trait of `<Self as Tr>::X`, a macro) the smallest type or value around
+/// it is replaced, else the smallest bound, else the member that holds it (a field, a variant or
+/// an item of a trait). `opaque` also looks for the tokens of a refusal in those of a macro.
+/// Where the checks look (`check_trait_paths`, `check_values`) is where this rewrites what they
+/// found: not in a trait object, in a type or in an attribute.
 #[derive(Default, Clone)]
 struct Neutralise {
     traits: HashSet<String>,
     values: HashSet<String>,
     types: HashSet<String>,
+    /// The refusals to look for in macros, by text and by token.
+    opaque: Vec<(String, Vec<String>)>,
     replaced: usize,
+    /// Refused paths seen and not yet covered by what holds them.
+    paths: usize,
     in_dyn: usize,
     in_type: usize,
 }
 
 impl Neutralise {
-    fn refused(&self, ty: &Type) -> bool {
-        !self.types.is_empty()
-            && (self.types.contains(&text(ty))
-                || matches!(ty, Type::Macro(m) if self.types.contains(&text(&m.mac.path))))
+    fn refused(&self, node: &impl ToTokens) -> bool {
+        !self.types.is_empty() && self.types.contains(&text(node))
+    }
+
+    /// Runs `visit` over `node`. When a refused path is in it, `cover` replaces it.
+    fn covering<T>(
+        &mut self,
+        node: &mut T,
+        visit: impl FnOnce(&mut Self, &mut T),
+        cover: impl FnOnce(&mut T),
+    ) {
+        let paths = self.paths;
+        visit(self, node);
+        if self.paths > paths {
+            self.paths = paths;
+            self.replaced += 1;
+            cover(node);
+        }
+    }
+
+    /// The members of a list that have no refused path left in them.
+    fn members<T>(
+        &mut self,
+        list: impl IntoIterator<Item = T>,
+        mut visit: impl FnMut(&mut Self, &mut T),
+    ) -> Vec<T> {
+        let mut kept = Vec::new();
+        for mut member in list {
+            let paths = self.paths;
+            visit(self, &mut member);
+            if self.paths > paths {
+                self.paths = paths;
+                self.replaced += 1;
+            } else {
+                kept.push(member);
+            }
+        }
+        kept
     }
 }
 
@@ -686,31 +747,53 @@ impl VisitMut for Neutralise {
         syn::visit_mut::visit_trait_bound_mut(self, b);
     }
 
-    fn visit_expr_mut(&mut self, e: &mut Expr) {
-        let hit = match &*e {
-            Expr::Path(p) => {
-                self.in_type == 0 && p.qself.is_none() && self.values.contains(&text(&p.path))
-            }
-            Expr::Macro(m) => self.types.contains(&text(&m.mac.path)),
-            _ => false,
-        };
-        if hit {
-            *e = syn::parse_quote!(0);
-            self.replaced += 1;
-        } else {
-            syn::visit_mut::visit_expr_mut(self, e);
+    fn visit_type_param_bound_mut(&mut self, b: &mut syn::TypeParamBound) {
+        if self.in_type > 0 {
+            return syn::visit_mut::visit_type_param_bound_mut(self, b);
         }
+        self.covering(b, syn::visit_mut::visit_type_param_bound_mut, |b| {
+            *b = syn::parse_quote!(::core::marker::Sized)
+        });
+    }
+
+    fn visit_path_mut(&mut self, p: &mut Path) {
+        self.paths += usize::from(self.refused(p));
+        syn::visit_mut::visit_path_mut(self, p);
+    }
+
+    fn visit_macro_mut(&mut self, m: &mut syn::Macro) {
+        if !self.opaque.is_empty() {
+            let inside = leaves(m.tokens.clone());
+            let held = |(_, n): &(String, Vec<String>)| find_tokens(&inside, n).is_some();
+            self.paths += usize::from(self.opaque.iter().any(held));
+        }
+        syn::visit_mut::visit_macro_mut(self, m);
+    }
+
+    fn visit_expr_mut(&mut self, e: &mut Expr) {
+        let whole = self.refused(e)
+            || matches!(&*e, Expr::Path(p) if self.in_type == 0
+                && p.qself.is_none()
+                && self.values.contains(&text(&p.path)));
+        if whole {
+            self.replaced += 1;
+            return *e = syn::parse_quote!(0);
+        }
+        self.covering(e, syn::visit_mut::visit_expr_mut, |e| {
+            *e = syn::parse_quote!(0)
+        });
     }
 
     fn visit_type_mut(&mut self, ty: &mut Type) {
         if self.refused(ty) {
-            *ty = syn::parse_quote!(::core::primitive::u8);
             self.replaced += 1;
-        } else {
-            self.in_type += 1;
-            syn::visit_mut::visit_type_mut(self, ty);
-            self.in_type -= 1;
+            return *ty = syn::parse_quote!(::core::primitive::u8);
         }
+        self.in_type += 1;
+        self.covering(ty, syn::visit_mut::visit_type_mut, |ty| {
+            *ty = syn::parse_quote!(::core::primitive::u8)
+        });
+        self.in_type -= 1;
     }
 
     fn visit_type_trait_object_mut(&mut self, t: &mut syn::TypeTraitObject) {
@@ -719,12 +802,51 @@ impl VisitMut for Neutralise {
         self.in_dyn -= 1;
     }
 
+    fn visit_fields_named_mut(&mut self, f: &mut syn::FieldsNamed) {
+        let fields = std::mem::take(&mut f.named);
+        f.named = self
+            .members(fields, Self::visit_field_mut)
+            .into_iter()
+            .collect();
+    }
+
+    fn visit_fields_unnamed_mut(&mut self, f: &mut syn::FieldsUnnamed) {
+        let fields = std::mem::take(&mut f.unnamed);
+        f.unnamed = self
+            .members(fields, Self::visit_field_mut)
+            .into_iter()
+            .collect();
+    }
+
+    fn visit_item_enum_mut(&mut self, e: &mut syn::ItemEnum) {
+        let variants = std::mem::take(&mut e.variants);
+        syn::visit_mut::visit_item_enum_mut(self, e);
+        e.variants = self
+            .members(variants, Self::visit_variant_mut)
+            .into_iter()
+            .collect();
+    }
+
+    fn visit_item_trait_mut(&mut self, t: &mut syn::ItemTrait) {
+        let items = std::mem::take(&mut t.items);
+        syn::visit_mut::visit_item_trait_mut(self, t);
+        t.items = self.members(items, Self::visit_trait_item_mut);
+    }
+
     // Neither type-leak nor `check_values` reads the bodies of provided methods.
     fn visit_trait_item_fn_mut(&mut self, f: &mut syn::TraitItemFn) {
+        f.attrs.iter_mut().for_each(|a| self.visit_attribute_mut(a));
         self.visit_signature_mut(&mut f.sig);
     }
 
-    fn visit_attribute_mut(&mut self, _: &mut syn::Attribute) {}
+    // type-leak reads the values in an attribute (`#[name = Value]`); the checks do not.
+    fn visit_attribute_mut(&mut self, a: &mut syn::Attribute) {
+        self.in_dyn += 1;
+        self.in_type += 1;
+        syn::visit_mut::visit_attribute_mut(self, a);
+        self.in_dyn -= 1;
+        self.in_type -= 1;
+    }
 }
 
 /// The types and paths of an item by their text after `fixes` (what type-leak saw of them): an
@@ -758,6 +880,20 @@ impl<'ast> Visit<'ast> for Originals {
         syn::visit::visit_path(self, p);
     }
 
+    // A refusal looked for in the tokens of a macro is those tokens.
+    fn visit_macro(&mut self, m: &'ast syn::Macro) {
+        let inside = leaves(m.tokens.clone());
+        for (key, needle) in self.fixes.iter().flat_map(|fix| &fix.opaque) {
+            if let Some(at) = find_tokens(&inside, needle) {
+                let tokens = inside[at..at + needle.len()].iter().cloned();
+                self.found
+                    .entry(key.clone())
+                    .or_insert_with(|| tokens.collect());
+            }
+        }
+        syn::visit::visit_macro(self, m);
+    }
+
     fn visit_trait_item_fn(&mut self, f: &'ast syn::TraitItemFn) {
         self.visit_signature(&f.sig);
     }
@@ -778,14 +914,20 @@ fn moved_to(mut error: LeakError, at: TokenStream) -> LeakError {
     error
 }
 
+/// The most passes of [`failures`]. Every pass but the last rewrites something that is gone after
+/// it, so it ends sooner; the bound is for a rewrite that does not hold.
+const PASSES: usize = 32;
+
 /// Every cause in an item that cannot be carried, at once. `own` is what announce's checks found,
 /// `first` what type-leak found on the item as it is, when `own` is empty.
 ///
 /// type-leak reports every refusal of a pass, but a relative type (which needs a repeater) only
 /// shows in a pass that succeeds. So what is an error is replaced by what type-leak accepts
-/// ([`Neutralise`]) in a copy of the item, the paths of `own` first and the refused types after
-/// each pass, until a pass succeeds or finds nothing new. Its relative types are errors where
-/// there is no repeater. Errors are at the tokens of `item`.
+/// ([`Neutralise`]) in a copy of the item, the paths of `own` first and the refused tokens after
+/// each pass, until a pass succeeds. A pass that rewrites nothing looks for the refusals in the
+/// tokens of macros; one that still rewrites nothing is the end (the refusal is no part of the
+/// item). Its relative types are errors where there is no repeater. Errors are at the tokens of
+/// `item`.
 fn failures(
     item: &Item,
     opts: &crate::options::Options,
@@ -803,40 +945,60 @@ fn failures(
     }
     let mut work = item.clone();
     fix.visit_item_mut(&mut work);
-    let plain = fix.clone();
+    let mut fixes = vec![fix.clone()];
     let mut refused: Vec<LeakError> = Vec::new();
     let mut pending = first;
-    let required: Vec<Type> = loop {
+    let mut required: Vec<Type> = Vec::new();
+    for _ in 0..PASSES {
         let result = match pending.take() {
             Some(e) => Err(e),
             None => match intern(&work, opts) {
                 Some(result) => result,
-                None => break Vec::new(),
+                None => break,
             },
         };
         let e = match result {
-            Ok(analysis) => break analysis.required().map(|(_, t)| t.clone()).collect(),
+            Ok(analysis) => {
+                required = analysis.required().map(|(_, t)| t.clone()).collect();
+                break;
+            }
             Err(e) => e,
         };
-        let mut found = 0;
-        for r in refusals(e, opts).0 {
+        let found = refusals(e, opts).0;
+        let inside: Vec<_> = found
+            .iter()
+            .map(|r| {
+                let tokens = leaves(r.tokens.clone());
+                (
+                    text(&r.tokens),
+                    tokens.iter().map(|t| t.to_string()).collect(),
+                )
+            })
+            .collect();
+        for r in found {
             let known = refused
                 .iter()
                 .any(|o| o.reason == r.reason && text(&o.tokens) == text(&r.tokens));
             if !known {
                 fix.types.insert(text(&r.tokens));
                 refused.push(r);
-                found += 1;
             }
         }
         fix.replaced = 0;
         fix.visit_item_mut(&mut work);
-        if found == 0 || fix.replaced == 0 {
-            break Vec::new();
+        if fix.replaced == 0 {
+            fix.opaque = inside;
+            fix.visit_item_mut(&mut work);
+            fixes.push(fix.clone());
+            fix.opaque.clear();
         }
-    };
+        if fix.replaced == 0 {
+            break;
+        }
+    }
+    fixes.push(fix);
     let mut originals = Originals {
-        fixes: vec![plain, fix],
+        fixes,
         found: HashMap::new(),
     };
     originals.visit_item(item);
@@ -2355,6 +2517,311 @@ mod tests {
         assert_eq!(
             causes(quote! { struct S { a: Wrap<Foo<'_>>, b: Local } }, &opts()),
             pairs(&[("Wrap<Foo<'_>>", REASON_REFUSED), ("Local", wr)])
+        );
+    }
+
+    #[test]
+    fn a_refused_path_in_a_type_is_reported_with_the_relative_types() {
+        let (refused, wr) = (REASON_REFUSED, REASON_WITHOUT_REPEATER);
+        // The bound of a trait object that cannot be carried whole, and the trait of a qualified
+        // path, are paths, not types.
+        for (it, cause) in [
+            (
+                quote! { struct S { a: *const dyn Tr<'_>, z: Local } },
+                "Tr<'_>",
+            ),
+            (
+                quote! { union U { a: *mut dyn Tr<'_>, z: Local } },
+                "Tr<'_>",
+            ),
+            (quote! { enum E { A(&dyn Tr), B(Local) } }, "Tr"),
+            (
+                quote! { trait T { fn f(&self, a: &dyn Tr); fn z(&self) -> Local; } },
+                "Tr",
+            ),
+            (
+                quote! { struct S<T: ::core::convert::Into<*const dyn Tr<'_>>>(T, Local); },
+                "Tr<'_>",
+            ),
+            (
+                quote! { struct S { a: <Self as Other>::X, z: Local } },
+                "Other::X",
+            ),
+            (
+                quote! { trait T { fn f(&self) -> <Self as T>::A; type A; fn z(&self) -> Local; } },
+                "T::A",
+            ),
+            (
+                quote! { struct S(Local) where <Self as Other>::X: Sized; },
+                "Other::X",
+            ),
+        ] {
+            let found = causes(it.clone(), &opts());
+            assert_eq!(found, pairs(&[(cause, refused), ("Local", wr)]), "{}", it);
+            // A repeater carries the relative type; the refusal stays.
+            assert_eq!(
+                causes(it.clone(), &with_repeater()),
+                pairs(&[(cause, refused)]),
+                "{}",
+                it
+            );
+        }
+        // `Fn` is a relative prelude name.
+        assert_eq!(
+            causes(
+                quote! { struct S { a: &dyn Fn(&Wrap<'_>) -> &u8, z: Local } },
+                &opts()
+            ),
+            pairs(&[
+                ("Fn(&Wrap<'_>)->&u8", "with the relative prelude name `Fn`"),
+                ("Local", wr)
+            ])
+        );
+        // In a type alias the relative type has the reason of the alias.
+        assert_eq!(
+            causes(quote! { type A = (*const dyn Tr<'_>, Local); }, &opts()),
+            pairs(&[("Tr<'_>", refused), ("Local", REASON_ALIAS)])
+        );
+        // The relative types around it are reported at their own tokens.
+        assert_eq!(
+            causes(
+                quote! { struct S { a: (Other, *const dyn Tr<'_>), f: fn(&dyn Tr4) -> Other2, z: Local } },
+                &opts()
+            ),
+            pairs(&[
+                ("Tr<'_>", refused),
+                ("Tr4", refused),
+                ("Local", wr),
+                ("Other", wr),
+                ("Other2", wr)
+            ])
+        );
+    }
+
+    #[test]
+    fn a_refused_value_is_reported_with_the_relative_types() {
+        let (refused, wr) = (REASON_REFUSED, REASON_WITHOUT_REPEATER);
+        // `Self::X` passes the checks of announce, which type-leak does not accept.
+        for (it, cause) in [
+            (quote! { enum E { A = Self::X, B(Local) } }, "Self::X"),
+            (
+                quote! { enum E { A = <Self as Tr>::X, B(Local) } },
+                "<SelfasTr>::X",
+            ),
+            (
+                quote! { struct S<const N: usize = { Self::X }>(Local); },
+                "Self::X",
+            ),
+            (
+                quote! { trait T<const N: usize = { 1 + Self::X }> { fn z(&self) -> Local; } },
+                "Self::X",
+            ),
+            (
+                quote! { struct S<T: ::x::Tr<{ Self::X }>>(T, Local); },
+                "Self::X",
+            ),
+            (
+                quote! { struct S<T>(T, Local) where T: ::x::Tr<{ Self::X }>; },
+                "Self::X",
+            ),
+            (
+                quote! { trait T { fn f<const N: usize = { Self::X }>(&self); fn z(&self) -> Local; } },
+                "Self::X",
+            ),
+        ] {
+            assert_eq!(
+                causes(it.clone(), &opts()),
+                pairs(&[(cause, refused), ("Local", wr)]),
+                "{}",
+                it
+            );
+        }
+        // Next to the values that announce found.
+        assert_eq!(
+            causes(quote! { enum E { A = N, B = Self::X, C(Local) } }, &opts()),
+            pairs(&[
+                ("N", REASON_VALUE_PATH),
+                ("Self::X", refused),
+                ("Local", wr)
+            ])
+        );
+    }
+
+    #[test]
+    fn a_refused_attribute_value_is_reported_with_the_relative_types() {
+        let (refused, wr) = (REASON_REFUSED, REASON_WITHOUT_REPEATER);
+        // type-leak reads the value of `#[name = ..]`, where the checks of announce do not look.
+        for (it, cause) in [
+            (quote! { #[name = Wrap::X] struct S(Local); }, "Wrap::X"),
+            (
+                quote! { struct S { #[name = Wrap] a: u8, z: Local } },
+                "Wrap",
+            ),
+            (quote! { enum E { #[name = Wrap] A, B(Local) } }, "Wrap"),
+            (
+                quote! { trait T { #[name = Wrap] fn f(&self); fn z(&self) -> Local; } },
+                "Wrap",
+            ),
+            (
+                quote! { trait T { fn f(&self, #[name = Wrap] a: u8); fn z(&self) -> Local; } },
+                "Wrap",
+            ),
+            (quote! { struct S<#[name = Wrap] T>(T, Local); }, "Wrap"),
+        ] {
+            assert_eq!(
+                causes(it.clone(), &opts()),
+                pairs(&[(cause, refused), ("Local", wr)]),
+                "{}",
+                it
+            );
+        }
+    }
+
+    #[test]
+    fn a_self_in_a_macro_is_reported_with_the_relative_types() {
+        let (refused, wr) = (REASON_REFUSED, REASON_WITHOUT_REPEATER);
+        // type-leak says `Self`, which is no node of the item: it is in the tokens of the macro.
+        for it in [
+            quote! { struct S<T = m!(Self)>(T, Local); },
+            quote! { trait T<X = m!(Self)> { fn z(&self) -> Local; } },
+            quote! { struct S<T = m!(Self::A)>(Local, T); },
+        ] {
+            assert_eq!(
+                causes(it.clone(), &opts()),
+                pairs(&[("Self", refused), ("Local", wr)]),
+                "{}",
+                it
+            );
+        }
+        // Not the other macros of the item, that do not name it.
+        assert_eq!(
+            causes(
+                quote! { struct S<T = m!(Self)>(T, m!(u8), Local); },
+                &opts()
+            ),
+            pairs(&[("Self", refused), ("Local", wr), ("m!(u8)", wr)])
+        );
+    }
+
+    #[test]
+    fn every_kind_of_refused_token_is_reported_at_once() {
+        let (refused, wr) = (REASON_REFUSED, REASON_WITHOUT_REPEATER);
+        let it = quote! {
+            trait T<const N: usize = { Self::X }> {
+                #[name = Wrap]
+                fn f(&self, a: *const dyn Tr<'_>) -> <Self as Other>::X;
+                fn g<'x>(&self, b: Wrap<'x>) -> &'x u8;
+                fn h(&self) -> [u8; two!()];
+                fn z(&self) -> Local;
+            }
+        };
+        let all = pairs(&[
+            ("Self::X", refused),
+            ("Wrap", refused),
+            ("Tr<'_>", refused),
+            ("Other::X", refused),
+            ("Wrap<'x>", refused),
+            ("two", refused),
+        ]);
+        let found = causes(it.clone(), &opts());
+        assert_eq!(found.len(), 7, "{:?}", found);
+        for cause in all.iter().chain(&pairs(&[("Local", wr)])) {
+            assert!(found.contains(cause), "{:?}: {:?}", cause, found);
+        }
+        // With a repeater the relative type is carried.
+        let found = causes(it, &with_repeater());
+        assert_eq!(found.len(), 6, "{:?}", found);
+    }
+
+    #[test]
+    fn a_refused_path_is_covered_by_the_smallest_thing_that_holds_it() {
+        let cover = |refused: TokenStream, it: TokenStream| {
+            let mut it = item(it);
+            let mut fix = Neutralise {
+                types: [text(&refused)].into_iter().collect(),
+                ..Neutralise::default()
+            };
+            fix.visit_item_mut(&mut it);
+            squash(it)
+        };
+        let expect = |it: TokenStream| squash(it);
+        // A type, a value.
+        assert_eq!(
+            cover(
+                quote! { Tr<'_> },
+                quote! { struct S { a: Box<*const dyn Tr<'_>> } }
+            ),
+            expect(quote! { struct S { a: Box<*const ::core::primitive::u8> } })
+        );
+        assert_eq!(
+            cover(
+                quote! { Other::X },
+                quote! { struct S { a: <Self as Other>::X } }
+            ),
+            expect(quote! { struct S { a: ::core::primitive::u8 } })
+        );
+        assert_eq!(
+            cover(quote! { Tr }, quote! { enum E { A = size_of::<dyn Tr>() } }),
+            expect(quote! { enum E { A = size_of::<::core::primitive::u8>() } })
+        );
+        assert_eq!(
+            cover(quote! { m }, quote! { enum E { A = 1 + m!(a, b), B } }),
+            expect(quote! { enum E { A = 1 + 0, B } })
+        );
+        // A bound of the item.
+        assert_eq!(
+            cover(
+                quote! { Tr<'_> },
+                quote! { struct S<T: Tr<'_> + Send>(T) where T: Tr<'_>; }
+            ),
+            expect(quote! {
+                struct S<T: ::core::marker::Sized + Send>(T) where T: ::core::marker::Sized;
+            })
+        );
+        // The member of the item, when nothing smaller holds it.
+        assert_eq!(
+            cover(
+                quote! { Wrap },
+                quote! { struct S { pub(in Wrap) a: u8, b: u8 } }
+            ),
+            expect(quote! { struct S { b: u8 } })
+        );
+        assert_eq!(
+            cover(quote! { Wrap }, quote! { struct S(#[Wrap] u8, u8); }),
+            expect(quote! { struct S(u8); })
+        );
+        assert_eq!(
+            cover(quote! { Wrap }, quote! { enum E { #[Wrap] A, B } }),
+            expect(quote! { enum E { B } })
+        );
+        assert_eq!(
+            cover(
+                quote! { Wrap },
+                quote! { trait T { #[Wrap] fn f(&self); fn g(&self); } }
+            ),
+            expect(quote! { trait T { fn g(&self); } })
+        );
+        // The tokens of a macro, when they are looked for.
+        let opaque = |refused: &str, it: TokenStream| {
+            let mut it = item(it);
+            let mut fix = Neutralise {
+                opaque: vec![(refused.to_string(), vec![refused.to_string()])],
+                ..Neutralise::default()
+            };
+            fix.visit_item_mut(&mut it);
+            squash(it)
+        };
+        assert_eq!(
+            opaque("Wrap", quote! { struct S<T = m!(a, Wrap)>(T, n!(a)); }),
+            expect(quote! { struct S<T = ::core::primitive::u8>(T, n!(a)); })
+        );
+        assert_eq!(
+            opaque("Wrap", quote! { trait T { items!(Wrap); fn f(&self); } }),
+            expect(quote! { trait T { fn f(&self); } })
+        );
+        assert_eq!(
+            opaque("Wrap", quote! { struct S { a: m!(Wrap2) } }),
+            expect(quote! { struct S { a: m!(Wrap2) } })
         );
     }
 

@@ -75,10 +75,10 @@ note: required by a bound in `_::Check::used_outside_its_module`
    |                ^^^^ required by this bound in `Check::used_outside_its_module`
 
 error[E0277]: use absolute path: 'LEN'
-  --> tests/ui/same_context_all.rs:13:56
+  --> tests/ui/same_context_all.rs:13:51
    |
 13 |         fn f(&self, a: UiWrap<'_>, b: UiLocal, c: [u8; LEN]) -> UiOther;
-   |                                                        ^^^ relative type, not in scope where `m::Many!` is called
+   |                                                   ^^^^^^^^^ relative type, not in scope where `m::Many!` is called
    |
    = help: the trait `_::InModuleOf_Many` is not implemented for `announce::__private::ThisCall`
    = note: `m::Many` is used outside its module `m`
@@ -88,3 +88,51 @@ note: required by a bound in `_::Check::used_outside_its_module`
    |
 17 | m::Many! { [m::Many!, announce::same_context!] }
    |                ^^^^ required by this bound in `Check::used_outside_its_module`
+
+error[E0277]: use absolute path: 'UiBase'
+  --> tests/ui/same_context_all.rs:30:29
+   |
+30 |         fn f(&self, a: &dyn UiBase, b: UiLocal) -> <Self as UiAssoc>::X;
+   |                             ^^^^^^ cannot be carried, so `o::Objects!` works only in `o`
+   |
+   = help: the trait `_::InModuleOf_Objects` is not implemented for `announce::__private::ThisCall`
+   = note: `o::Objects` is used outside its module `o`
+   = note: it cannot be leaked as a whole because of `dyn UiBase`
+   = note: the lifetime of the trait object defaults to that of the enclosing reference or path
+   = note: write `UiBase` with an absolute path (e.g. `crate::UiBase`, or `::other_crate::UiBase` for an item of another crate), or name the lifetime of the trait object (e.g. `&'a dyn Trait` or `dyn Trait + 'a`)
+note: required by a bound in `_::Check::used_outside_its_module`
+  --> tests/ui/same_context_all.rs:34:19
+   |
+34 | o::Objects! { [o::Objects!, announce::same_context!] }
+   |                   ^^^^^^^ required by this bound in `Check::used_outside_its_module`
+
+error[E0277]: use absolute path: 'UiAssoc::X'
+  --> tests/ui/same_context_all.rs:30:61
+   |
+30 |         fn f(&self, a: &dyn UiBase, b: UiLocal) -> <Self as UiAssoc>::X;
+   |                                                             ^^^^^^^^^^^ cannot be carried, so `o::Objects!` works only in `o`
+   |
+   = help: the trait `_::InModuleOf_Objects` is not implemented for `announce::__private::ThisCall`
+   = note: `o::Objects` is used outside its module `o`
+   = note: it cannot be leaked as a whole because of `Self`
+   = note: write `UiAssoc::X` with an absolute path (e.g. `crate::UiAssoc::X`, or `::other_crate::UiAssoc::X` for an item of another crate)
+note: required by a bound in `_::Check::used_outside_its_module`
+  --> tests/ui/same_context_all.rs:34:19
+   |
+34 | o::Objects! { [o::Objects!, announce::same_context!] }
+   |                   ^^^^^^^ required by this bound in `Check::used_outside_its_module`
+
+error[E0277]: use absolute path: 'UiLocal'
+  --> tests/ui/same_context_all.rs:30:40
+   |
+30 |         fn f(&self, a: &dyn UiBase, b: UiLocal) -> <Self as UiAssoc>::X;
+   |                                        ^^^^^^^ relative type, not in scope where `o::Objects!` is called
+   |
+   = help: the trait `_::InModuleOf_Objects` is not implemented for `announce::__private::ThisCall`
+   = note: `o::Objects` is used outside its module `o`
+   = note: write `UiLocal` with an absolute path (e.g. `crate::UiLocal`), or add `repeater = ..` to the `#[announce]` of `Objects`
+note: required by a bound in `_::Check::used_outside_its_module`
+  --> tests/ui/same_context_all.rs:34:19
+   |
+34 | o::Objects! { [o::Objects!, announce::same_context!] }
+   |                   ^^^^^^^ required by this bound in `Check::used_outside_its_module`

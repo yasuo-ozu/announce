@@ -81,3 +81,21 @@ error: `dyn UiBase` cannot be named outside its module: add `repeater = ..` to t
    |
 49 |         pub b: ::std::boxed::Box<dyn UiBase>,
    |                                  ^^^^^^^^^^
+
+error: `UiBase` cannot be named outside its module (a type that cannot be carried): write the path absolutely
+  --> tests/ui/leak_errors_all.rs:64:29
+   |
+64 |         fn f(&self, a: &dyn UiBase, b: UiLocal) -> <Self as UiAssoc>::X;
+   |                             ^^^^^^
+
+error: `UiAssoc::X` cannot be named outside its module (a type that cannot be carried): write the path absolutely
+  --> tests/ui/leak_errors_all.rs:64:61
+   |
+64 |         fn f(&self, a: &dyn UiBase, b: UiLocal) -> <Self as UiAssoc>::X;
+   |                                                             ^^^^^^^^^^^
+
+error: `UiLocal` cannot be named outside its module: add `repeater = ..` to the `#[announce]`, or write the path absolutely
+  --> tests/ui/leak_errors_all.rs:64:40
+   |
+64 |         fn f(&self, a: &dyn UiBase, b: UiLocal) -> <Self as UiAssoc>::X;
+   |                                        ^^^^^^^

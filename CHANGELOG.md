@@ -23,7 +23,8 @@
   `syn::parse::Parse` for it (`item` is the item's name, raw identifiers included). Also
   `Entry::leak_failure()`, `Entry::item_resolved(&krate)` (the item, and the check of
   `LeakFailure::assume_success` for a record) and `same_context`, the function behind the
-  macro. `Entry::type_leak()` returns a record as an error, one line for each cause
+  macro. `Entry::type_leak()` returns a record as an error, one line for each cause, with all of
+  the path of the call underlined
   (``this macro cannot use `m::Item`: `Local` cannot be named outside its module; ..``).
   `krate` is the definer's crate as Cargo names it, which the texts use for a call written
   through `$crate` (left out when unknown). A reader skips keys and tokens it does not know.
@@ -39,7 +40,9 @@
   the `#[announce]`, or write the path absolutely``; for a const generic that is not of a
   primitive type, to use a primitive type). All the causes of an item are reported at once (also
   in the record of `strict = false`): a relative trait path or value path no longer hides the
-  relative types and the refused types of the item.
+  relative types and the refused types of the item, and nor does any refusal of type-leak (the
+  trait of a `&dyn Trait` or of `<Self as Tr>::X`, `Self::X` as a value, a `Self` in a macro, a
+  path in an attribute value).
 - A trait object (`dyn Base`) and the constants inside a type (`[u8; N]`, `Wrap<{ N }>`) are
   carried with the type by a `repeater`, instead of being errors for their trait or value path;
   without a `repeater` they are relative types. Trait paths in bounds and `impl Trait`, and value
