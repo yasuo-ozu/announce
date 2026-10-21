@@ -31,7 +31,6 @@ use announce::helper::{
     Entry,
     Gather,
     Input,
-    KvArgs,
     LeakError,
     LeakFailure,
     Meta,
@@ -50,6 +49,7 @@ use announce::helper::{attrs, leak, type_leak};
 // `tests/user` through `tests/derive`.
 
 use proc_macro2::TokenStream;
+use syn::parse::ParseStream;
 use template_quote::ToTokens;
 
 fn squash(ts: impl ToTokens) -> String {
@@ -85,9 +85,10 @@ fn input_entries_and_conts() {
     assert!(entry.type_leak().unwrap().is_none());
     let meta: &Meta = entry.find_meta("info").unwrap();
     assert_eq!(meta.name_values().unwrap().len(), 1);
-    let mut kv: KvArgs = meta.kv().unwrap();
-    assert_eq!(squash(kv.tokens("k").unwrap()), "v");
-    kv.finish().unwrap();
+    let args: TokenStream = meta
+        .parse_args_with(|input: ParseStream| input.parse())
+        .unwrap();
+    assert_eq!(squash(args), "k=v");
     assert!(matches!(entry.item().unwrap(), syn::Item::Trait(_)));
     assert!(entry.item_without_owned_attrs().is_ok());
     assert_eq!(input.entries_in_order().count(), 1);
@@ -283,8 +284,7 @@ fn type_leak_and_transformers() {
     let site = type_leak::UseSite::identity();
     let args = tl.entry_args(0, &site).unwrap();
     assert!(squash(tl.projection(0, &args)).contains("::my::R"));
-    let meta: Meta = syn::parse2(tl.meta()).unwrap();
-    let back = TypeLeak::from_kv(&mut meta.kv().unwrap()).unwrap();
+    let back: TypeLeak = syn::parse2(tl.meta()).unwrap();
     let mut applied = syn::Item::Struct(item.clone());
     back.apply(&mut applied);
     assert!(squash(&applied).contains("::my::R"), "{}", squash(&applied));
@@ -305,6 +305,7 @@ fn recorded_leak_failure() {
         [cb!]
         deflib::lm::Leaky! => [
             type_leak_error(id = 42u64,
+                            item = Leaky,
                             errors = [(Local) "without `repeater`" {
                                 message = "use absolute path: 'Local'",
                                 notes = ["a note"],
@@ -401,25 +402,14 @@ fn recorded_leak_failure() {
             "with a relative trait path in a bound",
         )],
     );
-    let meta: Meta = syn::parse2(written.meta()).unwrap();
-    let read = LeakFailure::from_kv(
-        &mut meta.kv().unwrap(),
-        syn::parse_quote!(a::S),
-        syn::parse_quote!(S),
-    )
-    .unwrap();
+    let read: LeakFailure = syn::parse2(written.meta()).unwrap();
+    assert_eq!(read.ident, "S");
     assert_eq!(squash(&read.errors[0].tokens), "super::Other<u8>");
     assert_eq!(read.krate, None);
 
     // With the crate of the definer, which is read back and written again.
     let written = written.with_krate("deflib");
-    let meta: Meta = syn::parse2(written.meta()).unwrap();
-    let read = LeakFailure::from_kv(
-        &mut meta.kv().unwrap(),
-        syn::parse_quote!(a::S),
-        syn::parse_quote!(S),
-    )
-    .unwrap();
+    let read: LeakFailure = syn::parse2(written.meta()).unwrap();
     assert_eq!(read.krate.as_deref(), Some("deflib"));
     assert!(squash(read.meta()).ends_with(",krate=\"deflib\")"));
 }
@@ -432,6 +422,7 @@ fn recorded_leak_failure_is_read_with_what_a_later_version_adds() {
         [cb!]
         deflib::lm::Leaky! => [
             type_leak_error(id = 42u64,
+                            item = Leaky,
                             future = Vec<u8, A>,
                             errors = [(Local) "without `repeater`" {
                                 message = "m",

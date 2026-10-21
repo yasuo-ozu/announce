@@ -7,11 +7,11 @@
 //! ([`same_context()`]) emit [`LeakFailure::assume_success`], and
 //! [`Entry::type_leak`](crate::helper::Entry::type_leak) returns [`LeakFailure::to_error`].
 
-use crate::helper::KvArgs;
+use crate::helper::keys::{bracketed_list, once, read_keys, skip_to_comma};
 use proc_macro2::{Delimiter, Group, Ident, Span, TokenStream, TokenTree};
 use syn::ext::IdentExt;
-use syn::parse::{ParseStream, Parser};
-use syn::{Item, LitInt, LitStr, Path, Result, Token};
+use syn::parse::{Parse, ParseStream, Parser};
+use syn::{Error, LitInt, LitStr, Path, Result, Token};
 use template_quote::{quote, ToTokens};
 
 // The reasons of a cause (`LeakError::reason`). The first four are names that resolve in the
@@ -90,36 +90,6 @@ fn what(e: &LeakError) -> String {
     } else {
         format!("`{}`", ty)
     }
-}
-
-/// Reads the braces of an error: `message`, `notes` and `help`, each optional.
-fn read_texts(input: ParseStream, error: &mut LeakError) -> Result<()> {
-    // No `finish()`: keys and flags that a later version adds are skipped, whatever their value.
-    let mut kv: KvArgs = input.parse()?;
-    error.message = kv.get::<LitStr>("message")?.map(|s| s.value());
-    if let Some(notes) = kv.list::<LitStr>("notes")? {
-        error.notes = notes.iter().map(LitStr::value).collect();
-    }
-    error.help = kv.get::<LitStr>("help")?.map(|s| s.value());
-    Ok(())
-}
-
-/// Skips what a later version adds after an error, up to the next `,` outside groups and `<..>`.
-fn skip_to_comma(input: ParseStream) -> Result<()> {
-    let (mut depth, mut arrow) = (0usize, false);
-    while !input.is_empty() && !(depth == 0 && input.peek(Token![,])) {
-        let c = match input.parse::<TokenTree>()? {
-            TokenTree::Punct(p) => Some(p.as_char()),
-            _ => None,
-        };
-        match c {
-            Some('<') => depth += 1,
-            Some('>') if !arrow => depth = depth.saturating_sub(1),
-            _ => {}
-        }
-        arrow = c == Some('-');
-    }
-    Ok(())
 }
 
 /// What the definer could not carry: tokens of the definition, a short reason, and the texts of
@@ -222,11 +192,43 @@ impl LeakError {
     }
 }
 
+impl Parse for LeakError {
+    /// Reads `(TOKENS) "reason"`, then optional `{ message = "..", notes = [".."], help = ".." }`
+    /// and, up to the next `,`, what a later version adds.
+    fn parse(input: ParseStream) -> Result<Self> {
+        let tokens;
+        syn::parenthesized!(tokens in input);
+        let tokens: TokenStream = tokens.parse()?;
+        let reason: LitStr = input.parse()?;
+        let mut error = LeakError::new(tokens, reason.value());
+        if input.peek(syn::token::Brace) {
+            let texts;
+            syn::braced!(texts in input);
+            let (mut message, mut notes, mut help) = (None, None, None);
+            read_keys(&texts, &["message", "notes", "help"], |key, input| {
+                if key == "message" {
+                    once(&mut message, key, input.parse::<LitStr>()?.value())
+                } else if key == "notes" {
+                    let list = bracketed_list::<LitStr>(input)?;
+                    once(&mut notes, key, list.iter().map(LitStr::value).collect())
+                } else {
+                    once(&mut help, key, input.parse::<LitStr>()?.value())
+                }
+            })?;
+            error.message = message;
+            error.notes = notes.unwrap_or_default();
+            error.help = help;
+        }
+        skip_to_comma(input)?;
+        Ok(error)
+    }
+}
+
 /// The record of a definition that has no type-leak table: the `type_leak_error(..)` META element
 /// of an entry ([`Entry::leak_failure`](crate::helper::Entry::leak_failure)).
 ///
 /// ```text
-/// type_leak_error(id = 42u64,
+/// type_leak_error(id = 42u64, item = Holder,
 ///                 errors = [(Local) "without `repeater`" { message = "..", notes = [".."], help = ".." },
 ///                           (Base) "with a relative trait path in a bound"],
 ///                 krate = "lib")
@@ -235,14 +237,16 @@ impl LeakError {
 /// - `id`: the announcement's random number, the `R` of the private marker that the definer emits
 ///   next to the item. [`assume_success`](Self::assume_success) calls the marker's method on
 ///   `announce::__private::Probe<R>`, which only the item's module has in scope.
+/// - `item`: the item's name; the check's trait is named after it. A raw identifier is kept.
 /// - `errors`: one `(TOKENS) "reason" { .. }` for each cause. `TOKENS` keep the definition's
 ///   spans. The braces and each key in them are optional and default from the reason.
 /// - `krate` (optional): the definer's crate as Cargo names it (`CARGO_CRATE_NAME`). A call
 ///   written through `$crate` shows it in the texts (`lib::m::Item`), even if that `$crate` is
 ///   another crate; without it the `$crate::` is dropped.
 ///
-/// A reader skips keys it does not know, in the record and in the braces, and tokens after an
-/// error's braces. An entry has this or `type_leak(..)`, never both.
+/// It is read with [`syn::parse::Parse`] (`syn::parse2::<LeakFailure>(meta)`); `id`, `item` and
+/// `errors` are required. A reader skips keys it does not know, in the record and in the braces,
+/// and tokens after an error's braces. An entry has this or `type_leak(..)`, never both.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct LeakFailure {
@@ -286,7 +290,7 @@ impl LeakFailure {
 
     /// The `type_leak_error(..)` META element, as the definer writes it.
     pub fn meta(&self) -> TokenStream {
-        let id = &self.id;
+        let (id, item) = (&self.id, &self.ident);
         let errors = self.errors.iter().map(|e| {
             let (tokens, reason, notes) = (&e.tokens, &e.reason, &e.notes);
             let texts: Vec<TokenStream> = vec![
@@ -301,52 +305,7 @@ impl LeakFailure {
             quote! { (#tokens) #reason #braces }
         });
         let krate = self.krate.as_ref().map(|k| quote! { , krate = #k });
-        quote! { type_leak_error(id = #id, errors = [ #(#errors),* ] #krate) }
-    }
-
-    /// Reads the arguments of the `type_leak_error(..)` META ([`Meta::kv`](crate::helper::Meta::kv));
-    /// `path` is the caller's trampoline path and `ident` the item's name.
-    pub fn from_kv(kv: &mut KvArgs, path: Path, ident: Ident) -> Result<Self> {
-        let id: LitInt = kv.require("id")?;
-        let krate = kv.get::<LitStr>("krate")?.map(|k| k.value());
-        let errors = kv.tokens("errors").ok_or_else(|| {
-            syn::Error::new(
-                Span::call_site(),
-                "missing `errors` in the `type_leak_error(..)` META",
-            )
-        })?;
-        let errors = (|input: ParseStream| {
-            let content;
-            syn::bracketed!(content in input);
-            let mut errors = Vec::new();
-            while !content.is_empty() {
-                let tokens;
-                syn::parenthesized!(tokens in content);
-                let tokens: TokenStream = tokens.parse()?;
-                let reason: LitStr = content.parse()?;
-                let mut error = LeakError::new(tokens, reason.value());
-                if content.peek(syn::token::Brace) {
-                    let texts;
-                    syn::braced!(texts in content);
-                    read_texts(&texts, &mut error)?;
-                }
-                skip_to_comma(&content)?;
-                errors.push(error);
-                if content.is_empty() {
-                    break;
-                }
-                content.parse::<Token![,]>()?;
-            }
-            Ok(errors)
-        })
-        .parse2(errors)?;
-        Ok(LeakFailure {
-            id,
-            errors,
-            path,
-            ident,
-            krate,
-        })
+        quote! { type_leak_error(id = #id, item = #item, errors = [ #(#errors),* ] #krate) }
     }
 
     /// The span of the call: the last segment of [`path`](Self::path).
@@ -794,26 +753,53 @@ pub fn try_same_context(input: TokenStream) -> Result<TokenStream> {
     Ok(out)
 }
 
-/// The name of an item that `#[announce]` can record a failure of.
-pub(crate) fn item_ident(item: &Item) -> Result<Ident> {
-    match item {
-        Item::Struct(i) => Ok(i.ident.clone()),
-        Item::Enum(i) => Ok(i.ident.clone()),
-        Item::Union(i) => Ok(i.ident.clone()),
-        Item::Trait(i) => Ok(i.ident.clone()),
-        Item::Type(i) => Ok(i.ident.clone()),
-        other => Err(syn::Error::new_spanned(
-            other,
-            "announce: the item has no name to check (a `type_leak_error(..)` is recorded for a struct, \
-             enum, union, trait or type alias)",
-        )),
+impl Parse for LeakFailure {
+    /// Reads the `type_leak_error(..)` META element ([`meta`](Self::meta)). Its
+    /// [`path`](Self::path) is the item's name; the caller sets the one it was called with.
+    fn parse(input: ParseStream) -> Result<Self> {
+        let name: Ident = input.parse()?;
+        if name != "type_leak_error" {
+            return Err(Error::new(
+                name.span(),
+                format!("expected `type_leak_error(..)`, found `{}`", name),
+            ));
+        }
+        let args;
+        syn::parenthesized!(args in input);
+        let (mut id, mut item, mut krate, mut errors) = (None, None, None, None);
+        read_keys(&args, &["id", "item", "krate", "errors"], |key, input| {
+            if key == "id" {
+                once(&mut id, key, input.parse::<LitInt>()?)
+            } else if key == "item" {
+                once(&mut item, key, Ident::parse_any(input)?)
+            } else if key == "krate" {
+                once(&mut krate, key, input.parse::<LitStr>()?.value())
+            } else {
+                once(&mut errors, key, bracketed_list::<LeakError>(input)?)
+            }
+        })?;
+        let missing = |key: &str| {
+            Error::new(
+                name.span(),
+                format!("missing `{}` in the `type_leak_error(..)` META", key),
+            )
+        };
+        let id = id.ok_or_else(|| missing("id"))?;
+        let ident = item.ok_or_else(|| missing("item"))?;
+        let errors = errors.ok_or_else(|| missing("errors"))?;
+        Ok(LeakFailure {
+            id,
+            errors,
+            path: Path::from(ident.clone()),
+            ident,
+            krate,
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::helper::Meta;
 
     fn failure(errors: &[(&str, &str)]) -> LeakFailure {
         let mut f = LeakFailure::new(
@@ -836,8 +822,7 @@ mod tests {
     }
 
     fn read(f: &LeakFailure) -> LeakFailure {
-        let meta: Meta = syn::parse2(f.meta()).unwrap();
-        LeakFailure::from_kv(&mut meta.kv().unwrap(), f.path.clone(), f.ident.clone()).unwrap()
+        syn::parse2(f.meta()).unwrap()
     }
 
     #[test]
@@ -851,7 +836,7 @@ mod tests {
         ]);
         assert_eq!(
             squash(f.meta()),
-            "type_leak_error(id=42u64,errors=[(Local)\"without`repeater`\",\
+            "type_leak_error(id=42u64,item=Leaky,errors=[(Local)\"without`repeater`\",\
              (Wrap<u8,{N}>)\"witharelativetraitpathinabound\"])"
         );
         let back = read(&f);
@@ -879,7 +864,7 @@ mod tests {
         let meta = squash(f.meta());
         assert_eq!(
             meta,
-            "type_leak_error(id=42u64,errors=[(Wrap<'_>)\"withatypethatcannotbecarried\"{\
+            "type_leak_error(id=42u64,item=Leaky,errors=[(Wrap<'_>)\"withatypethatcannotbecarried\"{\
              message=\"useabsolutepath:'Wrap<'_>'\",notes=[\"itcannotbeleakedasawholebecauseof`'_`\",\
              \"a{brace}\"],help=\"write`Wrap`withanabsolutepath(e.g.`crate::Wrap`)\"},\
              (Local)\"without`repeater`\"])"
@@ -902,15 +887,9 @@ mod tests {
             Some("write `Wrap` with an absolute path (e.g. `crate::Wrap`)")
         );
         assert!(back.errors[1].message.is_none());
-        let meta: Meta = syn::parse_str(
-            "type_leak_error(id = 1u64, errors = [(A) \"r\" { future = [1], help = \"h\" }, \
+        let f = read_meta(
+            "type_leak_error(id = 1u64, item = B, errors = [(A) \"r\" { future = [1], help = \"h\" }, \
              (B) \"s\" { notes = [\"n\"] }])",
-        )
-        .unwrap();
-        let f = LeakFailure::from_kv(
-            &mut meta.kv().unwrap(),
-            syn::parse_quote!(a::B),
-            syn::parse_quote!(B),
         )
         .unwrap();
         assert_eq!(f.errors[0].help.as_deref(), Some("h"));
@@ -919,24 +898,86 @@ mod tests {
     }
 
     #[test]
-    fn meta_ignores_unknown_keys_and_needs_errors() {
-        let meta: Meta =
-            syn::parse_str("type_leak_error(id = 1u64, future = [1, 2], errors = [])").unwrap();
-        let f = LeakFailure::from_kv(
-            &mut meta.kv().unwrap(),
-            syn::parse_quote!(a::B),
-            syn::parse_quote!(B),
-        )
-        .unwrap();
+    fn meta_ignores_unknown_keys_and_needs_id_item_and_errors() {
+        let f = read_meta("type_leak_error(id = 1u64, future = [1, 2], item = B, errors = [])")
+            .unwrap();
         assert!(f.errors.is_empty());
-        let meta: Meta = syn::parse_str("type_leak_error(id = 1u64)").unwrap();
-        let err = LeakFailure::from_kv(
-            &mut meta.kv().unwrap(),
-            syn::parse_quote!(a::B),
-            syn::parse_quote!(B),
-        )
-        .unwrap_err();
+        let err = read_meta("type_leak_error(id = 1u64, item = B)").unwrap_err();
         assert!(err.to_string().contains("missing `errors`"), "{}", err);
+        let err = read_meta("type_leak_error(item = B, errors = [])").unwrap_err();
+        assert!(err.to_string().contains("missing `id`"), "{}", err);
+        let err = read_meta("type_leak_error(id = 1u64, errors = [])").unwrap_err();
+        assert!(err.to_string().contains("missing `item`"), "{}", err);
+    }
+
+    #[test]
+    fn the_item_is_read_as_written_and_a_raw_identifier_is_kept() {
+        let mut f = failure(&[("Local", WITHOUT_REPEATER)]);
+        f.ident = syn::parse_quote!(r#type);
+        f.path = Path::from(f.ident.clone());
+        assert_eq!(
+            squash(f.meta()),
+            "type_leak_error(id=42u64,item=r#type,errors=[(Local)\"without`repeater`\"])"
+        );
+        let back = read(&f);
+        assert_eq!(back.ident, "r#type");
+        assert_eq!(back.ident.unraw().to_string(), "type");
+        assert_eq!(squash(&back.path), "r#type");
+        let f = read_meta("type_leak_error(id = 1u64, item = Holder, errors = [])").unwrap();
+        assert_eq!(f.ident, "Holder");
+        assert_eq!(squash(&f.path), "Holder");
+        assert!(read_meta("type_leak_error(id = 1u64, item = a::B, errors = [])").is_err());
+        assert!(read_meta("type_leak_error(id = 1u64, item = \"B\", errors = [])").is_err());
+    }
+
+    #[test]
+    fn the_record_is_read_back_as_it_was_written() {
+        let mut f = failure(&[("Local", WITHOUT_REPEATER), ("Wrap < '_ >", REFUSED)]);
+        f.errors[1] = f.errors[1]
+            .clone()
+            .with_message("m")
+            .with_notes(["n1", "n2"])
+            .with_help("h");
+        let f = f.with_krate("lib");
+        let back = syn::parse2::<LeakFailure>(f.meta()).unwrap();
+        assert_eq!(back.id.base10_digits(), f.id.base10_digits());
+        assert_eq!(back.ident, f.ident);
+        assert_eq!(back.krate, f.krate);
+        assert_eq!(back.errors.len(), f.errors.len());
+        for (b, e) in back.errors.iter().zip(&f.errors) {
+            assert_eq!(squash(&b.tokens), squash(&e.tokens));
+            assert_eq!(b.reason, e.reason);
+            assert_eq!(
+                (&b.message, &b.notes, &b.help),
+                (&e.message, &e.notes, &e.help)
+            );
+        }
+        assert_eq!(squash(back.meta()), squash(f.meta()));
+    }
+
+    #[test]
+    fn only_a_type_leak_error_element_is_a_record() {
+        let err = read_meta("type_leak(id = 1u64, item = B, errors = [])").unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("expected `type_leak_error(..)`, found `type_leak`"),
+            "{}",
+            err
+        );
+        assert!(read_meta("type_leak_error").is_err());
+        assert!(read_meta("type_leak_error(id = 1u64, item = B, errors = []) more").is_err());
+    }
+
+    #[test]
+    fn a_key_with_no_value_or_given_twice_is_an_error() {
+        let err = read_meta("type_leak_error(id, item = B, errors = [])").unwrap_err();
+        assert!(err.to_string().contains("`id` needs a value"), "{}", err);
+        let err =
+            read_meta("type_leak_error(id = 1u64, id = 2u64, item = B, errors = [])").unwrap_err();
+        assert!(err.to_string().contains("duplicate key `id`"), "{}", err);
+        let err = read_meta("type_leak_error(id = 1u64, item = B, errors = [(A) \"r\" { help }])")
+            .unwrap_err();
+        assert!(err.to_string().contains("`help` needs a value"), "{}", err);
     }
 
     /// The texts of the check for the causes of `f`, as `(message, label, notes)`.
@@ -1096,20 +1137,15 @@ mod tests {
         );
     }
 
-    /// The record of `errors = [..]` as the META of a definer that wrote `extra` after it.
+    /// The record that the META `src` holds.
     fn read_meta(src: &str) -> Result<LeakFailure> {
-        let meta: Meta = syn::parse_str(src)?;
-        LeakFailure::from_kv(
-            &mut meta.kv()?,
-            syn::parse_quote!(a::B),
-            syn::parse_quote!(B),
-        )
+        syn::parse_str(src)
     }
 
     #[test]
     fn a_later_version_may_add_keys_with_any_value_to_the_texts_of_a_cause() {
         let f = read_meta(
-            "type_leak_error(id = 1u64, errors = [(A) \"r\" { message = \"m\", span = a::b, \
+            "type_leak_error(id = 1u64, item = B, errors = [(A) \"r\" { message = \"m\", span = a::b, \
              level = -1, ty = Vec<u8, Alloc>, internal, notes = [\"n1\", \"n2\"], \
              list = [1, 2], help = \"h\" }])",
         )
@@ -1119,22 +1155,24 @@ mod tests {
         assert_eq!(e.notes, ["n1", "n2"]);
         assert_eq!(e.help.as_deref(), Some("h"));
         let f = read_meta(
-            "type_leak_error(id = 1u64, errors = [(A) \"r\" { internal, help = \"h\", last }])",
+            "type_leak_error(id = 1u64, item = B, errors = [(A) \"r\" { internal, help = \"h\", last }])",
         )
         .unwrap();
         assert_eq!(f.errors[0].help.as_deref(), Some("h"));
         assert!(f.errors[0].message.is_none());
-        let f = read_meta("type_leak_error(id = 1u64, errors = [(A) \"r\" { }])").unwrap();
+        let f =
+            read_meta("type_leak_error(id = 1u64, item = B, errors = [(A) \"r\" { }])").unwrap();
         assert!(f.errors[0].message.is_none() && f.errors[0].help.is_none());
-        assert!(
-            read_meta("type_leak_error(id = 1u64, errors = [(A) \"r\" { help = 3 }])").is_err()
-        );
+        assert!(read_meta(
+            "type_leak_error(id = 1u64, item = B, errors = [(A) \"r\" { help = 3 }])"
+        )
+        .is_err());
     }
 
     #[test]
     fn an_error_may_have_more_after_its_texts() {
         let f = read_meta(
-            "type_leak_error(id = 1u64, errors = [\
+            "type_leak_error(id = 1u64, item = B, errors = [\
              (A) \"r\" { help = \"h\" } span = a::b [1, 2] { x = 1 }, \
              (B) \"s\" later = Vec<u8, A>, \
              (C) \"t\" { message = \"m\" } flag])",
@@ -1159,9 +1197,9 @@ mod tests {
         let meta = squash(f.meta());
         assert!(meta.ends_with(",krate=\"my_lib\")"), "{}", meta);
         assert_eq!(read(&f).krate.as_deref(), Some("my_lib"));
-        let f = read_meta("type_leak_error(id = 1u64, errors = [(A) \"r\"])").unwrap();
+        let f = read_meta("type_leak_error(id = 1u64, item = B, errors = [(A) \"r\"])").unwrap();
         assert!(f.krate.is_none());
-        assert!(read_meta("type_leak_error(id = 1u64, errors = [], krate = 3)").is_err());
+        assert!(read_meta("type_leak_error(id = 1u64, item = B, errors = [], krate = 3)").is_err());
     }
 
     #[test]
@@ -1637,7 +1675,7 @@ mod tests {
     #[test]
     fn same_context_checks_the_failures_and_calls_the_next_element() {
         let failing =
-            "a::Leaky! => [type_leak_error(id = 7u64, errors = [(Local) \"without `repeater`\"])] \
+            "a::Leaky! => [type_leak_error(id = 7u64, item = Leaky, errors = [(Local) \"without `repeater`\"])] \
                        { pub struct Leaky { pub a: Local } }";
         let plain = "a::Plain! => [] { pub struct Plain; }";
         let out = same_context_out(
@@ -1691,7 +1729,7 @@ mod tests {
         assert!(e.contains("compile_error"), "{}", e);
         let e = same_context_out(
             "::announce",
-            "[sc!] a::B! => [type_leak_error(id = 1u64)] { struct B; }",
+            "[sc!] a::B! => [type_leak_error(id = 1u64, item = B)] { struct B; }",
         );
         assert!(
             e.contains("compile_error") && e.contains("missing`errors`"),

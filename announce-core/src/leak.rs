@@ -997,8 +997,7 @@ pub fn table(item: &Item, opts: &crate::options::Options, random: u64) -> Result
 /// The `Referrer` that a consumer parses from `meta` is the one the impls were
 /// written from (same entries, same indices, same contexts).
 fn check_round_trip(meta: &TokenStream, referrer: &Referrer) -> Result<()> {
-    let element: crate::helper::Meta = syn::parse2(meta.clone())?;
-    let read = TypeLeak::from_kv(&mut element.kv()?)?;
+    let read: TypeLeak = syn::parse2(meta.clone())?;
     if read.referrer == *referrer {
         Ok(())
     } else {
@@ -1981,8 +1980,7 @@ mod tests {
             meta
         );
         // The consumer reads it back, with nothing to replace.
-        let m: crate::helper::Meta = syn::parse2(leaked.meta).unwrap();
-        let read = TypeLeak::from_kv(&mut m.kv().unwrap()).unwrap();
+        let read: TypeLeak = syn::parse2(leaked.meta).unwrap();
         assert_eq!(read.types().count(), 0);
     }
 
@@ -1991,8 +1989,7 @@ mod tests {
         let leaked = leaked(quote! {
             struct S<T> { a: Local, b: Wrap<T>, c: ::other::X<u8> }
         });
-        let m: crate::helper::Meta = syn::parse2(leaked.meta).unwrap();
-        let read = TypeLeak::from_kv(&mut m.kv().unwrap()).unwrap();
+        let read: TypeLeak = syn::parse2(leaked.meta).unwrap();
         let impls = squash(&leaked.impls);
         // The impls are for the required entries; `::other::X<u8>` is optional.
         assert_eq!(read.types().count(), 2);

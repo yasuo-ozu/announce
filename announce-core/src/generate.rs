@@ -1760,7 +1760,7 @@ mod tests {
         }
         assert!(
             out.contains(
-                "=>[type_leak_error(id=3u64,errors=[(Local)\"without`repeater`\"{\
+                "=>[type_leak_error(id=3u64,item=S,errors=[(Local)\"without`repeater`\"{\
                  message=\"useabsolutepath:'Local'\",\
                  help=\"write`Local`withanabsolutepath(e.g.`crate::Local`),oradd`repeater=..`\
                  tothe`#[announce]`of`S`\"}])]{pubstructS{puba:Local}}"

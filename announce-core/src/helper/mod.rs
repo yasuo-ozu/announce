@@ -12,7 +12,7 @@
 //!   [`CheckInput`].
 //!   [`attrs`] has the attributes that a check can own. [`check_type`] and
 //!   [`check_trait`] test for `announce::Announce`.
-//! - Read META: [`Entry::find_meta`] and [`KvArgs`] parse `key = value` lists.
+//! - Read META: [`Entry::find_meta`] finds an element. [`Meta::parse_args_with`] parses its args.
 //!   [`Entry::owned_attrs`] and [`Entry::item_without_owned_attrs`] read owned
 //!   attributes.
 //! - Resolve relative types:
@@ -35,14 +35,13 @@
 //! `no_std` definitions).
 
 pub mod attrs;
-mod kv;
+mod keys;
 pub mod leak;
 mod leakfail;
 mod transformer;
 mod typeleak;
 
 pub use attrs::{remove_attributes, CheckCall, OwnedAttrs, Query};
-pub use kv::KvArgs;
 pub(crate) use leakfail::{
     cause_path, ALIAS, NOT_PRIMITIVE, REFUSED, TRAIT_PATH, VALUE_PATH, WITHOUT_REPEATER,
 };
@@ -407,13 +406,8 @@ impl Meta {
         parser.parse2(self.args.clone().unwrap_or_default())
     }
 
-    /// The args as a [`KvArgs`] list. Absent args give an empty list.
-    pub fn kv(&self) -> Result<KvArgs> {
-        self.parse_args_with(KvArgs::parse)
-    }
-
     /// The args as `key = value` pairs. Values must be expressions; use
-    /// [`kv`](Self::kv) for types and lists.
+    /// [`parse_args_with`](Self::parse_args_with) for types and lists.
     pub fn name_values(&self) -> Result<Vec<syn::MetaNameValue>> {
         let p: Punctuated<syn::MetaNameValue, Token![,]> =
             self.parse_args_with(Punctuated::parse_terminated)?;
@@ -493,20 +487,20 @@ impl Entry {
             Some(m) => m,
             None => return Ok(None),
         };
-        TypeLeak::from_kv(&mut m.kv()?).map(Some)
+        syn::parse2(m.to_token_stream()).map(Some)
     }
 
     /// The `type_leak_error(..)` META of an entry announced with `strict = false` whose types do
     /// not resolve outside its module: `Ok(None)` for an entry without it, which has no
-    /// [`TypeLeak`] table then. The record's path is the key of the entry, and the item's name
-    /// is read from the payload.
+    /// [`TypeLeak`] table then. The record's path is the key of the entry.
     pub fn leak_failure(&self) -> Result<Option<LeakFailure>> {
         let m = match self.find_meta("type_leak_error") {
             Some(m) => m,
             None => return Ok(None),
         };
-        let ident = leakfail::item_ident(&self.item()?)?;
-        LeakFailure::from_kv(&mut m.kv()?, self.key.path(), ident).map(Some)
+        let mut failure: LeakFailure = syn::parse2(m.to_token_stream())?;
+        failure.path = self.key.path();
+        Ok(Some(failure))
     }
 
     /// The item as a callback emits it, and what to emit next to it: with a type table
@@ -661,10 +655,10 @@ impl ToTokens for Entry {
 /// - `mock(path)`: the item stands in for the item at `path` ([`Entry::mock`]);
 /// - `attrs(a, b)`: the attribute names that checks own ([`Entry::owned_attrs`]);
 /// - `type_leak(..)`: the type table of a `repeater` ([`Entry::type_leak`]);
-/// - `type_leak_error(id = R, errors = [(TOKENS) "reason" { .. }, ..], krate = "..")`: instead of
-///   a table, what a definer announced with `strict = false` found that does not resolve outside
-///   the item's module ([`Entry::leak_failure`]; [`LeakFailure`] has the syntax). It is the only
-///   difference from any other call: `ANNOUNCE_FORMAT` is still `"1"`, and a parser that does
+/// - `type_leak_error(id = R, item = Name, errors = [(TOKENS) "reason" { .. }, ..], krate = "..")`:
+///   instead of a table, what a definer announced with `strict = false` found that does not
+///   resolve outside the item's module ([`Entry::leak_failure`]; [`LeakFailure`] has the syntax
+///   and implements `syn::parse::Parse`). It is the only difference from any other call: `ANNOUNCE_FORMAT` is still `"1"`, and a parser that does
 ///   not know the element ignores it, so a callback built with announce 0.2 takes the item for
 ///   one that resolves everywhere. That works in the item's module; elsewhere rustc reports the
 ///   names it cannot find.
@@ -1872,44 +1866,8 @@ mod tests {
 }
 
 #[cfg(test)]
-mod kv_tests {
+mod stable_referrer_tests {
     use super::*;
-
-    #[test]
-    fn kv_types_lists_flags_and_errors() {
-        let m: Meta = syn::parse_quote!(lib::info(ty = ::std::collections::HashMap<u8, Vec<u8>>, out = fn() -> u8, xs = [A, b::C], on));
-        let mut kv = m.kv().unwrap();
-        let ty: syn::Type = kv.require("ty").unwrap();
-        assert_eq!(
-            ty.to_token_stream().to_string().replace(' ', ""),
-            "::std::collections::HashMap<u8,Vec<u8>>"
-        );
-        let out: syn::Type = kv.require("out").unwrap();
-        assert_eq!(
-            out.to_token_stream().to_string().replace(' ', ""),
-            "fn()->u8"
-        );
-        let xs: Vec<Path> = kv.list("xs").unwrap().unwrap();
-        assert_eq!(xs.len(), 2);
-        assert!(kv.flag("on").unwrap());
-        assert!(kv.get::<syn::Type>("absent").unwrap().is_none());
-        kv.finish().unwrap();
-
-        let mut kv: KvArgs = syn::parse_quote!(a = 1, b = 2);
-        let _: syn::LitInt = kv.require("a").unwrap();
-        assert!(kv
-            .finish()
-            .unwrap_err()
-            .to_string()
-            .contains("unknown key `b`"));
-        assert!(syn::parse2::<KvArgs>(template_quote::quote!(a = 1, a = 2)).is_err());
-        let mut kv: KvArgs = syn::parse_quote!();
-        assert!(kv
-            .require::<syn::Type>("x")
-            .unwrap_err()
-            .to_string()
-            .contains("missing `x`"));
-    }
 
     #[test]
     fn stable_referrer_is_deterministic() {
@@ -2050,25 +2008,6 @@ mod options_tests {
 }
 
 #[cfg(test)]
-mod kv_balance_tests {
-    use super::*;
-
-    #[test]
-    fn unbalanced_angle_is_an_error() {
-        let e = syn::parse2::<KvArgs>(template_quote::quote!(a = x < y, b = 1)).unwrap_err();
-        assert!(
-            e.to_string().contains("unbalanced `<` in the value of `a`"),
-            "{}",
-            e
-        );
-        assert!(syn::parse2::<KvArgs>(template_quote::quote!(a = 1 << 2, b = 3)).is_err());
-        let mut kv: KvArgs = syn::parse_quote!(a = (x < y), b = 1, f = fn() -> u8);
-        assert!(kv.tokens("a").is_some() && kv.tokens("b").is_some() && kv.tokens("f").is_some());
-        kv.finish().unwrap();
-    }
-}
-
-#[cfg(test)]
 mod low_audit_tests {
     use super::*;
 
@@ -2106,122 +2045,6 @@ mod low_audit_tests {
             Gather::Fetch(ts) => assert!(ts.to_string().contains("which is the callback itself")),
             Gather::Ready(_) => panic!(),
         }
-    }
-}
-
-#[cfg(test)]
-mod kv_error_tests {
-    use super::*;
-
-    fn parse(ts: TokenStream) -> Result<KvArgs> {
-        syn::parse2(ts)
-    }
-
-    #[test]
-    fn missing_value_after_equals_is_an_error() {
-        let e = parse(template_quote::quote!(a =)).unwrap_err().to_string();
-        assert_eq!(e, "missing value for `a`");
-        let e = parse(template_quote::quote!(a = , b = 1))
-            .unwrap_err()
-            .to_string();
-        assert_eq!(e, "missing value for `a`");
-        let e = parse(template_quote::quote!(ok = 1, b =))
-            .unwrap_err()
-            .to_string();
-        assert_eq!(e, "missing value for `b`");
-    }
-
-    #[test]
-    fn get_on_a_flag_key_needs_a_value() {
-        let mut kv: KvArgs = syn::parse_quote!(f, a = 1);
-        let e = kv.get::<syn::Type>("f").unwrap_err().to_string();
-        assert_eq!(e, "`f` needs a value");
-        // `require` reports the same error, not "missing".
-        let mut kv: KvArgs = syn::parse_quote!(f);
-        assert_eq!(
-            kv.require::<syn::Type>("f").unwrap_err().to_string(),
-            "`f` needs a value"
-        );
-    }
-
-    #[test]
-    fn list_on_a_flag_key_needs_a_bracketed_value() {
-        let mut kv: KvArgs = syn::parse_quote!(f, a = 1);
-        let e = kv.list::<syn::Path>("f").unwrap_err().to_string();
-        assert_eq!(e, "`f` needs a `[..]` value");
-    }
-
-    #[test]
-    fn flag_on_a_key_with_a_value_takes_no_value() {
-        let mut kv: KvArgs = syn::parse_quote!(a = 1);
-        let e = kv.flag("a").unwrap_err().to_string();
-        assert_eq!(e, "`a` takes no value");
-        // An absent flag is false and does not consume anything else.
-        let mut kv: KvArgs = syn::parse_quote!(b = 1);
-        assert!(!kv.flag("a").unwrap());
-        assert!(kv.tokens("b").is_some());
-    }
-
-    #[test]
-    fn list_on_a_non_bracketed_value_is_an_error() {
-        let mut kv: KvArgs = syn::parse_quote!(a = 1);
-        let e = kv.list::<syn::LitInt>("a").unwrap_err().to_string();
-        assert!(e.contains("expected square brackets"), "{}", e);
-        let mut kv: KvArgs = syn::parse_quote!(a = (x, y));
-        let e = kv.list::<syn::Path>("a").unwrap_err().to_string();
-        assert!(e.contains("expected square brackets"), "{}", e);
-        let mut kv: KvArgs = syn::parse_quote!(a = [1, 2] extra);
-        assert!(kv.list::<syn::LitInt>("a").is_err());
-    }
-
-    #[test]
-    fn list_element_and_value_parse_errors_surface() {
-        let mut kv: KvArgs = syn::parse_quote!(a = [x, 1]);
-        assert!(kv.list::<syn::Path>("a").is_err());
-        let mut kv: KvArgs = syn::parse_quote!(a = 1);
-        assert!(kv.get::<syn::Path>("a").is_err());
-    }
-
-    #[test]
-    fn list_accepts_empty_and_trailing_comma() {
-        let mut kv: KvArgs = syn::parse_quote!(a = [], b = [x::Y, z,]);
-        assert!(kv.list::<Path>("a").unwrap().unwrap().is_empty());
-        assert_eq!(kv.list::<Path>("b").unwrap().unwrap().len(), 2);
-        kv.finish().unwrap();
-    }
-
-    #[test]
-    fn taken_keys_are_gone_and_finish_names_the_first_leftover() {
-        let mut kv: KvArgs = syn::parse_quote!(a = 1, b, c = 2);
-        assert!(kv.tokens("a").is_some());
-        assert!(kv.tokens("a").is_none());
-        assert_eq!(kv.finish().unwrap_err().to_string(), "unknown key `b`");
-    }
-
-    #[test]
-    fn duplicate_keys_and_keywords() {
-        let e = parse(template_quote::quote!(a, a)).unwrap_err().to_string();
-        assert_eq!(e, "duplicate key `a`");
-        // Keywords are fine as keys.
-        let mut kv: KvArgs = syn::parse_quote!(type = u8, crate = a::b, fn);
-        assert!(kv.get::<syn::Type>("type").unwrap().is_some());
-        assert!(kv.get::<Path>("crate").unwrap().is_some());
-        assert!(kv.flag("fn").unwrap());
-        kv.finish().unwrap();
-    }
-
-    #[test]
-    fn values_run_to_the_next_top_level_comma() {
-        // `1 b = 2` is all one value; two flags need a comma between them.
-        let mut kv = parse(template_quote::quote!(a = 1 b = 2)).unwrap();
-        assert_eq!(kv.tokens("a").unwrap().to_string().replace(' ', ""), "1b=2");
-        assert!(parse(template_quote::quote!(a b)).is_err());
-    }
-
-    #[test]
-    fn equality_comparison_is_a_flag_followed_by_junk() {
-        // `a == b` is not `a = (= b)`: `==` ends neither value nor key.
-        assert!(parse(template_quote::quote!(a == b)).is_err());
     }
 }
 
@@ -2280,24 +2103,32 @@ mod gap_tests {
         // No args: empty list.
         let m: Meta = syn::parse_quote!(lib::info);
         assert!(m.name_values().unwrap().is_empty());
-        // A flag, or a non-expression value, is an error; `kv` accepts them.
+        // A flag is an error.
         let m: Meta = syn::parse_quote!(lib::info(a = 1, on));
         assert!(m.name_values().is_err());
-        let m: Meta = syn::parse_quote!(lib::info(a = 1, on));
-        assert!(m.kv().is_ok());
         // Array expressions are expressions; types are not.
         let m: Meta = syn::parse_quote!(lib::info(xs = [A, B]));
         assert_eq!(m.name_values().unwrap().len(), 1);
         let m: Meta = syn::parse_quote!(lib::info(ty = Vec<u8, A>));
         assert!(m.name_values().is_err());
-        assert!(m.kv().is_ok());
+        let ty = m
+            .parse_args_with(|input: ParseStream| {
+                input.parse::<Ident>()?;
+                input.parse::<Token![=]>()?;
+                input.parse::<syn::Type>()
+            })
+            .unwrap();
+        assert_eq!(s(&ty), "Vec<u8,A>");
     }
 
     #[test]
     fn meta_args_default_to_empty() {
         let m: Meta = syn::parse_quote!(lib::info);
         assert!(m.args.is_none());
-        assert!(m.kv().unwrap().finish().is_ok());
+        assert!(m
+            .parse_args_with(|input: ParseStream| input.parse::<TokenStream>())
+            .unwrap()
+            .is_empty());
         assert_eq!(s(&m), "lib::info");
         let m: Meta = syn::parse_quote!(lib::info(1, 2));
         assert_eq!(s(&m), "lib::info(1,2)");
