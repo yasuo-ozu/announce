@@ -106,3 +106,57 @@ m::Many! {
 }
 
 fn main() {}
+
+// More causes, in a second module and a second call, after the first: a where clause, the bound of
+// a method's parameter, a relative type as an argument and as the return type, and relative types
+// that a repeater cannot carry.
+pub mod inner2 {
+    pub struct UiG<T>(pub T);
+}
+
+mod m2 {
+    use super::inner::{UiLocal, UiOther, UiWrap};
+    use super::inner2::UiG;
+    use super::m::UiBase;
+
+    #[announce::announce(strict = false)]
+    pub trait InSignature {
+        fn f(&self, a: UiLocal) -> UiOther;
+    }
+
+    #[announce::announce(strict = false)]
+    pub struct InWhere<T>
+    where
+        T: UiBase,
+    {
+        pub t: T,
+    }
+
+    #[announce::announce(strict = false)]
+    pub trait InMethod {
+        fn f<U: UiBase>(&self, u: U);
+    }
+
+    // A relative type with an elided lifetime, and `Self::A` inside a relative type.
+    #[announce::announce(strict = false, repeater = crate::Repeater)]
+    pub trait Elided {
+        fn f(&self, a: UiWrap<'_>);
+    }
+
+    #[announce::announce(strict = false, repeater = crate::Repeater)]
+    pub trait SelfInside {
+        type A;
+        fn g(&self) -> UiG<Self::A>;
+    }
+}
+
+m2::InSignature! {
+    [
+        m2::InSignature!,
+        m2::InWhere!,
+        m2::InMethod!,
+        m2::Elided!,
+        m2::SelfInside!,
+        announce::same_context!
+    ]
+}

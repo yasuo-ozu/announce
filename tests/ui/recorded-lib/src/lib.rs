@@ -21,6 +21,18 @@ pub mod m {
 
     #[announce(strict = false)]
     pub struct Plain(pub u8);
+
+    // Two causes in one item.
+    pub mod inner2 {
+        pub struct UiOther(pub u8);
+    }
+    use inner2::UiOther;
+
+    #[announce(strict = false)]
+    pub struct Pair {
+        pub a: UiLocal,
+        pub b: UiOther,
+    }
 }
 
 pub use announce;

@@ -186,3 +186,92 @@ note: required by a bound in `_::Check::used_outside_its_module`
     |
     |         $crate::m::Holder! { [$crate::m::Holder!, $crate::announce::same_context!] }
     = note: this error originates in the macro `announce_test_ui_lib::check_holder` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: use absolute path: 'UiLocal'
+   --> tests/ui/same_context.rs:11:16
+    |
+ 11 |         pub a: UiLocal,
+    |                ^^^^^^^ relative type, not in scope where `crate::m::Item!` is called
+...
+118 |         through_the_check!();
+    |         -------------------- in this macro invocation
+    |
+    = help: the trait `sibling_fn::in_fn::_::InModuleOf_Item` is not implemented for `announce::__private::ThisCall`
+    = note: `crate::m::Item` is used outside its module `crate::m`
+    = note: write `UiLocal` with an absolute path (e.g. `crate::UiLocal`), or add `repeater = ..` to the `#[announce]` of `Item`
+note: required by a bound in `sibling_fn::in_fn::_::Check::used_outside_its_module`
+   --> tests/ui/same_context.rs:24:42
+    |
+ 24 |             crate::m::Item! { [crate::m::Item!, announce::same_context!] }
+    |                                          ^^^^ required by this bound in `Check::used_outside_its_module`
+...
+118 |         through_the_check!();
+    |         -------------------- in this macro invocation
+    = note: this error originates in the macro `through_the_check` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: use absolute path: 'UiLocal'
+   --> tests/ui/same_context.rs:11:16
+    |
+ 11 |         pub a: UiLocal,
+    |                ^^^^^^^ relative type, not in scope where `crate::m::Item!` is called
+...
+122 | through_the_check!();
+    | -------------------- in this macro invocation
+    |
+    = help: the trait `_::InModuleOf_Item` is not implemented for `announce::__private::ThisCall`
+    = note: `crate::m::Item` is used outside its module `crate::m`
+    = note: write `UiLocal` with an absolute path (e.g. `crate::UiLocal`), or add `repeater = ..` to the `#[announce]` of `Item`
+note: required by a bound in `_::Check::used_outside_its_module`
+   --> tests/ui/same_context.rs:24:42
+    |
+ 24 |             crate::m::Item! { [crate::m::Item!, announce::same_context!] }
+    |                                          ^^^^ required by this bound in `Check::used_outside_its_module`
+...
+122 | through_the_check!();
+    | -------------------- in this macro invocation
+    = note: this error originates in the macro `through_the_check` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: use absolute path: 'UiLocal'
+   --> recorded-lib/src/lib.rs
+    |
+    |         pub a: UiLocal,
+    |                ^^^^^^^ relative type, not in scope where `announce_test_ui_lib::m::Pair!` is called
+    |
+    = help: the trait `_::InModuleOf_Pair` is not implemented for `announce::__private::ThisCall`
+    = note: `announce_test_ui_lib::m::Pair` is used outside its module `announce_test_ui_lib::m`
+    = note: write `UiLocal` with an absolute path (e.g. `crate::UiLocal`), or add `repeater = ..` to the `#[announce]` of `Pair`
+note: required by a bound in `_::Check::used_outside_its_module`
+   --> tests/ui/same_context.rs:126:60
+    |
+126 | announce_test_ui_lib::m::Pair! { [announce_test_ui_lib::m::Pair!, announce::same_context!, announce_test_derive::leak_failures!] PA...
+    |                                                            ^^^^ required by this bound in `Check::used_outside_its_module`
+
+error[E0277]: use absolute path: 'UiOther'
+   --> recorded-lib/src/lib.rs
+    |
+    |         pub b: UiOther,
+    |                ^^^^^^^ relative type, not in scope where `announce_test_ui_lib::m::Pair!` is called
+    |
+    = help: the trait `_::InModuleOf_Pair` is not implemented for `announce::__private::ThisCall`
+    = note: `announce_test_ui_lib::m::Pair` is used outside its module `announce_test_ui_lib::m`
+    = note: write `UiOther` with an absolute path (e.g. `crate::UiOther`), or add `repeater = ..` to the `#[announce]` of `Pair`
+note: required by a bound in `_::Check::used_outside_its_module`
+   --> tests/ui/same_context.rs:126:60
+    |
+126 | announce_test_ui_lib::m::Pair! { [announce_test_ui_lib::m::Pair!, announce::same_context!, announce_test_derive::leak_failures!] PA...
+    |                                                            ^^^^ required by this bound in `Check::used_outside_its_module`
+
+error[E0277]: use absolute path: 'UiBase'
+   --> recorded-lib/src/lib.rs
+    |
+    |     pub trait Sub: UiBase {}
+    |                    ^^^^^^ relative trait path, not in scope where `announce_test_ui_lib::m::Sub!` is called
+    |
+    = help: the trait `InModuleOf_Sub` is not implemented for `announce::__private::ThisCall`
+    = note: `announce_test_ui_lib::m::Sub` is used outside its module `announce_test_ui_lib::m`
+    = note: write `UiBase` with an absolute path (e.g. `crate::UiBase`)
+note: required by a bound in `_::Check::used_outside_its_module`
+   --> tests/ui/same_context.rs:127:59
+    |
+127 | announce_test_ui_lib::m::Sub! { [announce_test_ui_lib::m::Sub!, announce::same_context!] }
+    |                                                           ^^^ required by this bound in `Check::used_outside_its_module`

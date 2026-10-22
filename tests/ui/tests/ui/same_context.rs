@@ -111,3 +111,17 @@ announce_test_ui_lib::m::Plain! { [announce_test_ui_lib::m::Plain!, announce::sa
 announce_test_ui_lib::check_holder!();
 
 fn main() {}
+
+// The forwarding macro of `m` in a function body outside the module, and from the parent module.
+mod sibling_fn {
+    pub fn in_fn() {
+        through_the_check!();
+    }
+}
+
+through_the_check!();
+
+// An item of another crate with two causes and a callback after the check, and one with a relative
+// trait path.
+announce_test_ui_lib::m::Pair! { [announce_test_ui_lib::m::Pair!, announce::same_context!, announce_test_derive::leak_failures!] PAIR_ROWS }
+announce_test_ui_lib::m::Sub! { [announce_test_ui_lib::m::Sub!, announce::same_context!] }
