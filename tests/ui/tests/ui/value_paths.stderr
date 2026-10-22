@@ -1,35 +1,29 @@
 error: `N` cannot be named outside its module (a relative value path): write the path absolutely
- --> tests/ui/value_paths.rs:8:9
+ --> tests/ui/value_paths.rs:7:9
   |
-8 |     A = N as isize,
+7 |     A = N as isize,
   |         ^
 
 error: `N` cannot be named outside its module (a relative value path): write the path absolutely
-  --> tests/ui/value_paths.rs:14:22
+  --> tests/ui/value_paths.rs:13:22
    |
-14 |     const M: usize = N;
+13 |     const M: usize = N;
    |                      ^
 
-error: `N` cannot be named outside its module (a relative value path): write the path absolutely
-  --> tests/ui/value_paths.rs:19:47
+error: `crate::Buf<{ N }>` cannot be named outside its module: add `repeater = ..` to the `#[announce]`, or write the path absolutely
+  --> tests/ui/value_paths.rs:18:25
    |
-19 | pub struct ConstParamDefault<const K: usize = N>;
+18 | pub struct ConstArg(pub crate::Buf<{ N }>);
+   |                         ^^^^^^^^^^^^^^^^^
+
+error: `N` cannot be named outside its module (a relative value path): write the path absolutely
+  --> tests/ui/value_paths.rs:22:47
+   |
+22 | pub struct ConstParamDefault<const K: usize = N>;
    |                                               ^
 
 error: `N` cannot be named outside its module (a relative value path): write the path absolutely
-  --> tests/ui/value_paths.rs:24:43
+  --> tests/ui/value_paths.rs:28:43
    |
-24 | pub struct ConstArgInBound<T: crate::Tr<{ N }>>(pub T);
+28 | pub struct ConstArgInBound<T: crate::Tr<{ N }>>(pub T);
    |                                           ^
-
-error: `[u8; N]` cannot be named outside its module: add `repeater = ..` to the `#[announce]`, or write the path absolutely
-  --> tests/ui/value_paths.rs:29:23
-   |
-29 | pub struct RelLen(pub [u8; N]);
-   |                       ^^^^^^^
-
-error: `crate::Buf<{ N }>` cannot be named outside its module: add `repeater = ..` to the `#[announce]`, or write the path absolutely
-  --> tests/ui/value_paths.rs:31:25
-   |
-31 | pub struct ConstArg(pub crate::Buf<{ N }>);
-   |                         ^^^^^^^^^^^^^^^^^

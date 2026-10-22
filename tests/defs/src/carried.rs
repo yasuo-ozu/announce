@@ -1,9 +1,6 @@
-//! Types that name something of this module without being a path to it, announced with a
-//! `repeater`: a trait object (`dyn Base`), an array length (`[u8; N]`) and a const generic
-//! argument (`Wrap<{ N }>`). The repeater carries the whole type, which resolves here, so
-//! another module or crate uses the item through `tests/user/tests/carried.rs`. Without a
-//! `repeater` the same items fail at the definition (`tests/ui/tests/ui/value_paths.rs`,
-//! `trait_paths_relative.rs`).
+//! Types that name something of this module without being a path to it, carried by a `repeater`:
+//! a trait object, an array length and a const generic argument. Without a `repeater` the same
+//! items fail (`tests/ui/tests/ui/value_paths.rs`, `trait_paths_relative.rs`).
 
 use announce::announce;
 

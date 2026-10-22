@@ -82,9 +82,8 @@ use proc_macro::TokenStream;
 ///   item. Default: `auto`. See [Size and recursion](#size-and-recursion).
 /// - `docs = bool`: with `true`, the item that callbacks and checks receive keeps
 ///   its doc attributes. Default: `false`. See [Docs](#docs).
-/// - `strict = bool`: with `true` (the default), a type or path that cannot be named outside
-///   its module is an error at the definition, whether or not anything calls the trampoline.
-///   With `false` it is recorded, and the calls check it. See
+/// - `strict = bool`: with `false`, a type or path that cannot be named outside its module is
+///   recorded for the calls to check, not an error at the definition. Default: `true`. See
 ///   [Items that resolve in their module only](#items-that-resolve-in-their-module-only).
 ///
 /// ```ignore
@@ -133,8 +132,8 @@ use proc_macro::TokenStream;
 ///   (`use announce::announce as ann; #[ann] #[ann(..)]`) is an announcement like any other.
 /// - Merging options: checks and `meta` entries are united, the first announcement's
 ///   first, without duplicates. `allow_primitive`, `allow_std_prelude` and `docs` are on if
-///   any of them is on (`allow_primitive` is off only if all say so). `strict` is off if any
-///   of them says `strict = false`. `crate` is the
+///   any of them is on (`allow_primitive` is off only if all say so); `strict` is off if any
+///   says `strict = false`. `crate` is the
 ///   first announcement's, else the other's: two paths to `announce` do not conflict.
 ///   `mock`, `repeater`, `layout` and `emit_item` take the value that is set; two values
 ///   that differ are an error at the attribute that was expanded, and the item is kept.
@@ -347,9 +346,7 @@ use proc_macro::TokenStream;
 ///
 /// The item's tokens are used again in another crate, so every path in them must mean
 /// the same thing there. `#[announce]` checks this at the definition and reports an
-/// error at a path that would not resolve. Most items need nothing. An item that is
-/// meant for its own module only can say so: see
-/// [Items that resolve in their module only](#items-that-resolve-in-their-module-only).
+/// error at a path that would not resolve. Most items need nothing.
 ///
 /// ## What resolves everywhere
 ///
@@ -378,9 +375,8 @@ use proc_macro::TokenStream;
 ///
 /// ## Relative types: `repeater`
 ///
-/// A relative type is an error at the definition, unless the definer gives a `repeater`.
-/// The error is ``error: `Local` cannot be named outside its module: add `repeater = ..`
-/// to the `#[announce]`, or write the path absolutely``. The repeater is a trait of the
+/// A relative type is an error ("`Local` cannot be named outside its module"), unless the
+/// definer gives a `repeater`. The repeater is a trait of the
 /// defining crate that carries the types to the callback. Create it with
 /// [`define_repeater!`], and name it as `crate::path::to::Repeater` in the option.
 /// It works on a struct, enum, union and trait.
@@ -422,9 +418,6 @@ use proc_macro::TokenStream;
 /// }
 /// ```
 ///
-/// (`Entry::item_resolved` does that, and also handles an item that is recorded: see
-/// [Items that resolve in their module only](#items-that-resolve-in-their-module-only).)
-///
 /// `Holder` then reads:
 ///
 /// ```text
@@ -462,11 +455,10 @@ use proc_macro::TokenStream;
 ///   primitive type (`bool`, `char`, any integer). A const parameter of a type alias
 ///   (`const N: Idx`, even an absolute alias) cannot be encoded.
 ///
-/// The type analysis rejects more, at the offending type, whatever the `repeater`. The
-/// error names the cause, as in ``error: `Local<'_>` cannot be named outside its module (a
-/// type that cannot be carried): write the path absolutely``. In each case, write the
-/// relative type with an absolute path (`crate::..`, `::other_crate::..`), and nothing
-/// needs to be carried:
+/// The type analysis rejects more, at the offending type ("`Local<'_>` cannot be named
+/// outside its module (a type that cannot be carried)"), whatever the `repeater`. In each
+/// case, write the relative type with an absolute path (`crate::..`, `::other_crate::..`),
+/// and nothing needs to be carried:
 ///
 /// - **`Self` in a relative type.** `Self` has no meaning in the repeater's impl, so
 ///   `fn f(&self) -> Local<Self>` and `Local<Self::Out>` are errors, while
@@ -493,15 +485,11 @@ use proc_macro::TokenStream;
 ///
 /// ## Items that resolve in their module only
 ///
-/// A type or path that cannot be named outside its module is an error at the definition: a
-/// relative type without a `repeater`, a relative path in a type alias, a relative trait or
-/// value path, a type that the analysis refuses, a const generic that cannot be encoded. There
-/// is one error for each offending type or path, at its tokens in the item and with what the
-/// definer can do. All of them are reported at once, whatever their kind (neither a relative
-/// trait path nor a type that the analysis refuses hides a relative type); with a `repeater` the
-/// relative types are carried, so they are no error and the rest still are. A repeater does not
-/// help with a trait path or with a const parameter that is not of a primitive type, so for those
-/// the message says to write the path absolutely or to use a primitive type.
+/// A type or path that cannot be named outside its module (a relative type without a
+/// `repeater`, a relative trait or value path, a type the analysis refuses, a const generic that
+/// cannot be encoded) is an error at the definition: one for each, at its tokens in the item and
+/// with what the definer can do, all reported at once. A `repeater` carries the relative types,
+/// but not a trait path or a const parameter that is not of a primitive type.
 ///
 /// ```text
 /// error: `Local` cannot be named outside its module: add `repeater = ..` to the `#[announce]`, or write the path absolutely
@@ -511,52 +499,30 @@ use proc_macro::TokenStream;
 ///   |                ^^^^^
 /// ```
 ///
-/// An item that is meant to be used in its own module only is announced with `strict = false`.
-/// The definition is not an error then. Its `META` has `type_leak_error(..)` ([wire format])
-/// instead of `type_leak(..)`, which records each such type or path with its tokens as
-/// written, and the definition emits a private marker that only the module of the item (its
-/// function bodies and the submodules that `use super::*`) can see. A callback built with
-/// announce 0.2 ignores the record and takes the item for one that resolves everywhere, which
-/// works in the module of the item; elsewhere rustc reports the names it cannot find. The
-/// caller or the callback decides what the record means:
+/// An item meant for its own module only is announced with `strict = false`. The definition is
+/// no error then: its `META` has `type_leak_error(..)` ([wire format]) instead of `type_leak(..)`,
+/// and a private marker that only the item's module (its function bodies and the submodules that
+/// `use super::*`) can see. A callback built with announce 0.2 ignores the record and takes the
+/// item for one that resolves everywhere, which works in that module. The caller or the callback
+/// decides what the record means:
 ///
-/// - `Entry::type_leak()` returns it as an error, wherever it is called, as a proc macro cannot
-///   tell where that is: one plain line for each cause at the path of the trampoline in the
-///   call (all of it underlined), such as ``this macro cannot use `m::Item`: `Local` cannot be
-///   named outside its module; add `repeater = ..` to its `#[announce]`, or write the path
-///   absolutely``.
+/// - `Entry::type_leak()` returns it as an error, as a proc macro cannot tell where it is
+///   called: one line for each cause at the path of the trampoline, such as ``this macro cannot
+///   use `m::Item`: `Local` cannot be named outside its module; add `repeater = ..` to its
+///   `#[announce]`, or write the path absolutely``.
 /// - `Entry::leak_failure()` returns the record.
 /// - `Entry::item_resolved(krate)` is the item to emit and what goes with it: with a table the
-///   item rewritten, with a record the item as written and a check
-///   (`LeakFailure::assume_success`) that fails to compile unless the call is in the module of
-///   the item.
+///   rewritten item, with a record the item as written and a check
+///   (`LeakFailure::assume_success`) that fails to compile unless the call is in the item's
+///   module. A callback that emits the item elsewhere gets rustc's own "cannot find type"
+///   errors first, and then the error of the check; with a relative trait path in a bound
+///   (`trait Sub: Base`) rustc stops at "cannot find trait" (E0405) before it.
+/// - [`announce::same_context!`] in the chain emits only that check.
 ///
-/// A callback that emits the item outside its module (through `Entry::item_resolved`) gets
-/// rustc's own "cannot find type" errors for the names of the item first, at the same tokens,
-/// and the error of the check follows. When the item has a relative trait path in a bound
-/// (`trait Sub: Base`, `T: Base`), rustc stops at its "cannot find trait" error (E0405) before
-/// it reaches the check, so only rustc's error appears.
-///
-/// A caller that wants only the check puts `announce::same_context!` in the chain, in front of
-/// the macro that uses the items (`deflib::lm::Leaky! { [deflib::lm::Leaky!,
-/// announce::same_context!, my::callback!] REST }`). It gives one error for each cause, at the
-/// type or path in the definition (all of it underlined, as in the error of a strict
-/// definition) and with the call in rustc's note about the bound; a type that no table can
-/// carry says so, and what to write instead. The docs of that macro show the error. The check
-/// is a `const _` item, so it never goes inside an `impl` or a `trait` block, where Rust does
-/// not allow it. Put it beside the impl, and call the callback in the impl without it; the
-/// answer depends on the module of the call only:
-///
-/// ```text
-/// Item! { [Item!, announce::same_context!] }          // module level: the check
-/// impl S { Item! { [Item!, my::method_callback!] } }  // the real call, no check
-/// ```
-///
-/// A callback whose output goes inside an `impl` or `trait` block, such as one that emits
-/// methods, puts the check tokens that `Entry::item_resolved` returns beside that block, at
-/// the item position of the call, and not inside it. Mistakes in the options stay errors, with
-/// or without `strict = false`: a `repeater` on a type alias or on an item that is not
-/// analysed, and a `repeater` of another crate.
+/// The check is a `const _` item, which does not go inside an `impl` or `trait` block: a
+/// callback whose output goes there puts the tokens of `Entry::item_resolved` beside the block.
+/// Mistakes in the options stay errors, with or without `strict = false`: a `repeater` on a
+/// type alias or on an item that is not analysed, and a `repeater` of another crate.
 ///
 /// ## What is not checked
 ///
@@ -595,6 +561,7 @@ use proc_macro::TokenStream;
 /// `emit_item = false` or `mock` there is no impl.
 ///
 /// [wire format]: https://docs.rs/announce/latest/announce/helper/struct.Input.html#the-wire-format
+/// [`announce::same_context!`]: https://docs.rs/announce/latest/announce/macro.same_context.html
 /// [`announce::helper::attrs`]: https://docs.rs/announce/latest/announce/helper/attrs/index.html
 /// [`announce::helper::TypeLeak`]: https://docs.rs/announce/latest/announce/helper/struct.TypeLeak.html
 /// [`announce::helper`]: https://docs.rs/announce/latest/announce/helper/index.html

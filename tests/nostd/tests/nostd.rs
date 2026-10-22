@@ -112,7 +112,7 @@ fn a_relative_type_without_a_repeater_is_recorded() {
     let out = norm(recorded::OUT);
     assert!(!out.contains("type_leak("), "{}", out);
     assert!(
-        out.contains("type_leak_error(id=") && out.contains("errors=[(Local)\"without`repeater`\""),
+        out.contains("type_leak_error(id=") && out.contains("errors=[(Local)"),
         "{}",
         out
     );

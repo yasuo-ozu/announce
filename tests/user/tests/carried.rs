@@ -40,7 +40,7 @@ fn the_trait_is_implemented_with_the_carried_types() {
     struct Maker;
     impl copy::MakeCopy for Maker {
         fn object(&self) -> Box<dyn Base + Send> {
-            Box::new(Three2)
+            Box::new(Three)
         }
         fn array(&self) -> [u8; 3] {
             [7, 8, 9]
@@ -49,14 +49,8 @@ fn the_trait_is_implemented_with_the_carried_types() {
             Wrap([1, 1, 1])
         }
     }
-    struct Three2;
-    impl Base for Three2 {
-        fn n(&self) -> u8 {
-            30
-        }
-    }
     let m = Maker;
-    assert_eq!(copy::MakeCopy::object(&m).n(), 30);
+    assert_eq!(copy::MakeCopy::object(&m).n(), 3);
     assert_eq!(copy::MakeCopy::array(&m), [7, 8, 9]);
     assert_eq!(copy::MakeCopy::wrap(&m).0, [1, 1, 1]);
 }

@@ -1,53 +1,89 @@
 error: `UiLocal` cannot be named outside its module: add `repeater = ..` to the `#[announce]`, or write the path absolutely
-  --> tests/ui/leak_errors.rs:21:16
+  --> tests/ui/leak_errors.rs:29:16
    |
-21 |         pub a: UiLocal,
+29 |         pub a: UiLocal,
    |                ^^^^^^^
 
 error: `UiLocal` cannot be named outside its module: add `repeater = ..` to the `#[announce]`, or write the path absolutely
-  --> tests/ui/leak_errors.rs:28:16
+  --> tests/ui/leak_errors.rs:36:16
    |
-28 |         pub a: UiLocal,
+36 |         pub a: UiLocal,
    |                ^^^^^^^
 
 error: `UiLocal` cannot be named outside its module: add `repeater = ..` to the `#[announce]`, or write the path absolutely
-  --> tests/ui/leak_errors.rs:34:16
+  --> tests/ui/leak_errors.rs:43:16
    |
-34 |         pub a: UiLocal,
+43 |         pub a: UiLocal,
    |                ^^^^^^^
 
-error: `UiOther` cannot be named outside its module: add `repeater = ..` to the `#[announce]`, or write the path absolutely
-  --> tests/ui/leak_errors.rs:35:16
+error: `UiLocal` cannot be named outside its module: add `repeater = ..` to the `#[announce]`, or write the path absolutely
+  --> tests/ui/leak_errors.rs:51:16
    |
-35 |         pub b: UiOther,
+51 |         pub a: UiLocal,
    |                ^^^^^^^
 
 error: `UiBase` cannot be named outside its module (a relative trait path in a bound): write the path absolutely
-  --> tests/ui/leak_errors.rs:40:20
+  --> tests/ui/leak_errors.rs:57:20
    |
-40 |     pub trait Sub: UiBase {
+57 |     pub trait Sub: UiBase {
    |                    ^^^^^^
 
-error: `Option<UiLocal>` cannot be named outside its module (a relative path in a type alias): write the path absolutely
-  --> tests/ui/leak_errors.rs:46:22
+error: `LEN` cannot be named outside its module (a relative value path): write the path absolutely
+  --> tests/ui/leak_errors.rs:58:26
    |
-46 |     pub type Alias = Option<UiLocal>;
-   |                      ^^^^^^^^^^^^^^^
-
-error: `UiBase` cannot be named outside its module (a relative trait path in a bound): write the path absolutely
-  --> tests/ui/leak_errors.rs:50:29
-   |
-50 |     pub trait WithRepeater: UiBase {
-   |                             ^^^^^^
+58 |         const M: usize = LEN;
+   |                          ^^^
 
 error: `UiWrap<'_>` cannot be named outside its module (a type that cannot be carried): write the path absolutely
-  --> tests/ui/leak_errors.rs:57:24
+  --> tests/ui/leak_errors.rs:59:24
    |
-57 |         fn f(&self, a: UiWrap<'_>);
+59 |         fn f(&self, a: UiWrap<'_>, b: UiLocal, c: [u8; LEN]);
    |                        ^^^^^^^^^^
 
-error: `crate::inner::UiIdx` cannot be named outside its module (a const generic that is not of a primitive type): use a primitive type for the const parameter
-  --> tests/ui/leak_errors.rs:62:33
+error: `UiLocal` cannot be named outside its module: add `repeater = ..` to the `#[announce]`, or write the path absolutely
+  --> tests/ui/leak_errors.rs:59:39
    |
-62 |     pub struct ConstTy<const N: crate::inner::UiIdx>(pub UiArr<N>);
-   |                                 ^^^^^^^^^^^^^^^^^^^
+59 |         fn f(&self, a: UiWrap<'_>, b: UiLocal, c: [u8; LEN]);
+   |                                       ^^^^^^^
+
+error: `[u8; LEN]` cannot be named outside its module: add `repeater = ..` to the `#[announce]`, or write the path absolutely
+  --> tests/ui/leak_errors.rs:59:51
+   |
+59 |         fn f(&self, a: UiWrap<'_>, b: UiLocal, c: [u8; LEN]);
+   |                                                   ^^^^^^^^^
+
+error: `UiBase` cannot be named outside its module (a relative trait path in a bound): write the path absolutely
+  --> tests/ui/leak_errors.rs:64:23
+   |
+64 |     pub type Alias<T: UiBase> = Option<(UiArr<{ LEN }>, T)>;
+   |                       ^^^^^^
+
+error: `Option<(UiArr<{ LEN }>, T)>` cannot be named outside its module (a relative path in a type alias): write the path absolutely
+  --> tests/ui/leak_errors.rs:64:33
+   |
+64 |     pub type Alias<T: UiBase> = Option<(UiArr<{ LEN }>, T)>;
+   |                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: `UiBase` cannot be named outside its module (a relative trait path in a bound): write the path absolutely
+  --> tests/ui/leak_errors.rs:68:29
+   |
+68 |     pub trait WithRepeater: UiBase {
+   |                             ^^^^^^
+
+error: `LEN` cannot be named outside its module (a relative value path): write the path absolutely
+  --> tests/ui/leak_errors.rs:69:26
+   |
+69 |         const M: usize = LEN;
+   |                          ^^^
+
+error: `UiIdx` cannot be named outside its module (a type that cannot be carried): write the path absolutely
+  --> tests/ui/leak_errors.rs:75:33
+   |
+75 |     pub struct ConstTy<const N: UiIdx>(pub UiArr<N>);
+   |                                 ^^^^^
+
+error: `UiLocal` cannot be named outside its module: add `repeater = ..` to the `#[announce]`, or write the path absolutely
+  --> tests/ui/leak_errors.rs:80:20
+   |
+80 |             pub a: UiLocal,
+   |                    ^^^^^^^

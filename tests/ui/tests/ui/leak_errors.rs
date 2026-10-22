@@ -1,6 +1,13 @@
-// With `strict = true` (the default) the definition is checked: nothing here calls a trampoline, and
-// each type that cannot be named outside its module is an error at its tokens, with no trampoline.
-// With `strict = false` the same items are recorded, and the call checks them (`leak_not_strict.rs`).
+// With `strict = true` (the default) every cause that keeps a name from resolving outside its
+// module is an error at its tokens, all of an item at once, and the item is still emitted.
+// `strict = false` records the causes instead (same_context.rs).
+#[macro_export]
+macro_rules! plain_check {
+    (@announce_format "1" @__announce_attrs [ $($hp:ident)? $(:: $hs:ident)* ! , $($np:ident)? $(:: $ns:ident)* ! $(, $($rest:tt)*)? ] { $($state:tt)* }) => {
+        $($np)? $(:: $ns)* ! { @announce_format "1" @__announce_attrs [ $($np)? $(:: $ns)* ! $(, $($rest)*)? ] { $($state)* } }
+    };
+    (@announce_format "1" ($($args:tt)*), $($item:tt)*) => {};
+}
 ::announce::define_repeater!(pub Repeater);
 pub mod inner {
     #[derive(Clone)]
@@ -13,65 +20,81 @@ pub mod inner {
 }
 
 mod d {
-    use super::inner::{UiArr, UiBase, UiLocal, UiOther, UiWrap};
+    use super::inner::{UiArr, UiBase, UiIdx, UiLocal, UiOther, UiWrap};
 
-    // A relative type without a `repeater`. No other attribute: no runner.
+    const LEN: usize = 4;
+
     #[announce::announce]
     pub struct Plain {
         pub a: UiLocal,
     }
 
-    // The same behind a derive, which the runner waits for.
-    #[announce::announce]
+    // With a derive, which the runner waits for; `strict = true` is the default written out.
+    #[announce::announce(strict = true)]
     #[derive(Clone)]
     pub struct Runner {
         pub a: UiLocal,
     }
 
-    // One error for each thing.
+    // Two announcements make one error, not two.
     #[announce::announce]
-    pub struct Two {
+    #[announce::announce(meta = my_lib::info)]
+    pub struct Twice {
         pub a: UiLocal,
-        pub b: UiOther,
     }
 
-    // A relative trait path: a `repeater` would not help, and the message does not suggest one.
+    // Checks of other crates, and one that owns an attribute: the item is emitted without it.
+    #[announce::announce(crate::plain_check, announce_test_derive::lib_check)]
+    #[derive(Clone)]
+    pub struct Checked {
+        #[my_lib(skip)]
+        pub a: UiLocal,
+    }
+
+    // Trait path, value path, a type that cannot be carried, and relative types: an array length
+    // makes the type relative.
     #[announce::announce]
     pub trait Sub: UiBase {
-        fn f(&self);
+        const M: usize = LEN;
+        fn f(&self, a: UiWrap<'_>, b: UiLocal, c: [u8; LEN]);
     }
 
     // The right-hand side of a type alias.
     #[announce::announce]
-    pub type Alias = Option<UiLocal>;
+    pub type Alias<T: UiBase> = Option<(UiArr<{ LEN }>, T)>;
 
-    // With a `repeater`, which carries the type but not a trait path.
+    // A `repeater` carries relative types, but not trait paths or values.
     #[announce::announce(repeater = crate::Repeater)]
     pub trait WithRepeater: UiBase {
-        fn f(&self, a: UiOther);
-    }
-
-    // A type that a repeater cannot carry.
-    #[announce::announce(repeater = crate::Repeater)]
-    pub trait Elided {
-        fn f(&self, a: UiWrap<'_>);
+        const M: usize = LEN;
+        fn f(&self, a: UiOther, c: [u8; LEN]);
     }
 
     // A const generic that cannot be encoded.
     #[announce::announce(repeater = crate::Repeater)]
-    pub struct ConstTy<const N: crate::inner::UiIdx>(pub UiArr<N>);
+    pub struct ConstTy<const N: UiIdx>(pub UiArr<N>);
 
-    // With a repeater that carries everything: fine.
+    // A macro of a library announces the user's item: the error is at the user's tokens.
+    announce_test_ui_lib::announced! {
+        pub struct FromLibrary {
+            pub a: UiLocal,
+        }
+    }
+
+    // Fine: a `repeater` that carries everything, absolute paths.
     #[announce::announce(repeater = crate::Repeater)]
     pub struct Carried {
         pub a: UiLocal,
     }
 
-    // Absolute paths: fine.
     #[announce::announce]
     pub struct Absolute {
         pub a: crate::inner::UiLocal,
     }
 }
 
-fn main() {}
+fn main() {
+    // The items are there, without the attribute that a check owns.
+    let _ = d::Runner { a: inner::UiLocal }.clone();
+    let _ = d::Checked { a: inner::UiLocal }.clone();
+}
