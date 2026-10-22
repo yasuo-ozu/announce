@@ -56,7 +56,9 @@ use proc_macro::TokenStream;
 /// - `crate = path`: path to the `announce` crate in generated code. Default: read
 ///   from the `Cargo.toml` of the crate being compiled, so a renamed dependency
 ///   works. A proc-macro library whose users do not depend on `announce` must set
-///   it (see [`announce::machinery`]).
+///   it (see [`announce::machinery`]). When the item has several announcements, it
+///   must be on the first one to expand, or on every one (see
+///   [Several announcements on one item](#several-announcements-on-one-item)).
 /// - `meta = path(args)`: adds `path(args)` to `META` for consumers. It is never
 ///   called. May repeat. `(args)` is optional.
 /// - `path` or `path(args)`, without `=`: a check. It runs at the definition, as
@@ -137,6 +139,12 @@ use proc_macro::TokenStream;
 ///   first announcement's, else the other's: two paths to `announce` do not conflict.
 ///   `mock`, `repeater`, `layout` and `emit_item` take the value that is set; two values
 ///   that differ are an error at the attribute that was expanded, and the item is kept.
+/// - **`crate = ..` goes on the first announcement.** The first one to expand (the topmost
+///   `#[announce]`) writes the runner and the sentinel with its own path, its `crate = ..` or
+///   else the one read from `Cargo.toml`, before the others are merged. A crate that reaches
+///   `announce` only through a re-export needs `crate = ..` on that announcement, or on every
+///   one. On a later one alone, the path of the first does not resolve (E0433, "could not
+///   find `announce` in the list of imported crates").
 /// - One item has one trampoline, so the announcements must agree on its name: the
 ///   `macro_name`, else the name of the item. They merge only if these names are equal
 ///   (the explicit `macro_name` is kept). `#[announce] #[announce(macro_name = ParseAlt)]
@@ -518,6 +526,9 @@ use proc_macro::TokenStream;
 ///   errors first, and then the error of the check; with a relative trait path in a bound
 ///   (`trait Sub: Base`) rustc stops at "cannot find trait" (E0405) before it.
 /// - [`announce::same_context!`] in the chain emits only that check.
+///
+/// Inside means the module where the call is written. A module that imports the trampoline
+/// with `use` is outside.
 ///
 /// The check is a `const _` item, which does not go inside an `impl` or `trait` block: a
 /// callback whose output goes there puts the tokens of `Entry::item_resolved` beside the block.

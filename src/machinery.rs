@@ -43,7 +43,9 @@
 //! a path that its users can reach. The library re-exports the crate
 //! (`#[doc(hidden)] pub use announce;`, next to the re-export of its macros), and
 //! the macro passes `crate = ::my_lib::announce`. If the users do depend on
-//! `announce`, nothing is needed.
+//! `announce`, nothing is needed. When the item has several announcements, the option
+//! counts on the first one to expand, or on every one (see [Several announcements on one
+//! item](macro@crate::announce#several-announcements-on-one-item)).
 //!
 //! # Output
 //!

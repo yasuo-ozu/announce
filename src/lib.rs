@@ -120,6 +120,28 @@ pub mod __private {
 /// m::Item! { [m::Item!, announce::same_context!] }
 /// ```
 ///
+/// What decides is the module where the call is written, not how the name of the trampoline got
+/// there. A module that imports `Item` with `use` is still outside, even when `Local` is in scope
+/// in it:
+///
+/// ```compile_fail,E0277
+/// mod m {
+///     pub struct Local(pub u8);
+///
+///     #[announce::announce(strict = false)]
+///     pub struct Item {
+///         pub a: Local,
+///     }
+/// }
+///
+/// mod other {
+///     use super::m::*;
+///
+///     Item! { [Item!, announce::same_context!] }
+/// }
+/// # fn main() {}
+/// ```
+///
 /// There is one error for each cause, at the type in the definition (all of it underlined),
 /// worded like the errors of type-leak, with the call in rustc's note about the bound. The texts
 /// need Rust 1.78 (`#[diagnostic::on_unimplemented]`); 1.85 shortens the error:

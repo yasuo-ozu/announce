@@ -1038,6 +1038,50 @@ impl Input {
     ///     Gather::Fetch(ts) => return Ok(ts),
     /// };
     /// ```
+    ///
+    /// ## Pairing a fetch with the `Announce` check
+    ///
+    /// A path without `#[announce]` is reported by rustc alone: ``error[E0433]: cannot find
+    /// `Plain` in `m` ``, with a "try to remove `!`" hint that does not help, and only for the
+    /// first missing item. A callback that knows its paths name structs, enums or unions can
+    /// emit [`check_type`] for each next to the fetch. That adds the error "`Plain` is not
+    /// announced" for every missing item at once (rustc's error still comes first). For a simple
+    /// dyn-compatible trait use [`check_trait`].
+    ///
+    /// ```
+    /// # use announce_core as announce;
+    /// use announce::helper::{check_type, Cont, Gather, Input};
+    /// use proc_macro2::TokenStream;
+    /// use template_quote::quote;
+    ///
+    /// // `paths` are structs, enums or unions: each has an `Announce` impl.
+    /// fn run(input: Input, paths: Vec<syn::Path>) -> syn::Result<TokenStream> {
+    ///     let entries = match input.gather(paths.iter().cloned().map(Cont::bang)) {
+    ///         Gather::Ready(e) => e,
+    ///         Gather::Fetch(ts) => {
+    ///             let krate = syn::parse_quote!(::announce);
+    ///             let checks = paths.iter().map(|p| check_type(&krate, &syn::parse_quote!(#p)));
+    ///             return Ok(quote! { #(#checks)* #ts });
+    ///         }
+    ///     };
+    ///     let n = entries.len();
+    ///     Ok(quote!(const COUNT: usize = #n;))
+    /// }
+    /// #
+    /// # // `a::S` is not there yet: the check goes in front of the fetch.
+    /// # let input: Input = syn::parse_quote! { [cb!] };
+    /// # let out = run(input, vec![syn::parse_quote!(a::S)])?.to_string();
+    /// # assert!(out.starts_with("const _ : () ="), "{}", out);
+    /// # assert!(out.contains("announce :: Announce") && out.contains("a :: S !"), "{}", out);
+    /// # Ok::<(), syn::Error>(())
+    /// ```
+    ///
+    /// The check is right only for a path that has an `Announce` impl. An announced `mod`, a
+    /// type alias, a trait that is not dyn-compatible, and an item with `emit_item = false` or
+    /// `mock` have none, so the check would reject a valid call. It is a `const _` item, so it
+    /// does not go inside an `impl` or `trait` block. In expression position
+    /// ([`is_expression_position`]) the output needs a block, `{ #(#checks)* #ts }`, or the
+    /// callback skips the check there.
     pub fn gather(&self, needed: impl IntoIterator<Item = Cont>) -> Gather<'_> {
         let needed: Vec<Cont> = needed.into_iter().collect();
         // A callback asking for itself (or for its own head path) would
