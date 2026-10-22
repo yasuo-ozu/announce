@@ -11,9 +11,12 @@ use proc_macro::TokenStream;
 /// as tokens, to a callback macro. It works on a struct, enum, union, trait, type
 /// alias and inline `mod`.
 ///
-/// ```ignore
+/// ```
+/// # macro_rules! my_callback { ($($t:tt)*) => {}; }
+/// # mod path { pub mod to {
 /// #[announce::announce]
 /// pub trait Greet { fn hi(&self) -> &'static str; }
+/// # } }
 ///
 /// // In any crate: pass the definition of `Greet` to `my_callback!`.
 /// path::to::Greet! { [path::to::Greet!, my_callback!] REST }
@@ -315,7 +318,8 @@ use proc_macro::TokenStream;
 /// - With `mock`, the hidden copy that rustc compiles keeps its docs like any
 ///   emitted item.
 ///
-/// ```ignore
+/// ```
+/// # use announce::announce;
 /// /// Says hello.
 /// #[announce]                    // callbacks get `pub trait Greet { fn hi(&self); }`
 /// pub trait Greet {
@@ -416,14 +420,24 @@ use proc_macro::TokenStream;
 /// are in [`announce::helper::TypeLeak`]. `TypeLeak::apply` rewrites every entry in an
 /// item to `<() as $crate::Repeater<ARGS, ID, I>>::Type`:
 ///
-/// ```ignore
+/// ```
+/// # use announce::helper::Input;
+/// # fn items(input: &Input) -> syn::Result<Vec<syn::Item>> {
+/// # let mut out = Vec::new();
 /// for entry in input.entries_in_order() {
 ///     let mut item = entry.item()?;           // the definition, as written
 ///     if let Some(tl) = entry.type_leak()? {  // `None` without a repeater
 ///         tl.apply(&mut item);
 ///     }
 ///     // emit `item`
+/// #   out.push(item);
 /// }
+/// # Ok(out)
+/// # }
+/// #
+/// # let input: Input = syn::parse_quote! { [cb!] a::S! => [] { pub struct S; } };
+/// # assert_eq!(items(&input)?.len(), 1);
+/// # Ok::<(), syn::Error>(())
 /// ```
 ///
 /// `Holder` then reads:
@@ -553,7 +567,8 @@ use proc_macro::TokenStream;
 /// that handles the paths itself announces a copy wrapped in an inline `mod` of the
 /// same name, with `emit_item = false`:
 ///
-/// ```ignore
+/// ```
+/// # use announce::announce;
 /// #[announce(emit_item = false, macro_name = MyTraitCopy, meta = my_lib::info(..))]
 /// pub mod MyTrait { pub trait MyTrait: Base { fn f(&self) -> Local; } }
 /// ```

@@ -505,11 +505,20 @@ impl Entry {
     /// the `announce` crate where the tokens are emitted (`::announce`). The check is a
     /// `const _` item: put it beside an `impl` or `trait` block, not in it.
     ///
-    /// ```ignore
+    /// ```
+    /// # use announce_core as announce;
+    /// # use announce::helper::Input;
+    /// # use template_quote::quote;
+    /// # let input: Input = syn::parse_quote! { [cb!] a::S! => [] { pub struct S { pub a: u8 } } };
+    /// # let krate: syn::Path = syn::parse_quote!(::announce);
+    /// # let mut out = proc_macro2::TokenStream::new();
     /// for entry in input.entries_in_order() {
     ///     let (item, check) = entry.item_resolved(&krate)?;
     ///     out.extend(quote! { #item #check });
     /// }
+    /// # // The item has no record: it comes as written, with no check.
+    /// # assert_eq!(out.to_string(), "pub struct S { pub a : u8 }");
+    /// # Ok::<(), syn::Error>(())
     /// ```
     pub fn item_resolved(&self, krate: &Path) -> Result<(syn::Item, TokenStream)> {
         let mut item = self.item()?;
@@ -1032,11 +1041,26 @@ impl Input {
     /// order, when all are present. Otherwise it returns [`Gather::Fetch`]: tokens
     /// that fetch the missing ones and call this callback again.
     ///
-    /// ```ignore
+    /// ```
+    /// # use announce_core as announce;
+    /// # use announce::helper::{Cont, Gather, Input};
+    /// # use proc_macro2::TokenStream;
+    /// # fn run(input: Input, needed: Vec<Cont>) -> syn::Result<TokenStream> {
     /// let entries = match input.gather(needed) {
     ///     Gather::Ready(e) => e,
     ///     Gather::Fetch(ts) => return Ok(ts),
     /// };
+    /// # Ok(entries.iter().map(|e| e.item.clone()).collect())
+    /// # }
+    /// #
+    /// # let needed = || vec![Cont::bang(syn::parse_quote!(a::S))];
+    /// # // `a::S!` is there: `gather` is ready.
+    /// # let input: Input = syn::parse_quote! { [cb!] a::S! => [] { struct S; } };
+    /// # assert_eq!(run(input, needed())?.to_string(), "struct S ;");
+    /// # // It is missing: the tokens fetch it and call the callback again.
+    /// # let out = run(syn::parse_quote! { [cb!] }, needed())?.to_string();
+    /// # assert!(out.starts_with("a :: S !") && out.contains("cb !"), "{}", out);
+    /// # Ok::<(), syn::Error>(())
     /// ```
     ///
     /// ## Pairing a fetch with the `Announce` check
@@ -1327,9 +1351,14 @@ macro_rules! callback {
 /// ([`OwnedAttrs::check_names`]), or `f` fails) becomes a `compile_error!`, like in
 /// [`callback()`]. So the result can be returned from the proc macro as it is.
 ///
-/// ```ignore
-/// /// Rejects `#[my_lib(bad)]` and tuple structs.
-/// #[proc_macro]
+/// In a proc-macro crate this is a `#[proc_macro]` function. The example is run as a
+/// doctest, which cannot define a proc macro: it has no attribute, and `proc_macro`
+/// stands for `proc_macro2`.
+///
+/// ```
+/// # use announce_core as announce;
+/// # use proc_macro2 as proc_macro;
+/// /// Rejects `#[my_lib(bad)]`.
 /// pub fn my_check(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 ///     announce::helper::check(input.into(), &["my_lib", "other"], |c| {
 ///         // `c` is an `announce::helper::CheckInput`.
@@ -1342,6 +1371,13 @@ macro_rules! callback {
 ///     })
 ///     .into()
 /// }
+/// #
+/// # // The attribute is owned by the check, and allowed.
+/// # let ok = my_check(syn::parse_quote! { (), struct S { #[my_lib(skip)] a: u8 } });
+/// # assert!(ok.is_empty(), "{}", ok);
+/// # // `bad` is an error at the attribute.
+/// # let err = my_check(syn::parse_quote! { (), struct S { #[my_lib(bad)] a: u8 } }).to_string();
+/// # assert!(err.contains("compile_error") && err.contains("`bad` is not allowed"), "{}", err);
 /// ```
 ///
 /// The function can be tested with `proc_macro2` streams, because it does not use the
@@ -1450,14 +1486,28 @@ pub fn payload(item: TokenStream) -> Option<TokenStream> {
 /// of the call. The trampoline needs its own path to call itself again, when it holds
 /// a large item once, and a real `$` to un-escape an item that has `$` in it.
 ///
-/// ```ignore
-/// #[proc_macro_derive(Parse)]
+/// In a proc-macro crate this is a `#[proc_macro_derive(Parse)]` function. The example is run
+/// as a doctest, which cannot define a proc macro: it has no attribute, and `proc_macro`
+/// stands for `proc_macro2`.
+///
+/// ```
+/// # use announce_core as announce;
+/// # use announce::helper::{Cont, ContList};
+/// # use proc_macro2 as proc_macro;
+/// # use proc_macro::TokenStream;
 /// pub fn derive_parse(input: TokenStream) -> TokenStream {
 ///     if let Some(out) = announce::helper::redirect(input.clone().into(), &syn::parse_quote!(::pars::ParseAnnounce)) {
 ///         return out.into();
 ///     }
 ///     // normal derive
+/// #   TokenStream::new()
 /// }
+/// #
+/// # // The dummy of a trampoline call goes to `::pars::ParseAnnounce!`, other items do not.
+/// # let dummy = ContList(vec![Cont::derive(syn::parse_quote!(Parse))]).invoke(TokenStream::new());
+/// # let out = derive_parse(dummy).to_string();
+/// # assert!(out.starts_with(":: pars :: ParseAnnounce !"), "{}", out);
+/// # assert!(derive_parse(syn::parse_quote! { struct S; }).is_empty());
 /// ```
 pub fn redirect(item: TokenStream, target: &Path) -> Option<TokenStream> {
     // The payload starts with `@announce_format "VERSION"`, written by whoever

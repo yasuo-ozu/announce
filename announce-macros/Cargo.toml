@@ -15,3 +15,8 @@ proc-macro = true
 syn = { version = "2.0.25", features = ["full", "extra-traits"] }
 template-quote = "0.4"
 announce-core = { path = "../announce-core", version = "0.2.0" }
+
+[dev-dependencies]
+# For the doctests of `#[announce]`, which expand it through the facade (a cycle of
+# dev-dependencies is allowed).
+announce = { path = ".." }

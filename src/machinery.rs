@@ -16,8 +16,14 @@
 //! announce = "0.2"
 //! ```
 //!
-//! ```ignore
-//! #[proc_macro_attribute]
+//! In a proc-macro crate this is a `#[proc_macro_attribute]` function. The example is only
+//! compiled as a doctest, which cannot define a proc macro.
+//!
+//! ```
+//! # extern crate proc_macro;
+//! # use proc_macro::TokenStream;
+//! # use template_quote as quote;
+//! # fn rewrite(item: proc_macro2::TokenStream) -> proc_macro2::TokenStream { item }
 //! pub fn my_attr(attr: TokenStream, item: TokenStream) -> TokenStream {
 //!     // Parse and rewrite the item ...
 //!     let item: proc_macro2::TokenStream = rewrite(item.into());
