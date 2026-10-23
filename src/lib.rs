@@ -40,8 +40,17 @@
 /// empty without options. In the item, `#[cfg]` is already evaluated in the defining
 /// crate, `crate::` reads `$crate::`, and doc attributes are gone (see
 /// [Docs](#docs)). The [wire format] is the same for every item. Write callbacks
-/// with [`announce::helper`] (and announce items your own macro builds with
-/// [`announce::machinery`]); both need the feature `proc-macro-api` of `announce`,
+/// with
+#[cfg_attr(
+    feature = "proc-macro-api",
+    doc = "[`announce::helper`] (and announce items your own macro builds with",
+    doc = "[`announce::machinery`]); both need the feature `proc-macro-api` of `announce`,"
+)]
+#[cfg_attr(
+    not(feature = "proc-macro-api"),
+    doc = "`announce::helper` (and announce items your own macro builds with",
+    doc = "`announce::machinery`); both need the feature `proc-macro-api` of `announce`,"
+)]
 /// which is on by default. A `#![no_std]` crate that only defines items turns it off
 /// (`default-features = false`) and still has `#[announce]`.
 ///
@@ -58,7 +67,15 @@
 /// - `crate = path`: path to the `announce` crate in generated code. Default: read
 ///   from the `Cargo.toml` of the crate being compiled, so a renamed dependency
 ///   works. A proc-macro library whose users do not depend on `announce` must set
-///   it (see [`announce::machinery`]). When the item has several announcements, it
+///   it (see
+#[cfg_attr(
+    feature = "proc-macro-api",
+    doc = "[`announce::machinery`]). When the item has several announcements, it"
+)]
+#[cfg_attr(
+    not(feature = "proc-macro-api"),
+    doc = "`announce::machinery`). When the item has several announcements, it"
+)]
 ///   must be on the first one to expand, or on every one (see
 ///   [Several announcements on one item](#several-announcements-on-one-item)).
 /// - `meta = path(args)`: adds `path(args)` to `META` for consumers. It is never
@@ -268,7 +285,14 @@
 ///
 /// An owned name `my_lib` matches `#[my_lib]`, `#[my_lib(..)]`, `#[my_lib = ..]` and
 /// `#[my_lib::..]`, anywhere in the item: fields, variants, methods, an inline `mod`
-/// and more (exact rules: [`announce::helper::attrs`]). A name that rustc or a
+#[cfg_attr(
+    feature = "proc-macro-api",
+    doc = "and more (exact rules: [`announce::helper::attrs`]). A name that rustc or a"
+)]
+#[cfg_attr(
+    not(feature = "proc-macro-api"),
+    doc = "and more (exact rules: `announce::helper::attrs`). A name that rustc or a"
+)]
 /// standard tool uses (`cfg`, `doc`, `derive`, `allow`, `rustfmt`, `rustc_*`, ..)
 /// cannot be owned: that is an error where `#[announce]` is used. Two checks must not
 /// own the same name for different purposes. The other macros on the item see the owned
@@ -280,7 +304,14 @@
 /// `announce::helper::check` runs a proc-macro check and answers for you. A
 /// `macro_rules!` check needs one more arm, and both arms start with
 /// `@announce_format "1"`, like every call of announce. The protocol is in
-/// [`announce::helper::attrs`]. Without checks there is no query.
+#[cfg_attr(
+    feature = "proc-macro-api",
+    doc = "[`announce::helper::attrs`]. Without checks there is no query."
+)]
+#[cfg_attr(
+    not(feature = "proc-macro-api"),
+    doc = "`announce::helper::attrs`. Without checks there is no query."
+)]
 ///
 /// **`#[cfg]` and `#[cfg_attr]`.** Owned attributes are removed after the item's
 /// cfgs are evaluated in the defining crate. An owned attribute inside
@@ -416,7 +447,14 @@
 /// With a `repeater`, `META` always has one more element, `type_leak(..)`, with no
 /// entries when no type needed it. A callback reads it with
 /// `announce::helper::Entry::type_leak`. Its format and the encoding of the generics
-/// are in [`announce::helper::TypeLeak`]. `TypeLeak::apply` rewrites every entry in an
+#[cfg_attr(
+    feature = "proc-macro-api",
+    doc = "are in [`announce::helper::TypeLeak`]. `TypeLeak::apply` rewrites every entry in an"
+)]
+#[cfg_attr(
+    not(feature = "proc-macro-api"),
+    doc = "are in `announce::helper::TypeLeak`. `TypeLeak::apply` rewrites every entry in an"
+)]
 /// item to `<() as $crate::Repeater<ARGS, ID, I>>::Type`:
 ///
 #[cfg_attr(feature = "proc-macro-api", doc = "```")]
@@ -539,10 +577,12 @@
 ///   module. A callback that emits the item elsewhere gets rustc's own "cannot find type"
 ///   errors first, and then the error of the check; with a relative trait path in a bound
 ///   (`trait Sub: Base`) rustc stops at "cannot find trait" (E0405) before it.
-/// - [`announce::same_context!`] in the chain emits only that check.
+/// - [`announce::same_context!`] in the chain emits only that check. It works in item,
+///   statement and `(expr)` position, not in type or pattern position.
 ///
-/// Inside means the module where the call is written. A module that imports the trampoline
-/// with `use` is outside.
+/// Inside means the module where the call expands. For a call in the body of a `macro_rules!`
+/// macro that is the module of the invocation, not the module that defines the macro. A module
+/// that imports the trampoline with `use` is outside.
 ///
 /// The check is a `const _` item, which does not go inside an `impl` or `trait` block: a
 /// callback whose output goes there puts the tokens of `Entry::item_resolved` beside the block.
@@ -586,12 +626,25 @@
 /// or `&mut self` methods only, at most `Send` and `Sync` as supertraits). With
 /// `emit_item = false` or `mock` there is no impl.
 ///
-/// [wire format]: https://docs.rs/announce/latest/announce/helper/struct.Input.html#the-wire-format
-/// [`announce::same_context!`]: https://docs.rs/announce/latest/announce/macro.same_context.html
-/// [`announce::helper::attrs`]: https://docs.rs/announce/latest/announce/helper/attrs/index.html
-/// [`announce::helper::TypeLeak`]: https://docs.rs/announce/latest/announce/helper/struct.TypeLeak.html
-/// [`announce::helper`]: https://docs.rs/announce/latest/announce/helper/index.html
-/// [`announce::machinery`]: https://docs.rs/announce/latest/announce/machinery/index.html
+/// [`announce::same_context!`]: macro@crate::same_context
+#[cfg_attr(
+    feature = "proc-macro-api",
+    doc = "[wire format]: helper::Input#the-wire-format"
+)]
+#[cfg_attr(
+    not(feature = "proc-macro-api"),
+    doc = "[wire format]: #calling-a-trampoline"
+)]
+#[cfg_attr(
+    feature = "proc-macro-api",
+    doc = "[`announce::helper::attrs`]: helper::attrs"
+)]
+#[cfg_attr(
+    feature = "proc-macro-api",
+    doc = "[`announce::helper::TypeLeak`]: helper::TypeLeak"
+)]
+#[cfg_attr(feature = "proc-macro-api", doc = "[`announce::helper`]: helper")]
+#[cfg_attr(feature = "proc-macro-api", doc = "[`announce::machinery`]: machinery")]
 pub use announce_macros::announce;
 pub use announce_macros::define_repeater;
 
@@ -709,9 +762,10 @@ pub mod __private {
 /// m::Item! { [m::Item!, announce::same_context!] }
 /// ```
 ///
-/// What decides is the module where the call is written, not how the name of the trampoline got
-/// there. A module that imports `Item` with `use` is still outside, even when `Local` is in scope
-/// in it:
+/// What decides is the module where the call expands, not how the name of the trampoline got
+/// there. For a call in the body of a `macro_rules!` macro that is the module of the invocation,
+/// not the module that defines the macro. A module that imports `Item` with `use` is still
+/// outside, even when `Local` is in scope in it:
 ///
 /// ```compile_fail,E0277
 /// mod m {
@@ -742,18 +796,26 @@ pub mod __private {
 ///  6 |         pub a: Local,
 ///    |                ^^^^^ relative type, not in scope where `m::Item!` is called
 ///    |
+///    = help: the trait `InModuleOf_Item` is not implemented for `announce::__private::ThisCall`
 ///    = note: `m::Item` is used outside its module `m`
 ///    = note: write `Local` with an absolute path (e.g. `crate::Local`), or add `repeater = ..` to the `#[announce]` of `Item`
-/// note: required by a bound in `Check::used_outside_its_module`
-///   --> src/main.rs:11:4
+/// note: required by a bound in `_::Check::used_outside_its_module`
+///   --> src/main.rs:11:16
 ///    |
 /// 11 | m::Item! { [m::Item!, announce::same_context!] }
-///    |    ^^^^ required by this bound in `Check::used_outside_its_module`
+///    |                ^^^^ required by this bound in `Check::used_outside_its_module`
 /// ```
 ///
-/// The check is a `const _` item, so it never goes inside an `impl` or a `trait` block. Put it at
-/// module level beside the impl (its answer depends only on the module of the call), and call
-/// the callback in the impl without it:
+/// The check is a `const _` item, so `same_context!` works in item and statement position, and in
+/// expression position when the call starts with the `(expr)` option
+/// (`Item! { (expr) [Item!, announce::same_context!, cb!] }`): the checks go in a block with the
+/// value. It does not work in type or pattern position, where other trampoline calls do, not even
+/// in the module of the item: rustc rejects the `const _` ("expected a trait, found type" for a
+/// type) and says nothing about the context.
+///
+/// For the same reason the check never goes inside an `impl` or a `trait` block. Put it at
+/// module level beside the impl (its answer depends only on the module where the call expands),
+/// and call the callback in the impl without it:
 ///
 /// ```text
 /// Item! { [Item!, announce::same_context!] }          // module level: the check

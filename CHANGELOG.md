@@ -28,6 +28,8 @@
 - The record is the only difference from any other call: `ANNOUNCE_FORMAT` is still `"1"`. A
   callback built with announce 0.2 ignores it and takes the item for one that resolves
   everywhere, which works in the module of the item.
+- `announce::helper::try_same_context`, `same_context` with the error returned as a `syn::Error`.
+- `announce::machinery::Options::strict` (default `true`), the field that `strict = false` sets.
 
 ### Changed
 
