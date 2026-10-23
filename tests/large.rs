@@ -1,12 +1,12 @@
 //! The single-copy layout: the definitions in
-//! `announce_test_defs::large` and `large_leak` are above the size threshold,
+//! `announce_tests::defs::large` and `large_leak` are above the size threshold,
 //! so their trampolines hold the item once and take three expansions per call
 //! (two through the derive route). Everything a caller sees is the same as with
 //! small items; these tests run the large ones through every route and
 //! position, and mix them with small ones.
 
-use announce_test_defs::large;
-use announce_test_derive::{gathered, public_fields, start, summary};
+use announce_tests::defs::large;
+use announce_tests::derive::{gathered, public_fields, start, summary};
 
 macro_rules! capture {
     (@announce_format "1" [$($l:tt)*] $($t:tt)*) => {
@@ -39,7 +39,7 @@ fn kinds_of(rows: &[(&str, &str, &str)]) -> Vec<String> {
 }
 
 mod single_large {
-    ::announce_test_defs::large::BigTrait! { [::announce_test_defs::large::BigTrait!, capture!] rest tokens }
+    ::announce_tests::defs::large::BigTrait! { [::announce_tests::defs::large::BigTrait!, capture!] rest tokens }
 }
 
 #[test]
@@ -47,7 +47,7 @@ fn the_wire_format_is_the_same() {
     let out = norm(single_large::OUT);
     assert!(
         out.starts_with(
-            "[capture!]::announce_test_defs::large::BigTrait!=>[]{pubtraitBigTrait{fnm0(&self,x:u32)->u32;"
+            "[capture!]::announce_tests::defs::large::BigTrait!=>[]{pubtraitBigTrait{fnm0(&self,x:u32)->u32;"
         ),
         "{}",
         out
@@ -61,7 +61,7 @@ fn the_wire_format_is_the_same() {
 
 mod mixed {
     use super::summary;
-    use announce_test_defs::{kinds, large};
+    use announce_tests::defs::{kinds, large};
     // Small (direct) and large (single-copy) definitions in one chain, and a
     // large one first and last.
     large::BigTrait! {
@@ -97,7 +97,7 @@ fn small_and_large_definitions_in_one_chain() {
 
 mod long_chain {
     use super::summary;
-    use announce_test_defs::{kinds, large};
+    use announce_tests::defs::{kinds, large};
     // 6 x (3 + 1 + 3 + 3 + 1) = 66 nested expansions, at the default limit (128).
     large::BigTrait! {
         [large::BigTrait!, kinds::Greet!, large::BigStruct!, large::BigEnum!, kinds::Shape!,
@@ -125,61 +125,61 @@ mod at_the_limit {
     use super::summary;
     pub mod large {
         use super::summary;
-        ::announce_test_defs::large::BigTrait! {
-            [::announce_test_defs::large::BigTrait!,
-         ::announce_test_defs::large::BigTrait!, ::announce_test_defs::large::BigTrait!, ::announce_test_defs::large::BigTrait!, ::announce_test_defs::large::BigTrait!, ::announce_test_defs::large::BigTrait!, ::announce_test_defs::large::BigTrait!,
-         ::announce_test_defs::large::BigTrait!, ::announce_test_defs::large::BigTrait!, ::announce_test_defs::large::BigTrait!, ::announce_test_defs::large::BigTrait!, ::announce_test_defs::large::BigTrait!, ::announce_test_defs::large::BigTrait!,
-         ::announce_test_defs::large::BigTrait!, ::announce_test_defs::large::BigTrait!, ::announce_test_defs::large::BigTrait!, ::announce_test_defs::large::BigTrait!, ::announce_test_defs::large::BigTrait!, ::announce_test_defs::large::BigTrait!,
-         ::announce_test_defs::large::BigTrait!, ::announce_test_defs::large::BigTrait!, ::announce_test_defs::large::BigTrait!, ::announce_test_defs::large::BigTrait!, ::announce_test_defs::large::BigTrait!, ::announce_test_defs::large::BigTrait!,
-         ::announce_test_defs::large::BigTrait!, ::announce_test_defs::large::BigTrait!, ::announce_test_defs::large::BigTrait!, ::announce_test_defs::large::BigTrait!, ::announce_test_defs::large::BigTrait!, ::announce_test_defs::large::BigTrait!,
-         ::announce_test_defs::large::BigTrait!, ::announce_test_defs::large::BigTrait!, ::announce_test_defs::large::BigTrait!, ::announce_test_defs::large::BigTrait!, ::announce_test_defs::large::BigTrait!, ::announce_test_defs::large::BigTrait!,
-         ::announce_test_defs::large::BigTrait!, ::announce_test_defs::large::BigTrait!, ::announce_test_defs::large::BigTrait!, ::announce_test_defs::large::BigTrait!, ::announce_test_defs::large::BigTrait!,
+        ::announce_tests::defs::large::BigTrait! {
+            [::announce_tests::defs::large::BigTrait!,
+         ::announce_tests::defs::large::BigTrait!, ::announce_tests::defs::large::BigTrait!, ::announce_tests::defs::large::BigTrait!, ::announce_tests::defs::large::BigTrait!, ::announce_tests::defs::large::BigTrait!, ::announce_tests::defs::large::BigTrait!,
+         ::announce_tests::defs::large::BigTrait!, ::announce_tests::defs::large::BigTrait!, ::announce_tests::defs::large::BigTrait!, ::announce_tests::defs::large::BigTrait!, ::announce_tests::defs::large::BigTrait!, ::announce_tests::defs::large::BigTrait!,
+         ::announce_tests::defs::large::BigTrait!, ::announce_tests::defs::large::BigTrait!, ::announce_tests::defs::large::BigTrait!, ::announce_tests::defs::large::BigTrait!, ::announce_tests::defs::large::BigTrait!, ::announce_tests::defs::large::BigTrait!,
+         ::announce_tests::defs::large::BigTrait!, ::announce_tests::defs::large::BigTrait!, ::announce_tests::defs::large::BigTrait!, ::announce_tests::defs::large::BigTrait!, ::announce_tests::defs::large::BigTrait!, ::announce_tests::defs::large::BigTrait!,
+         ::announce_tests::defs::large::BigTrait!, ::announce_tests::defs::large::BigTrait!, ::announce_tests::defs::large::BigTrait!, ::announce_tests::defs::large::BigTrait!, ::announce_tests::defs::large::BigTrait!, ::announce_tests::defs::large::BigTrait!,
+         ::announce_tests::defs::large::BigTrait!, ::announce_tests::defs::large::BigTrait!, ::announce_tests::defs::large::BigTrait!, ::announce_tests::defs::large::BigTrait!, ::announce_tests::defs::large::BigTrait!, ::announce_tests::defs::large::BigTrait!,
+         ::announce_tests::defs::large::BigTrait!, ::announce_tests::defs::large::BigTrait!, ::announce_tests::defs::large::BigTrait!, ::announce_tests::defs::large::BigTrait!, ::announce_tests::defs::large::BigTrait!,
          summary!] ALL
         }
     }
     pub mod small {
         use super::summary;
-        ::announce_test_defs::kinds::Greet! {
-            [::announce_test_defs::kinds::Greet!,
-         ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!,
-         ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!,
-         ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!,
-         ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!,
-         ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!,
-         ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!,
-         ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!,
-         ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!,
-         ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!,
-         ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!,
-         ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!,
-         ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!,
-         ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!,
-         ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!,
-         ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!,
-         ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!,
-         ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!,
-         ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!,
-         ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!,
-         ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!,
-         ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!, ::announce_test_defs::kinds::Greet!,
+        ::announce_tests::defs::kinds::Greet! {
+            [::announce_tests::defs::kinds::Greet!,
+         ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!,
+         ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!,
+         ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!,
+         ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!,
+         ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!,
+         ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!,
+         ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!,
+         ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!,
+         ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!,
+         ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!,
+         ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!,
+         ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!,
+         ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!,
+         ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!,
+         ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!,
+         ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!,
+         ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!,
+         ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!,
+         ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!,
+         ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!,
+         ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!, ::announce_tests::defs::kinds::Greet!,
          summary!] ALL
         }
     }
     pub mod dollar {
         use super::summary;
-        ::announce_test_defs::kinds::with_macro! {
-            [::announce_test_defs::kinds::with_macro!,
-         ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!,
-         ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!,
-         ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!,
-         ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!,
-         ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!,
-         ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!,
-         ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!,
-         ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!,
-         ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!,
-         ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!,
-         ::announce_test_defs::kinds::with_macro!, ::announce_test_defs::kinds::with_macro!,
+        ::announce_tests::defs::kinds::with_macro! {
+            [::announce_tests::defs::kinds::with_macro!,
+         ::announce_tests::defs::kinds::with_macro!, ::announce_tests::defs::kinds::with_macro!, ::announce_tests::defs::kinds::with_macro!, ::announce_tests::defs::kinds::with_macro!, ::announce_tests::defs::kinds::with_macro!, ::announce_tests::defs::kinds::with_macro!,
+         ::announce_tests::defs::kinds::with_macro!, ::announce_tests::defs::kinds::with_macro!, ::announce_tests::defs::kinds::with_macro!, ::announce_tests::defs::kinds::with_macro!, ::announce_tests::defs::kinds::with_macro!, ::announce_tests::defs::kinds::with_macro!,
+         ::announce_tests::defs::kinds::with_macro!, ::announce_tests::defs::kinds::with_macro!, ::announce_tests::defs::kinds::with_macro!, ::announce_tests::defs::kinds::with_macro!, ::announce_tests::defs::kinds::with_macro!, ::announce_tests::defs::kinds::with_macro!,
+         ::announce_tests::defs::kinds::with_macro!, ::announce_tests::defs::kinds::with_macro!, ::announce_tests::defs::kinds::with_macro!, ::announce_tests::defs::kinds::with_macro!, ::announce_tests::defs::kinds::with_macro!, ::announce_tests::defs::kinds::with_macro!,
+         ::announce_tests::defs::kinds::with_macro!, ::announce_tests::defs::kinds::with_macro!, ::announce_tests::defs::kinds::with_macro!, ::announce_tests::defs::kinds::with_macro!, ::announce_tests::defs::kinds::with_macro!, ::announce_tests::defs::kinds::with_macro!,
+         ::announce_tests::defs::kinds::with_macro!, ::announce_tests::defs::kinds::with_macro!, ::announce_tests::defs::kinds::with_macro!, ::announce_tests::defs::kinds::with_macro!, ::announce_tests::defs::kinds::with_macro!, ::announce_tests::defs::kinds::with_macro!,
+         ::announce_tests::defs::kinds::with_macro!, ::announce_tests::defs::kinds::with_macro!, ::announce_tests::defs::kinds::with_macro!, ::announce_tests::defs::kinds::with_macro!, ::announce_tests::defs::kinds::with_macro!, ::announce_tests::defs::kinds::with_macro!,
+         ::announce_tests::defs::kinds::with_macro!, ::announce_tests::defs::kinds::with_macro!, ::announce_tests::defs::kinds::with_macro!, ::announce_tests::defs::kinds::with_macro!, ::announce_tests::defs::kinds::with_macro!, ::announce_tests::defs::kinds::with_macro!,
+         ::announce_tests::defs::kinds::with_macro!, ::announce_tests::defs::kinds::with_macro!, ::announce_tests::defs::kinds::with_macro!, ::announce_tests::defs::kinds::with_macro!, ::announce_tests::defs::kinds::with_macro!, ::announce_tests::defs::kinds::with_macro!,
+         ::announce_tests::defs::kinds::with_macro!, ::announce_tests::defs::kinds::with_macro!, ::announce_tests::defs::kinds::with_macro!, ::announce_tests::defs::kinds::with_macro!, ::announce_tests::defs::kinds::with_macro!, ::announce_tests::defs::kinds::with_macro!,
+         ::announce_tests::defs::kinds::with_macro!, ::announce_tests::defs::kinds::with_macro!,
          summary!] ALL
         }
     }
@@ -194,7 +194,7 @@ fn chains_up_to_the_documented_lengths_fit_the_default_limit() {
 
 mod dollar {
     use super::summary;
-    use announce_test_defs::{kinds, large};
+    use announce_tests::defs::{kinds, large};
     // Two large `$` payloads.
     pub mod two {
         use super::*;
@@ -245,13 +245,13 @@ fn dollar_payloads_of_large_items() {
 }
 
 mod single_with_derive {
-    ::announce_test_defs::large::SingleWithDerive! { [::announce_test_defs::large::SingleWithDerive!, capture!] }
+    ::announce_tests::defs::large::SingleWithDerive! { [::announce_tests::defs::large::SingleWithDerive!, capture!] }
 }
 
 #[test]
 fn the_runner_takes_the_layout_option() {
-    fn is_announced<T: ?Sized + announce::Announce>() {}
-    is_announced::<announce_test_defs::large::SingleWithDerive>();
+    fn is_announced<T: ?Sized + announce_tests::defs::announce::Announce>() {}
+    is_announced::<announce_tests::defs::large::SingleWithDerive>();
     let out = norm(single_with_derive::OUT);
     assert!(
         out.contains("=>[$crate::info(runner)]{")
@@ -263,7 +263,7 @@ fn the_runner_takes_the_layout_option() {
 
 #[test]
 fn private_and_restricted_trampolines_that_hold_their_item_once() {
-    use announce_test_defs::vis_single as v;
+    use announce_tests::defs::vis_single as v;
     assert!(norm(v::a::SAME_CRATE).contains("structCrateOnly"));
     assert!(norm(v::b::SAME_CRATE).contains("structPrivate"));
     assert!(norm(v::c::SAME_CRATE).contains("enumSuperOnly"));
@@ -275,10 +275,10 @@ fn private_and_restricted_trampolines_that_hold_their_item_once() {
 
 mod dollar_crate {
     pub mod plain {
-        announce_test_defs::via_dollar_crate_large!();
+        announce_tests::defs::via_dollar_crate_large!();
     }
     pub mod with_dollar {
-        announce_test_defs::via_dollar_crate_large_mod!();
+        announce_tests::defs::via_dollar_crate_large_mod!();
     }
 }
 
@@ -290,7 +290,7 @@ fn dollar_crate_in_the_list_of_a_large_item() {
 
 mod derive_route {
     use super::{start, summary};
-    use announce_test_defs::{conflict, kinds, large};
+    use announce_tests::defs::{conflict, kinds, large};
 
     // A small definition, then a derive into a large trampoline (named dummy).
     pub mod named {
@@ -487,18 +487,18 @@ fn expression_and_type_positions() {
 
 #[test]
 fn pattern_and_statement_positions() {
-    use announce_test_defs::large::{BigEnum, BigStruct};
+    use announce_tests::defs::large::{BigEnum, BigStruct};
     // Only the names matter: all-zero bits are a valid `BigStruct`.
     let s: BigStruct = unsafe { std::mem::zeroed() };
     assert!(matches!(
         s,
-        ::announce_test_defs::large::BigStruct! { [::announce_test_defs::large::BigStruct!, struct_pat!] }
+        ::announce_tests::defs::large::BigStruct! { [::announce_tests::defs::large::BigStruct!, struct_pat!] }
     ));
     // A `let` is a pattern position too.
-    let ::announce_test_defs::large::BigStruct! { [::announce_test_defs::large::BigStruct!, struct_pat!] } =
+    let ::announce_tests::defs::large::BigStruct! { [::announce_tests::defs::large::BigStruct!, struct_pat!] } =
         s;
     let classify = |e: &BigEnum| match e {
-        ::announce_test_defs::large::BigEnum! { [::announce_test_defs::large::BigEnum!, first_variant_pat!] } => {
+        ::announce_tests::defs::large::BigEnum! { [::announce_tests::defs::large::BigEnum!, first_variant_pat!] } => {
             "first"
         }
         _ => "other",
@@ -515,7 +515,7 @@ fn pattern_and_statement_positions() {
 
 mod transformed {
     use super::{public_fields, summary};
-    use announce_test_defs::large;
+    use announce_tests::defs::large;
     pub mod sig {
         use super::*;
         large::BigSig! { [large::BigSig!, ::announce::signature_only!, capture!] }
@@ -568,7 +568,7 @@ fn transformers_see_the_large_entry() {
 
 mod checked {
     use super::summary;
-    use announce_test_defs::large;
+    use announce_tests::defs::large;
     large::BigChecked! { [large::BigChecked!, summary!] CHECKED }
 }
 
@@ -585,16 +585,16 @@ mod gather {
     use super::gathered;
     gathered! {
         [gathered!]
-        (::announce_test_defs::large::BigTrait, ::announce_test_defs::kinds::Shape,
-         ::announce_test_defs::large::BigStruct, ::announce_test_defs::large::BigAlias,
-         ::announce_test_defs::large::BigEnum) G
+        (::announce_tests::defs::large::BigTrait, ::announce_tests::defs::kinds::Shape,
+         ::announce_tests::defs::large::BigStruct, ::announce_tests::defs::large::BigAlias,
+         ::announce_tests::defs::large::BigEnum) G
     }
     // Some of them are already there: only the others are fetched.
     pub mod partly {
         use super::gathered;
-        ::announce_test_defs::large::BigEnum! {
-            [::announce_test_defs::large::BigEnum!, gathered!]
-            (::announce_test_defs::large::BigTrait, ::announce_test_defs::large::BigEnum) G
+        ::announce_tests::defs::large::BigEnum! {
+            [::announce_tests::defs::large::BigEnum!, gathered!]
+            (::announce_tests::defs::large::BigTrait, ::announce_tests::defs::large::BigEnum) G
         }
     }
 }
@@ -610,7 +610,7 @@ fn gather_fetches_large_definitions() {
 
 mod layouts {
     use super::summary;
-    use announce_test_defs::large;
+    use announce_tests::defs::large;
     // A small item held once, and a large item copied into each arm.
     pub mod chain {
         use super::*;
@@ -659,26 +659,26 @@ fn layout_option_chooses_the_trampoline() {
 // type-leak: the `type_leak(..)` META is part of the single copy of META.
 mod leaked {
     pub mod s {
-        ::announce_test_defs::large_leak::BigLeaky! { [::announce_test_defs::large_leak::BigLeaky!, ::announce_test_derive::apply_leak!] M }
+        ::announce_tests::defs::large_leak::BigLeaky! { [::announce_tests::defs::large_leak::BigLeaky!, ::announce_tests::derive::apply_leak!] M }
     }
     pub mod t {
-        ::announce_test_defs::large_leak::BigLeakTrait! { [::announce_test_defs::large_leak::BigLeakTrait!, ::announce_test_derive::apply_leak!] M }
+        ::announce_tests::defs::large_leak::BigLeakTrait! { [::announce_tests::defs::large_leak::BigLeakTrait!, ::announce_tests::derive::apply_leak!] M }
     }
     pub mod ty {
-        ::announce_test_defs::large_leak::BigLeaky! { [::announce_test_defs::large_leak::BigLeaky!, ::announce_test_derive::leak_types!] S }
+        ::announce_tests::defs::large_leak::BigLeaky! { [::announce_tests::defs::large_leak::BigLeaky!, ::announce_tests::derive::leak_types!] S }
     }
     pub mod ty_trait {
-        ::announce_test_defs::large_leak::BigLeakTrait! { [::announce_test_defs::large_leak::BigLeakTrait!, ::announce_test_derive::leak_types!] T }
+        ::announce_tests::defs::large_leak::BigLeakTrait! { [::announce_tests::defs::large_leak::BigLeakTrait!, ::announce_tests::derive::leak_types!] T }
     }
     // The original payload and META.
     pub mod raw {
-        ::announce_test_defs::large_leak::BigLeaky! { [::announce_test_defs::large_leak::BigLeaky!, capture!] }
+        ::announce_tests::defs::large_leak::BigLeaky! { [::announce_tests::defs::large_leak::BigLeaky!, capture!] }
     }
     // A chain: a plain large item, then a leaky one, then a small one.
     pub mod chain {
-        ::announce_test_defs::large::BigStruct! {
-            [::announce_test_defs::large::BigStruct!, ::announce_test_defs::large_leak::BigLeaky!,
-             ::announce_test_defs::kinds::Shape!, ::announce_test_derive::apply_leak!] M
+        ::announce_tests::defs::large::BigStruct! {
+            [::announce_tests::defs::large::BigStruct!, ::announce_tests::defs::large_leak::BigLeaky!,
+             ::announce_tests::defs::kinds::Shape!, ::announce_tests::derive::apply_leak!] M
         }
     }
 }
@@ -689,7 +689,7 @@ macro_rules! impl_methods {
 
 #[test]
 fn type_leak_with_a_large_item() {
-    use announce_test_defs::large_leak::inner::Local;
+    use announce_tests::defs::large_leak::inner::Local;
     // `Local` is not in scope in `leaked::s`; `TypeLeak::apply` resolves it.
     fn local_of(b: &leaked::s::BigLeaky<u8>) -> &Local {
         &b.a

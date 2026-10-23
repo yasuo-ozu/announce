@@ -21,10 +21,10 @@ fn without_id(meta: &str) -> String {
 // H4: a repeater, but only absolute types: the table is there and empty.
 mod empty {
     pub mod re {
-        ::announce_test_defs::empty_table::NoLeaks! { [::announce_test_defs::empty_table::NoLeaks!, ::announce_test_derive::apply_leak!] M }
+        ::announce_tests::defs::empty_table::NoLeaks! { [::announce_tests::defs::empty_table::NoLeaks!, ::announce_tests::derive::apply_leak!] M }
     }
     pub mod ty {
-        ::announce_test_defs::empty_table::NoLeaks! { [::announce_test_defs::empty_table::NoLeaks!, ::announce_test_derive::leak_types!] T }
+        ::announce_tests::defs::empty_table::NoLeaks! { [::announce_tests::defs::empty_table::NoLeaks!, ::announce_tests::derive::leak_types!] T }
     }
 }
 
@@ -43,7 +43,7 @@ fn repeater_with_only_absolute_types_has_an_empty_table() {
     let v = empty::re::NoLeaks {
         a: 1,
         b: vec![2],
-        c: Some(announce_test_defs::empty_table::NoLeaks2),
+        c: Some(announce_tests::defs::empty_table::NoLeaks2),
     };
     assert_eq!(v.b, [2]);
 }
@@ -51,34 +51,34 @@ fn repeater_with_only_absolute_types_has_an_empty_table() {
 // M6: bounds and const generics of the item survive in the table and the item.
 mod bounds {
     pub mod bounded {
-        ::announce_test_defs::table_bounds::Bounded! { [::announce_test_defs::table_bounds::Bounded!, ::announce_test_derive::apply_leak!] M }
+        ::announce_tests::defs::table_bounds::Bounded! { [::announce_tests::defs::table_bounds::Bounded!, ::announce_tests::derive::apply_leak!] M }
     }
     pub mod bounded_ty {
-        ::announce_test_defs::table_bounds::Bounded! { [::announce_test_defs::table_bounds::Bounded!, ::announce_test_derive::leak_types!] T }
+        ::announce_tests::defs::table_bounds::Bounded! { [::announce_tests::defs::table_bounds::Bounded!, ::announce_tests::derive::leak_types!] T }
     }
     pub mod arr {
-        ::announce_test_defs::table_bounds::ArrOfLocal! { [::announce_test_defs::table_bounds::ArrOfLocal!, ::announce_test_derive::apply_leak!] M }
+        ::announce_tests::defs::table_bounds::ArrOfLocal! { [::announce_tests::defs::table_bounds::ArrOfLocal!, ::announce_tests::derive::apply_leak!] M }
     }
     pub mod arr_ty {
-        ::announce_test_defs::table_bounds::ArrOfLocal! { [::announce_test_defs::table_bounds::ArrOfLocal!, ::announce_test_derive::leak_types!] T }
+        ::announce_tests::defs::table_bounds::ArrOfLocal! { [::announce_tests::defs::table_bounds::ArrOfLocal!, ::announce_tests::derive::leak_types!] T }
     }
     pub mod konst {
-        ::announce_test_defs::table_bounds::ConstArg! { [::announce_test_defs::table_bounds::ConstArg!, ::announce_test_derive::apply_leak!] M }
+        ::announce_tests::defs::table_bounds::ConstArg! { [::announce_tests::defs::table_bounds::ConstArg!, ::announce_tests::derive::apply_leak!] M }
     }
     pub mod konst_ty {
-        ::announce_test_defs::table_bounds::ConstArg! { [::announce_test_defs::table_bounds::ConstArg!, ::announce_test_derive::leak_types!] T }
+        ::announce_tests::defs::table_bounds::ConstArg! { [::announce_tests::defs::table_bounds::ConstArg!, ::announce_tests::derive::leak_types!] T }
     }
     pub mod both {
-        ::announce_test_defs::table_bounds::Both! { [::announce_test_defs::table_bounds::Both!, ::announce_test_derive::apply_leak!] M }
+        ::announce_tests::defs::table_bounds::Both! { [::announce_tests::defs::table_bounds::Both!, ::announce_tests::derive::apply_leak!] M }
     }
     pub mod both_ty {
-        ::announce_test_defs::table_bounds::Both! { [::announce_test_defs::table_bounds::Both!, ::announce_test_derive::leak_types!] T }
+        ::announce_tests::defs::table_bounds::Both! { [::announce_tests::defs::table_bounds::Both!, ::announce_tests::derive::leak_types!] T }
     }
 }
 
 #[test]
 fn repeater_table_keeps_bounds() {
-    use announce_test_defs::table_bounds::inner::{Local, Wrap};
+    use announce_tests::defs::table_bounds::inner::{Local, Wrap};
     // `T: Clone` is a bound of the item, and `Wrap<T>` needs it to be well-formed.
     let b = bounds::bounded::Bounded::<u8>(vec![1], Wrap(2), Local(3));
     assert_eq!((b.0[0], b.1 .0, b.2), (1, 2, Local(3)));
@@ -95,7 +95,7 @@ fn repeater_table_keeps_bounds() {
 
 #[test]
 fn repeater_table_const_generics() {
-    use announce_test_defs::table_bounds::inner::{Buf, Local, Lt};
+    use announce_tests::defs::table_bounds::inner::{Buf, Local, Lt};
     // `[Local; N]`: `Local` is carried, the const parameter stays on the array.
     let a = bounds::arr::ArrOfLocal::<2>([Local(1), Local(2)]);
     assert_eq!(a.0[1], Local(2));
@@ -108,7 +108,7 @@ fn repeater_table_const_generics() {
     let x = 7u8;
     let b = bounds::both::Both::<u8, 2>(
         Lt(&x),
-        announce_test_defs::table_bounds::inner::Wrap(1u8),
+        announce_tests::defs::table_bounds::inner::Wrap(1u8),
         Buf([0, 0]),
     );
     assert_eq!(*b.0 .0, 7);
@@ -121,16 +121,16 @@ fn repeater_table_const_generics() {
 // M7: `allow_std_prelude = true` with a repeater.
 mod prelude {
     pub mod re {
-        ::announce_test_defs::prelude_leak::Holder! { [::announce_test_defs::prelude_leak::Holder!, ::announce_test_derive::apply_leak!] M }
+        ::announce_tests::defs::prelude_leak::Holder! { [::announce_tests::defs::prelude_leak::Holder!, ::announce_tests::derive::apply_leak!] M }
     }
     pub mod ty {
-        ::announce_test_defs::prelude_leak::Holder! { [::announce_test_defs::prelude_leak::Holder!, ::announce_test_derive::leak_types!] T }
+        ::announce_tests::defs::prelude_leak::Holder! { [::announce_tests::defs::prelude_leak::Holder!, ::announce_tests::derive::leak_types!] T }
     }
 }
 
 #[test]
 fn allow_std_prelude_with_repeater() {
-    use announce_test_defs::prelude_leak::inner::Local;
+    use announce_tests::defs::prelude_leak::inner::Local;
     // The item is re-emitted by `apply_leak!` in a module where `Local` is not in
     // scope, and it compiles: that is the point. The prelude names themselves
     // (`Vec`, `Option`, `Box`, `String`) resolve through the caller's prelude;
@@ -160,28 +160,28 @@ fn allow_std_prelude_with_repeater() {
 // M13: new type-leak 0.8 behavior.
 mod leak08 {
     pub mod elided {
-        ::announce_test_defs::leak08::Elided! { [::announce_test_defs::leak08::Elided!, ::announce_test_derive::apply_leak!] M }
+        ::announce_tests::defs::leak08::Elided! { [::announce_tests::defs::leak08::Elided!, ::announce_tests::derive::apply_leak!] M }
     }
     pub mod elided_ty {
-        ::announce_test_defs::leak08::Elided! { [::announce_test_defs::leak08::Elided!, ::announce_test_derive::leak_types!] T }
+        ::announce_tests::defs::leak08::Elided! { [::announce_tests::defs::leak08::Elided!, ::announce_tests::derive::leak_types!] T }
     }
     pub mod hr {
-        ::announce_test_defs::leak08::Hr! { [::announce_test_defs::leak08::Hr!, ::announce_test_derive::apply_leak!] M }
+        ::announce_tests::defs::leak08::Hr! { [::announce_tests::defs::leak08::Hr!, ::announce_tests::derive::apply_leak!] M }
     }
     pub mod hr_ty {
-        ::announce_test_defs::leak08::Hr! { [::announce_test_defs::leak08::Hr!, ::announce_test_derive::leak_types!] T }
+        ::announce_tests::defs::leak08::Hr! { [::announce_tests::defs::leak08::Hr!, ::announce_tests::derive::leak_types!] T }
     }
     pub mod tup {
-        ::announce_test_defs::leak08::Tup! { [::announce_test_defs::leak08::Tup!, ::announce_test_derive::apply_leak!] M }
+        ::announce_tests::defs::leak08::Tup! { [::announce_tests::defs::leak08::Tup!, ::announce_tests::derive::apply_leak!] M }
     }
     pub mod tup_ty {
-        ::announce_test_defs::leak08::Tup! { [::announce_test_defs::leak08::Tup!, ::announce_test_derive::leak_types!] T }
+        ::announce_tests::defs::leak08::Tup! { [::announce_tests::defs::leak08::Tup!, ::announce_tests::derive::leak_types!] T }
     }
 }
 
 #[test]
 fn elided_reference_to_a_relative_type_is_carried() {
-    use announce_test_defs::leak08::inner::Local;
+    use announce_tests::defs::leak08::inner::Local;
     struct X;
     impl leak08::elided::Elided for X {
         fn get(&self, l: &Local) -> u8 {
@@ -200,7 +200,7 @@ fn elided_reference_to_a_relative_type_is_carried() {
 
 #[test]
 fn higher_ranked_fn_bound_over_a_relative_type() {
-    use announce_test_defs::leak08::inner::Local;
+    use announce_tests::defs::leak08::inner::Local;
     let h = leak08::hr::Hr {
         f: Box::new(|l: &Local| l.0 + 1),
     };
@@ -210,7 +210,7 @@ fn higher_ranked_fn_bound_over_a_relative_type() {
 
 #[test]
 fn tuple_carries_only_the_relative_member() {
-    use announce_test_defs::leak08::inner::Local;
+    use announce_tests::defs::leak08::inner::Local;
     let t = leak08::tup::Tup { t: (Local(1), 2) };
     assert_eq!(t.t, (Local(1), 2));
     assert_eq!(leak08::tup_ty::T, ["[Local@()]"]);
@@ -221,11 +221,11 @@ fn tuple_carries_only_the_relative_member() {
 
 #[test]
 fn method_lifetime_kept_by_another_argument() {
-    use announce_test_defs::leak08::wrap::Wrap;
+    use announce_tests::defs::leak08::wrap::Wrap;
     mod c {
-        ::announce_test_defs::leak08::Constrained! { [::announce_test_defs::leak08::Constrained!, ::announce_test_derive::apply_leak!] M }
+        ::announce_tests::defs::leak08::Constrained! { [::announce_tests::defs::leak08::Constrained!, ::announce_tests::derive::apply_leak!] M }
         pub mod ty {
-            ::announce_test_defs::leak08::Constrained! { [::announce_test_defs::leak08::Constrained!, ::announce_test_derive::leak_types!] T }
+            ::announce_tests::defs::leak08::Constrained! { [::announce_tests::defs::leak08::Constrained!, ::announce_tests::derive::leak_types!] T }
         }
     }
     struct X;

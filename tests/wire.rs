@@ -2,10 +2,10 @@
 //! example"): the chain below gives exactly the documented block, and the block is
 //! read from the source of the docs, so the two cannot drift.
 //!
-//! The definitions are in `announce_test_defs::wire`. When the output changes on
+//! The definitions are in `announce_tests::defs::wire`. When the output changes on
 //! purpose, update the ```text block in `announce-core/src/helper/mod.rs`.
 
-use announce_test_defs::wire as defs;
+use announce_tests::defs::wire as defs;
 
 /// The callback: it prints its whole input.
 macro_rules! show {
@@ -18,7 +18,10 @@ const WIRE: &str = defs::Point! { (expr) [defs::Point!, defs::Length!, show!] so
 /// The documented block: the ```text block after `<!-- wire-example -->` in the docs
 /// of `Input`, without the `///` of the doc comment.
 fn documented() -> String {
-    const SRC: &str = include_str!("../../../announce-core/src/helper/mod.rs");
+    const SRC: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../announce-core/src/helper/mod.rs"
+    ));
     let mut lines = SRC.lines().map(str::trim_start);
     lines
         .by_ref()

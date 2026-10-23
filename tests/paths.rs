@@ -1,11 +1,14 @@
 //! The runner is the one announcement that is told by a name, never by the path `announce`:
-//! the items of `announce_test_defs::paths` make one trampoline each, whatever other
+//! the items of `announce_tests::defs::paths` make one trampoline each, whatever other
 //! attributes they have (also ones that are called `announce`), and the META holds the
 //! entries of all the announcements of the item.
 
-use announce::Announce;
-use announce_test_defs::paths;
-use announce_test_derive::summary;
+// The `Announce` of the `announce` that `defs` links. Under `cargo check` and clippy the
+// subcrates and this file link different builds of `announce`, so `announce::Announce`
+// would be another trait there.
+use announce_tests::defs::announce::Announce;
+use announce_tests::defs::paths;
+use announce_tests::derive::summary;
 
 type Rows = &'static [(&'static str, &'static str, &'static str)];
 
@@ -103,7 +106,7 @@ fn an_attribute_of_another_crate_is_not_an_announcement() {
 
 #[test]
 fn a_bare_attribute_of_another_crate_is_not_an_announcement() {
-    // `use announce_test_derive::announce; #[announce(level = 9)]`: a macro that is
+    // `use announce_tests::derive::announce; #[announce(level = 9)]`: a macro that is
     // not ours is not deleted, not given our options.
     let rows = rows_foreign::ALL;
     assert_eq!(paths::bare::FOREIGN_FOREIGNBARE_9, 9);

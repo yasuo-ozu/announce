@@ -3,13 +3,13 @@
 //!
 //! - `transformers`: a proc-macro crate with transformers written with
 //!   `announce::helper::transformer`;
-//! - `defs`: the defining crate, with plain `#[announce]`s: the definition does not know
+//! - `definer`: the defining crate, with plain `#[announce]`s: the definition does not know
 //!   which transformer a caller will choose;
 //! - this file is the calling crate, which puts the transformers in the list.
 
 use subcrate::subcrate;
 
-#[subcrate(proc_macro, ::announce, ::proc_macro2, ::syn, ::template_quote)]
+#[subcrate(proc_macro, ::announce, ::syn, ::proc_macro2, ::template_quote)]
 pub mod transformers {
     use proc_macro::TokenStream;
     use template_quote::quote;
@@ -51,7 +51,7 @@ pub mod transformers {
 }
 
 #[subcrate(::announce)]
-pub mod defs {
+pub mod definer {
     use announce::announce;
 
     #[announce(meta = orig(1))]
@@ -107,10 +107,10 @@ fn norm(s: &str) -> String {
 mod transformed {
     use crate::transformers::public_fields;
     // The caller chooses the transformer.
-    ::defs::Partly! { [::defs::Partly!, public_fields!, capture!] }
+    ::definer::Partly! { [::definer::Partly!, public_fields!, capture!] }
     // Without it the full definition arrives.
     pub mod untouched {
-        ::defs::Partly! { [::defs::Partly!, capture!] }
+        ::definer::Partly! { [::definer::Partly!, capture!] }
     }
 }
 
@@ -129,11 +129,11 @@ fn a_transformer_of_another_crate_rewrites_the_payload_and_adds_to_the_meta() {
 mod chained {
     use crate::transformers::{public_fields, tag};
     // Transformers apply in the order of the list, one after another, to the newest entry.
-    ::defs::Partly! { [::defs::Partly!, public_fields!, tag!, capture!] }
+    ::definer::Partly! { [::definer::Partly!, public_fields!, tag!, capture!] }
     pub mod no_meta {
         use crate::transformers::tag;
         // `tag!` does nothing for an entry without META.
-        ::defs::Plain! { [::defs::Plain!, tag!, capture!] }
+        ::definer::Plain! { [::definer::Plain!, tag!, capture!] }
     }
 }
 
@@ -148,7 +148,7 @@ fn transformers_chain_in_list_order() {
 mod gathering_ends {
     use crate::transformers::{public_fields, tag};
     // One list with two definitions: a transformer applies to the entry before it.
-    ::defs::Partly! { [::defs::Partly!, public_fields!, ::defs::Plain!, tag!, capture!] }
+    ::definer::Partly! { [::definer::Partly!, public_fields!, ::definer::Plain!, tag!, capture!] }
 }
 
 #[test]
@@ -165,9 +165,9 @@ fn a_transformer_rewrites_the_entry_that_was_added_last() {
 
 mod sig {
     // The built-in transformer of `announce`, called by the caller with its own path.
-    ::defs::Sig! { [::defs::Sig!, ::announce::signature_only!, capture!] }
+    ::definer::Sig! { [::definer::Sig!, ::announce::signature_only!, capture!] }
     pub mod module {
-        ::defs::sig_mod! { [::defs::sig_mod!, ::announce::signature_only!, reemit!] }
+        ::definer::sig_mod! { [::definer::sig_mod!, ::announce::signature_only!, reemit!] }
     }
 }
 

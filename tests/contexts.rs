@@ -1,13 +1,13 @@
 //! The repeater of type-leak 0.8 as a consumer sees it: each leaked type is
 //! rewritten with the generics of its own scope, and the re-emitted items use
 //! them from a module where the relative types are not in scope.
-use announce_test_defs::contexts::inner::{Arr, Flag, Local, LocalC, LocalG, Wrap, G, GC, W};
+use announce_tests::defs::contexts::inner::{Arr, Flag, Local, LocalC, LocalG, Wrap, G, GC, W};
 
 macro_rules! reemit {
     ($($name:ident = $leaf:ident;)*) => {$(
         mod $name {
-            ::announce_test_defs::contexts::$leaf! {
-                [::announce_test_defs::contexts::$leaf!, ::announce_test_derive::apply_leak!] M
+            ::announce_tests::defs::contexts::$leaf! {
+                [::announce_tests::defs::contexts::$leaf!, ::announce_tests::derive::apply_leak!] M
             }
         }
     )*};
@@ -68,8 +68,8 @@ impl name_elsewhere::NameOnlyElsewhere for X {
     fn f<U>(&self, x: LocalG<U>) -> U {
         x.0
     }
-    fn g(&self) -> announce_test_defs::contexts::inner::U {
-        announce_test_defs::contexts::inner::U
+    fn g(&self) -> announce_tests::defs::contexts::inner::U {
+        announce_tests::defs::contexts::inner::U
     }
 }
 
@@ -130,7 +130,7 @@ fn where_clause_of_the_item() {
 fn a_name_that_is_a_generic_only_elsewhere() {
     use name_elsewhere::NameOnlyElsewhere as _;
     assert_eq!(X.f(LocalG(7u8)), 7);
-    assert_eq!(X.g(), announce_test_defs::contexts::inner::U);
+    assert_eq!(X.g(), announce_tests::defs::contexts::inner::U);
 }
 
 #[test]

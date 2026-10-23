@@ -1,21 +1,21 @@
 //! Definition-side checks written with `announce::helper::check`, in a crate of their own.
 //!
 //! - `macros`: a proc-macro crate with the checks and a callback;
-//! - `defs`: the defining crate; `#[announce(macros::check)]` runs the checks when `defs` is
-//!   compiled, so what they emit is part of `defs`;
+//! - `definer`: the defining crate; `#[announce(macros::check)]` runs the checks when `definer` is
+//!   compiled, so what they emit is part of `definer`;
 //! - this file is the calling crate, which gets the item, the check and the attribute
 //!   names the check owns in the META of the trampoline.
 //!
 //! A check that owns attributes is asked first (the attribute query), and the
-//! attributes it owns are removed from the item that `defs` emits and kept in the payload.
+//! attributes it owns are removed from the item that `definer` emits and kept in the payload.
 
 use subcrate::subcrate;
 
-#[subcrate(proc_macro, ::announce, ::proc_macro2, ::syn, ::template_quote)]
+#[subcrate(proc_macro, ::announce, ::syn, ::proc_macro2, ::template_quote)]
 pub mod macros {
     use announce::helper::{CheckCall, Cont, OwnedAttrs};
     use proc_macro::TokenStream;
-    use template_quote::quote;
+    use template_quote::{quote, ToTokens};
 
     /// Definition-side check that owns no attribute: rejects tuple structs.
     /// `no_tuple! { (ARGS), ITEM }`. It answers the attribute query all the same.
@@ -53,7 +53,8 @@ pub mod macros {
                 .owned_attributes()
                 .iter()
                 .map(|a| {
-                    template_quote::ToTokens::to_token_stream(&a.meta)
+                    a.meta
+                        .to_token_stream()
                         .to_string()
                         .split_whitespace()
                         .collect()
@@ -124,7 +125,7 @@ pub mod macros {
                 let meta = e
                     .meta
                     .iter()
-                    .map(|m| template_quote::ToTokens::to_token_stream(m).to_string())
+                    .map(|m| m.to_token_stream().to_string())
                     .collect::<Vec<_>>()
                     .join(", ");
                 let item = match e.item() {
@@ -170,7 +171,7 @@ pub mod macros {
 }
 
 #[subcrate(::announce, macros)]
-pub mod defs {
+pub mod definer {
     use announce::announce;
 
     /// Attributes in every kind of position of a struct. `cfg_attr` is evaluated before
@@ -252,7 +253,7 @@ fn norm(s: &str) -> String {
 }
 
 struct Impl;
-impl defs::Tr<u8> for Impl {
+impl definer::Tr<u8> for Impl {
     type A = u8;
     fn f(&self, x: u8) -> u8 {
         x + 2
@@ -261,9 +262,9 @@ impl defs::Tr<u8> for Impl {
 
 #[test]
 fn the_items_are_emitted_without_the_attributes_the_checks_own() {
-    // `#[my_lib(..)]` is no attribute of rustc: it compiles because `defs` removes it
+    // `#[my_lib(..)]` is no attribute of rustc: it compiles because `definer` removes it
     // from the item it emits.
-    let f = defs::Fields {
+    let f = definer::Fields {
         a: 1,
         b: 2,
         c: 3,
@@ -271,28 +272,28 @@ fn the_items_are_emitted_without_the_attributes_the_checks_own() {
         e: 5,
     };
     assert_eq!(f.clone(), f);
-    assert_eq!(defs::Choice::B(1), defs::Choice::B(1));
-    assert_eq!(defs::Choice::C { f: 1 }, defs::Choice::C { f: 1 });
-    assert_eq!(defs::Tr::f(&Impl, 5), 7);
-    let _ = defs::Several {
+    assert_eq!(definer::Choice::B(1), definer::Choice::B(1));
+    assert_eq!(definer::Choice::C { f: 1 }, definer::Choice::C { f: 1 });
+    assert_eq!(definer::Tr::f(&Impl, 5), 7);
+    let _ = definer::Several {
         m: 1,
         o: 2,
         t: 3,
         p: 4,
     };
-    assert_eq!(defs::Checked { a: 1 }.a, 1);
+    assert_eq!(definer::Checked { a: 1 }.a, 1);
 }
 
 #[test]
 fn the_check_runs_in_the_defining_crate_and_sees_the_attributes_in_source_order() {
-    // The check saw the item with `cfg_attr` evaluated by `defs`, which is not built
-    // with `cfg(test)`, and emitted the constants into `defs`.
+    // The check saw the item with `cfg_attr` evaluated by `definer`, which is not built
+    // with `cfg(test)`, and emitted the constants into `definer`.
     assert_eq!(
-        defs::SEEN_FIELDS,
+        definer::SEEN_FIELDS,
         ["my_lib(skip)", "my_lib::tag=\"x\"", "my_lib(from_cfg_attr)"]
     );
     assert_eq!(
-        defs::SEEN_CHOICE,
+        definer::SEEN_CHOICE,
         [
             "my_lib(on_enum)",
             "my_lib(first)",
@@ -302,7 +303,7 @@ fn the_check_runs_in_the_defining_crate_and_sees_the_attributes_in_source_order(
         ]
     );
     assert_eq!(
-        defs::SEEN_TR,
+        definer::SEEN_TR,
         [
             "my_lib(on_trait)",
             "my_lib(generic)",
@@ -313,20 +314,20 @@ fn the_check_runs_in_the_defining_crate_and_sees_the_attributes_in_source_order(
     );
     // Several checks: each ran once (a second `tick` would define its constant twice),
     // and each saw only its own attributes.
-    assert_eq!(defs::SEEN_SEVERAL, ["my_lib(m)"]);
-    assert_eq!(defs::TICK_SEVERAL, 0);
+    assert_eq!(definer::SEEN_SEVERAL, ["my_lib(m)"]);
+    assert_eq!(definer::TICK_SEVERAL, 0);
 }
 
 mod fields {
-    use crate::defs;
-    defs::Fields! { [defs::Fields!, capture!] REST }
+    use crate::definer;
+    definer::Fields! { [definer::Fields!, capture!] REST }
 }
 
 #[test]
 fn the_payload_keeps_the_attributes_and_meta_lists_the_check_and_its_names() {
     let out = norm(fields::OUT);
     assert!(
-        out.starts_with("defs::Fields!=>[macros::record_attrs,attrs(my_lib)]{pubstructFields{"),
+        out.starts_with("definer::Fields!=>[macros::record_attrs,attrs(my_lib)]{pubstructFields{"),
         "{}",
         out
     );
@@ -349,8 +350,8 @@ fn the_payload_keeps_the_attributes_and_meta_lists_the_check_and_its_names() {
 }
 
 mod summaries {
-    use crate::{defs, macros::summary};
-    defs::Fields! { [defs::Fields!, defs::Several!, defs::Checked!, summary!] ALL }
+    use crate::{definer, macros::summary};
+    definer::Fields! { [definer::Fields!, definer::Several!, definer::Checked!, summary!] ALL }
 }
 
 #[test]
@@ -369,8 +370,8 @@ fn the_meta_of_each_entry_has_its_checks_and_the_owned_names() {
 }
 
 mod report {
-    use crate::{defs, macros::owned_report};
-    defs::Fields! { [defs::Fields!, defs::Choice!, defs::Tr!, defs::Several!, owned_report!] ALL }
+    use crate::{definer, macros::owned_report};
+    definer::Fields! { [definer::Fields!, definer::Choice!, definer::Tr!, definer::Several!, owned_report!] ALL }
 }
 
 #[test]

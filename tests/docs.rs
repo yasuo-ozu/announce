@@ -1,9 +1,9 @@
 //! Doc attributes in the payload: removed by default, kept with `docs = true`,
 //! in the item that is emitted always. The definitions are in
-//! `announce_test_defs::docs` (`#![deny(missing_docs)]`); the feature `x` is
-//! off there and on here.
+//! `announce_tests::defs::docs` (`#![deny(missing_docs)]`), which is not built with
+//! `cfg(test)`; this file is.
 
-use announce_test_defs::docs as d;
+use announce_tests::defs::docs as d;
 
 macro_rules! capture {
     (@announce_format "1" [$($l:tt)*] $($t:tt)*) => {
@@ -64,8 +64,8 @@ fn struct_payload_has_no_docs() {
     for text in ["Docof", "cfg_attrdoc", "doc of"] {
         assert!(!out.contains(text), "{}", out);
     }
-    // The shape is intact; the `cfg_attr` of the definer is evaluated (feature
-    // `x` is off there), so its `doc = ..` is a doc and goes, its `doc(hidden)` stays.
+    // The shape is intact; the `cfg_attr` of the definer is evaluated (no `cfg(test)`
+    // there), so its `doc = ..` is a doc and goes, its `doc(hidden)` stays.
     assert!(
         out.contains(
             "pubstructPlain<T>{puba:T,#[doc(hidden)]pubb:u8,pubc:u8,#[doc(hidden)]pubd:u8,}"

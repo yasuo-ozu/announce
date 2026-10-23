@@ -1,0 +1,28 @@
+[package]
+name = "announce-tests"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.59"
+publish = false
+# Compiles the `#[subcrate]` modules of the package (see src/lib.rs). The test files are the
+# flat `*.rs` here, reached as `tests/*.rs` through the symlink `tests -> .`; `build.rs` is
+# next to them, so it is a test target too, an empty one.
+build = "build.rs"
+
+[lib]
+# The shared subcrates are made of `#[announce]`s, which a `cfg(doc)` stand-in does not suit.
+doc = false
+doctest = false
+
+[dependencies]
+announce = { path = ".." }
+# The attribute, and `build::compile` for `build.rs`, which is also a test target (see above).
+subcrate = "0.2.1"
+# For helper_api.rs, and for the proc-macro subcrates (`#[subcrate(proc_macro, ::syn, ..)]`),
+# which link these three.
+proc-macro2 = "1"
+syn = { version = "2.0.25", features = ["full", "extra-traits", "visit", "visit-mut"] }
+template-quote = "0.4"
+
+[build-dependencies]
+subcrate = "0.2.1"

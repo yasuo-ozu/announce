@@ -720,7 +720,7 @@ impl ToTokens for Entry {
 /// # A real example
 ///
 /// This is what a callback gets from a real chain, captured by the test
-/// `tests/user/tests/wire.rs`. The definitions, in `tests/defs/src/wire.rs`
+/// `tests/wire.rs`. The definitions, in `defs::wire` of `tests/src/lib.rs`
 /// (`Meters` is private to the defining crate, so `Length` has a `repeater`):
 ///
 /// ```ignore
@@ -742,7 +742,7 @@ impl ToTokens for Entry {
 /// The chain, in another crate. `show!` is the callback; it prints its whole input:
 ///
 /// ```ignore
-/// use announce_test_defs::wire as defs;
+/// use announce_tests::defs::wire as defs;
 ///
 /// macro_rules! show {
 ///     ($($t:tt)*) => { stringify!($($t)*) };

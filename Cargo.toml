@@ -12,6 +12,8 @@ build = "build.rs"
 # This package is the root of the repository: publish only the crate itself,
 # not the other workspace members, tests/, bench/, tools/ or the logo.
 include = ["src/**/*", "build.rs", "README.md", "CHANGELOG.md", "LICENSE", "Cargo.toml"]
+# The tests are the package `announce-tests` in tests/, not targets of this one.
+autotests = false
 
 [features]
 # On by default. It gives `announce::helper`, `announce::machinery` and
@@ -35,26 +37,25 @@ announce-core = { path = "announce-core", version = "0.2.0", optional = true }
 type-leak = { version = "0.8.2", optional = true }
 
 [dev-dependencies]
-# The `announce::machinery` doc test, and tests/helper_api.rs (`announce::helper`).
+# The `announce::machinery` doc test.
 proc-macro2 = "1"
 syn = { version = "2.0.25", features = ["full", "extra-traits", "visit", "visit-mut"] }
 template-quote = "0.4"
 
 [workspace]
-# The root package `announce` is a member implicitly.
+# The root package `announce` is a member implicitly. `tests` is the package
+# `announce-tests`: the cross-crate and UI tests, as `#[subcrate]` modules.
 members = [
     "announce-core",
     "announce-macros",
     "announce-std",
     "tests/defs",
     "tests/nostd",
-    "tests/user",
     "tests/derive",
     "tests/renamed",
     "tests/machinery",
     "tests/machinery-lib",
-    "tests/machinery-user",
-    "tests/subcrate",
+    "tests",
 ]
 # A plain `cargo test` / `cargo build` in a workspace with a root package acts
 # on that package only; list every member (and the root, ".") to keep it
@@ -66,13 +67,11 @@ default-members = [
     "announce-std",
     "tests/defs",
     "tests/nostd",
-    "tests/user",
     "tests/derive",
     "tests/renamed",
     "tests/machinery",
     "tests/machinery-lib",
-    "tests/machinery-user",
-    "tests/subcrate",
+    "tests",
 ]
 # `tests/ui` needs a newer rustc (trybuild); `tests/renamed-ws` is its own
 # workspace, because it tests a workspace-inherited rename (`ann-ws.workspace = true`);

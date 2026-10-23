@@ -1,15 +1,15 @@
 //! `crate::` and `$crate` paths in a payload resolve from another crate.
 //!
-//! The payload of a trampoline is the definition as it was written in `defs`, and a
+//! The payload of a trampoline is the definition as it was written in `definer`, and a
 //! callback may emit it again where `crate::` would mean the calling crate. `#[announce]`
 //! rewrites the paths that name the defining crate (`crate::..` becomes `$crate::..` in the
-//! trampoline), so the emitted items refer to `defs`. This crate has none of the names
+//! trampoline), so the emitted items refer to `definer`. This crate has none of the names
 //! (`Alias`, `ARR`, `shapes`), so a path that was not rewritten would not resolve.
 
 use subcrate::subcrate;
 
 #[subcrate(::announce)]
-pub mod defs {
+pub mod definer {
     use announce::announce;
 
     pub type Alias = ::std::vec::Vec<u8>;
@@ -113,19 +113,19 @@ fn norm(s: &str) -> String {
 type Alias = bool;
 
 mod reemitted_alias {
-    ::defs::uses_crate_paths! { [::defs::uses_crate_paths!, reemit!] }
+    ::definer::uses_crate_paths! { [::definer::uses_crate_paths!, reemit!] }
 }
 
 #[test]
 fn crate_paths_refer_to_the_defining_crate() {
     // `crate::Alias` is the defining crate's `Vec<u8>`, not this crate's `Alias`.
-    let v: defs::Alias = reemitted_alias::uses_crate_paths::make();
+    let v: definer::Alias = reemitted_alias::uses_crate_paths::make();
     assert_eq!(v, [1, 2, 3]);
 }
 
 mod reemitted_for_in {
     // `crate::ARR` is the defining crate's: this crate has no `ARR`.
-    ::defs::for_in_crate! { [::defs::for_in_crate!, reemit!] }
+    ::definer::for_in_crate! { [::definer::for_in_crate!, reemit!] }
 }
 
 #[test]
@@ -135,20 +135,20 @@ fn crate_after_in_of_a_for_loop_refers_to_the_defining_crate() {
 
 mod reemitted_types {
     // `crate::shapes::Foo` is the defining crate's: this crate has no `shapes`.
-    ::defs::Field! { [::defs::Field!, reemit!] }
-    ::defs::Makes! { [::defs::Makes!, reemit!] }
+    ::definer::Field! { [::definer::Field!, reemit!] }
+    ::definer::Makes! { [::definer::Makes!, reemit!] }
 }
 
 #[test]
 fn crate_in_a_field_and_in_a_signature_refers_to_the_defining_crate() {
     let f = reemitted_types::Field {
-        a: defs::shapes::Foo(1),
+        a: definer::shapes::Foo(1),
     };
     assert_eq!(f.a.0, 1);
     struct M;
     impl reemitted_types::Makes for M {
-        fn make(&self) -> defs::shapes::Foo {
-            defs::shapes::Foo(2)
+        fn make(&self) -> definer::shapes::Foo {
+            definer::shapes::Foo(2)
         }
     }
     use reemitted_types::Makes;
@@ -156,7 +156,7 @@ fn crate_in_a_field_and_in_a_signature_refers_to_the_defining_crate() {
 }
 
 mod dollar_crate_in_payload {
-    ::defs::with_dollar_crate! { [::defs::with_dollar_crate!, capture!] }
+    ::definer::with_dollar_crate! { [::definer::with_dollar_crate!, capture!] }
 }
 
 #[test]
@@ -164,12 +164,12 @@ fn dollar_crate_in_a_payload_macro_is_kept() {
     let out = norm(dollar_crate_in_payload::OUT);
     assert!(out.contains("$crate::shapes::Foo(9)"), "{}", out);
     assert!(!out.contains("$$crate"), "{}", out);
-    // The macro is the one of `defs`, and so is the `$crate` in it.
-    assert_eq!(defs::mk_foo!().0, 9);
+    // The macro is the one of `definer`, and so is the `$crate` in it.
+    assert_eq!(definer::mk_foo!().0, 9);
 }
 
 mod reemitted_dollar_crate {
-    ::defs::with_dollar_crate! { [::defs::with_dollar_crate!, reemit!] }
+    ::definer::with_dollar_crate! { [::definer::with_dollar_crate!, reemit!] }
 }
 
 #[test]
@@ -178,7 +178,7 @@ fn a_payload_macro_with_dollar_crate_can_be_emitted_again() {
 }
 
 mod dollar_crate_in_list {
-    defs::greet_chain!();
+    definer::greet_chain!();
 }
 
 #[test]

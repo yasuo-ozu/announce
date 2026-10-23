@@ -1,9 +1,9 @@
 //! Items with attributes owned by checks (`#[my_lib(..)]` inside the item).
-//! The definitions are in `announce_test_defs::owned`; the feature `x` is off
-//! there and on here.
+//! The definitions are in `announce_tests::defs::owned`; the definer is not built with
+//! `cfg(test)`, this file is.
 
-use announce_test_defs::owned as d;
-use announce_test_derive::{owned_report, rest_probe, summary};
+use announce_tests::defs::owned as d;
+use announce_tests::derive::{owned_report, rest_probe, summary};
 
 macro_rules! capture {
     (@announce_format "1" [$($l:tt)*] $($t:tt)*) => {
@@ -271,7 +271,10 @@ fn a_renamed_trampoline_carries_the_attributes() {
     assert!(out.contains("#[my_lib(r)]pubr:u8"), "{}", out);
 }
 
-announce_test_defs::make_owned!(Made);
+// `make_owned!` names the check `announce_test_derive::no_tuple` in the crate that calls it.
+use announce_tests::derive as announce_test_derive;
+
+announce_tests::defs::make_owned!(Made);
 
 #[test]
 fn a_library_macro_defines_items_with_dollar_crate_check_paths() {
@@ -287,7 +290,7 @@ fn a_library_macro_defines_items_with_dollar_crate_check_paths() {
 
 #[test]
 fn an_item_in_a_function_body_goes_through_the_query() {
-    #[announce::announce(announce_test_derive::lib_check, announce_test_derive::other_check)]
+    #[announce::announce(announce_tests::derive::lib_check, announce_tests::derive::other_check)]
     #[derive(Debug)]
     pub struct Local {
         #[my_lib(a)]
@@ -329,10 +332,10 @@ fn macro_rules_checks_skip_their_head_in_every_path_form() {
     // Absolute paths in the head position and in the next position, `macro_rules!`
     // checks next to each other and before a proc-macro check, then `finish!`.
     #[announce::announce(
-        ::announce_test_defs::plain_rules_check,
-        ::announce_test_defs::rules_check,
-        ::announce_test_derive::head_probe,
-        announce_test_defs::rules_check
+        ::announce_tests::defs::plain_rules_check,
+        ::announce_tests::defs::rules_check,
+        ::announce_tests::derive::head_probe,
+        announce_tests::defs::rules_check
     )]
     pub struct Abs {
         #[rules(a)]
@@ -356,7 +359,7 @@ fn macro_rules_checks_skip_their_head_in_every_path_form() {
         out
     );
     // META lists the checks as they were written.
-    assert!(out.contains("::announce_test_defs::plain_rules_check,::announce_test_defs::rules_check,::announce_test_derive::head_probe,announce_test_defs::rules_check"), "{}", out);
+    assert!(out.contains("::announce_tests::defs::plain_rules_check,::announce_tests::defs::rules_check,::announce_tests::derive::head_probe,announce_tests::defs::rules_check"), "{}", out);
 }
 
 mod dollar_rules {
@@ -387,8 +390,8 @@ fn a_check_may_forward_the_query_without_the_format_prefix() {
 
 mod checked_with_derive {
     use super::{owned_report, summary};
-    announce_test_defs::checks::CheckedWithDerive! { [announce_test_defs::checks::CheckedWithDerive!, summary!] ONE }
-    announce_test_defs::checks::CheckedWithDerive! { [announce_test_defs::checks::CheckedWithDerive!, owned_report!] TWO }
+    announce_tests::defs::checks::CheckedWithDerive! { [announce_tests::defs::checks::CheckedWithDerive!, summary!] ONE }
+    announce_tests::defs::checks::CheckedWithDerive! { [announce_tests::defs::checks::CheckedWithDerive!, owned_report!] TWO }
 }
 
 #[test]
@@ -402,8 +405,8 @@ fn a_check_of_an_item_with_a_derive_runs_through_the_query() {
     );
     assert_eq!(checked_with_derive::TWO, ["|0|0"]);
     // The item is the user's, as written, with the `Announce` impl.
-    fn assert_announced<T: announce::Announce>() {}
-    assert_announced::<announce_test_defs::checks::CheckedWithDerive>();
+    fn assert_announced<T: announce_tests::defs::announce::Announce>() {}
+    assert_announced::<announce_tests::defs::checks::CheckedWithDerive>();
 }
 
 // REST: the tokens after the entries are the caller's. The protocol puts the owned
@@ -539,7 +542,7 @@ fn rest_is_unchanged_for_an_item_with_a_derive_and_a_check() {
     }
     mod mixed {
         use super::{d, rest_probe};
-        rest!(call_def d::OwnedWithDerive; [d::OwnedWithDerive!, announce_test_defs::checks::CheckedWithDerive!, d::Fields!, rest_probe!]);
+        rest!(call_def d::OwnedWithDerive; [d::OwnedWithDerive!, announce_tests::defs::checks::CheckedWithDerive!, d::Fields!, rest_probe!]);
     }
     mod with_derive_empty {
         use super::{d, rest_probe};

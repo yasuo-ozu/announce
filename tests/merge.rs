@@ -1,10 +1,13 @@
 //! Several announcements of one item make one trampoline, one `Announce` impl and one
-//! META with the entries of all of them. The items are in `announce_test_defs::merge`,
+//! META with the entries of all of them. The items are in `announce_tests::defs::merge`,
 //! where a second trampoline or impl would not compile.
 
-use announce::Announce;
-use announce_test_defs::merge;
-use announce_test_derive::summary;
+// The `Announce` of the `announce` that `defs` links. Under `cargo check` and clippy the
+// subcrates and this file link different builds of `announce`, so `announce::Announce`
+// would be another trait there.
+use announce_tests::defs::announce::Announce;
+use announce_tests::defs::merge;
+use announce_tests::derive::summary;
 
 type Rows = &'static [(&'static str, &'static str, &'static str)];
 

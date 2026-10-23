@@ -730,11 +730,16 @@ mod tests {
             Ok(e) => e,
             Err(_) => return,
         };
-        let mut paths: Vec<PathBuf> = entries.filter_map(|e| e.ok()).map(|e| e.path()).collect();
-        paths.sort();
-        for p in paths {
+        // Symlinks are skipped: `tests/tests` points back to `tests`.
+        let mut paths: Vec<(PathBuf, std::fs::FileType)> = entries
+            .filter_map(|e| e.ok())
+            .filter_map(|e| Some((e.path(), e.file_type().ok()?)))
+            .filter(|(_, t)| !t.is_symlink())
+            .collect();
+        paths.sort_by(|a, b| a.0.cmp(&b.0));
+        for (p, t) in paths {
             let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if p.is_dir() {
+            if t.is_dir() {
                 if name != "target" {
                     rust_files(&p, out);
                 }

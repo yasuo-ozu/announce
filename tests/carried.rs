@@ -1,15 +1,15 @@
 //! Trait objects, array lengths and const arguments of a type are carried by a `repeater`
-//! (`tests/defs/src/carried.rs`): the copies below are made in another crate, where `Base`, `N`
+//! (`defs::carried`): the copies below are made in another crate, where `Base`, `N`
 //! and `Wrap` do not resolve, and use them through the table.
 
-use announce_test_defs::carried::m::{inner::Wrap, Base};
+use announce_tests::defs::carried::m::{inner::Wrap, Base};
 
 mod copy {
-    announce_test_defs::carried::m::Item! {
-        [announce_test_defs::carried::m::Item!, announce_test_derive::resolved_copy!] ItemCopy
+    announce_tests::defs::carried::m::Item! {
+        [announce_tests::defs::carried::m::Item!, announce_tests::derive::resolved_copy!] ItemCopy
     }
-    announce_test_defs::carried::m::Make! {
-        [announce_test_defs::carried::m::Make!, announce_test_derive::resolved_copy!] MakeCopy
+    announce_tests::defs::carried::m::Make! {
+        [announce_tests::defs::carried::m::Make!, announce_tests::derive::resolved_copy!] MakeCopy
     }
 }
 
@@ -32,7 +32,7 @@ fn the_item_is_used_with_a_trait_object_and_constants_of_its_module() {
     assert_eq!(item.b.iter().sum::<u8>(), 6);
     assert_eq!(item.c.0, [4, 5, 6]);
     // The length is the constant of the defining module.
-    assert_eq!(item.b.len(), announce_test_defs::carried::m::N);
+    assert_eq!(item.b.len(), announce_tests::defs::carried::m::N);
 }
 
 #[test]

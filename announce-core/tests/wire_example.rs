@@ -1,5 +1,5 @@
 //! The example of the docs of `Input` ("A real example") parses as the docs say.
-//! The chain that produces it is run by `tests/user/tests/wire.rs`, which compares
+//! The chain that produces it is run by `tests/wire.rs`, which compares
 //! it with the same block.
 
 use announce_core::helper::Input;
