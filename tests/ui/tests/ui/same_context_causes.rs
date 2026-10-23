@@ -160,3 +160,46 @@ m2::InSignature! {
         announce::same_context!
     ]
 }
+
+// A third call: every cause at its own place, with the others. Only `f` of `Lifetimes` has a
+// lifetime that is in its return type alone; `Shadow` has `UiLocal` as a parameter of one method
+// and as the return type of another; a const generic that cannot be encoded is reported with the
+// trait path of `Encoded`; and the `N` of the default of `Scoped` is the constant, not the
+// parameter of `f`.
+mod m3 {
+    use super::inner::{UiArr, UiLocal, UiWrap};
+    use super::m::UiBase;
+
+    const N: usize = 4;
+
+    #[announce::announce(strict = false, repeater = crate::Repeater)]
+    pub trait Lifetimes {
+        fn g<'a>(&self, a: UiWrap<'a>);
+        fn f<'a>(&self, a: UiWrap<'a>) -> &'a u8;
+    }
+
+    #[announce::announce(strict = false)]
+    pub trait Shadow: UiBase {
+        fn f<UiLocal>(&self, x: UiLocal);
+        fn g(&self) -> UiLocal;
+    }
+
+    #[announce::announce(strict = false, repeater = crate::Repeater)]
+    pub struct Encoded<T: UiBase, const N: crate::inner::UiIdx>(pub UiArr<N>, pub T);
+
+    #[announce::announce(strict = false, repeater = crate::Repeater)]
+    pub trait Scoped {
+        const M: usize = N;
+        fn f<const N: usize>(&self);
+    }
+}
+
+m3::Lifetimes! {
+    [
+        m3::Lifetimes!,
+        m3::Shadow!,
+        m3::Encoded!,
+        m3::Scoped!,
+        announce::same_context!
+    ]
+}

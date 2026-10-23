@@ -505,7 +505,7 @@
 ///   is a type, which the repeater carries whole.
 /// - **Value paths** in enum discriminants, const defaults and the const arguments of a
 ///   bound (`T: crate::Tr<{ N }>`) must be absolute (`crate::N`), start with `Self::`, or
-///   be a const parameter. An array length or a const argument inside a type
+///   be a const parameter in scope. An array length or a const argument inside a type
 ///   (`[u8; N]`, `Wrap<{ N }>`) is carried with the type: with a relative constant `N`
 ///   the type is relative, and needs a `repeater`.
 /// - **Type aliases** must use absolute paths on the right-hand side, and take no

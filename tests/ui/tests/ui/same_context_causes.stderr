@@ -350,3 +350,96 @@ note: required by a bound in `_::announce_check::Check::used_outside_its_module`
     |
 159 |         m2::SelfInside!,
     |             ^^^^^^^^^^ required by this bound in `Check::used_outside_its_module`
+
+error[E0277]: `UiWrap<'a>` leaves the lifetime `'a` of the method unconstrained in the copy (E0195)
+   --> tests/ui/same_context_causes.rs:178:28
+    |
+178 |         fn f<'a>(&self, a: UiWrap<'a>) -> &'a u8;
+    |                            ^^^^^^^^^^ cannot be carried, so `m3::Lifetimes!` works only in `m3`
+    |
+    = help: the trait `InModuleOf_Lifetimes` is not implemented for `announce::__private::ThisCall`
+    = note: `m3::Lifetimes` is used outside its module `m3`
+    = note: it names `'a`, a lifetime of the method which its return type mentions and no other argument keeps as written (e.g. `&'a self`), so the copy would have `'a` only in a projection, and rustc rejects the implementation of a method whose lifetime is early-bound where the trait's is late-bound (E0195)
+    = note: it cannot be leaked as a whole because of `'a`
+    = note: keep `'a` in another argument of the method (for example `&'a self`), or write `UiWrap<'a>` with an absolute path
+note: required by a bound in `_::announce_check::Check::used_outside_its_module`
+   --> tests/ui/same_context_causes.rs:199:13
+    |
+199 |         m3::Lifetimes!,
+    |             ^^^^^^^^^ required by this bound in `Check::used_outside_its_module`
+
+error[E0277]: use absolute path: 'UiBase'
+   --> tests/ui/same_context_causes.rs:182:23
+    |
+182 |     pub trait Shadow: UiBase {
+    |                       ^^^^^^ relative trait path, not in scope where `m3::Shadow!` is called
+    |
+    = help: the trait `_::announce_check::InModuleOf_Shadow` is not implemented for `announce::__private::ThisCall`
+    = note: `m3::Shadow` is used outside its module `m3`
+    = note: write `UiBase` with an absolute path (e.g. `crate::UiBase`)
+note: required by a bound in `_::announce_check::Check::used_outside_its_module`
+   --> tests/ui/same_context_causes.rs:200:13
+    |
+200 |         m3::Shadow!,
+    |             ^^^^^^ required by this bound in `Check::used_outside_its_module`
+
+error[E0277]: use absolute path: 'UiLocal'
+   --> tests/ui/same_context_causes.rs:184:24
+    |
+184 |         fn g(&self) -> UiLocal;
+    |                        ^^^^^^^ relative type, not in scope where `m3::Shadow!` is called
+    |
+    = help: the trait `_::announce_check::InModuleOf_Shadow` is not implemented for `announce::__private::ThisCall`
+    = note: `m3::Shadow` is used outside its module `m3`
+    = note: write `UiLocal` with an absolute path (e.g. `crate::UiLocal`), or add `repeater = ..` to the `#[announce]` of `Shadow`
+note: required by a bound in `_::announce_check::Check::used_outside_its_module`
+   --> tests/ui/same_context_causes.rs:200:13
+    |
+200 |         m3::Shadow!,
+    |             ^^^^^^ required by this bound in `Check::used_outside_its_module`
+
+error[E0277]: use absolute path: 'UiBase'
+   --> tests/ui/same_context_causes.rs:188:27
+    |
+188 |     pub struct Encoded<T: UiBase, const N: crate::inner::UiIdx>(pub UiArr<N>, pub T);
+    |                           ^^^^^^ relative trait path, not in scope where `m3::Encoded!` is called
+    |
+    = help: the trait `_::announce_check::InModuleOf_Encoded` is not implemented for `announce::__private::ThisCall`
+    = note: `m3::Encoded` is used outside its module `m3`
+    = note: write `UiBase` with an absolute path (e.g. `crate::UiBase`)
+note: required by a bound in `_::announce_check::Check::used_outside_its_module`
+   --> tests/ui/same_context_causes.rs:201:13
+    |
+201 |         m3::Encoded!,
+    |             ^^^^^^^ required by this bound in `Check::used_outside_its_module`
+
+error[E0277]: const parameter of a non-primitive type: 'crate::inner::UiIdx'
+   --> tests/ui/same_context_causes.rs:188:44
+    |
+188 |     pub struct Encoded<T: UiBase, const N: crate::inner::UiIdx>(pub UiArr<N>, pub T);
+    |                                            ^^^^^^^^^^^^^^^^^^^ cannot be carried, so `m3::Encoded!` works only in `m3`
+    |
+    = help: the trait `_::announce_check::InModuleOf_Encoded` is not implemented for `announce::__private::ThisCall`
+    = note: `m3::Encoded` is used outside its module `m3`
+    = note: a const parameter of a type that is not primitive cannot be carried
+    = note: use a primitive type for the const parameter
+note: required by a bound in `_::announce_check::Check::used_outside_its_module`
+   --> tests/ui/same_context_causes.rs:201:13
+    |
+201 |         m3::Encoded!,
+    |             ^^^^^^^ required by this bound in `Check::used_outside_its_module`
+
+error[E0277]: use absolute path: 'N'
+   --> tests/ui/same_context_causes.rs:192:26
+    |
+192 |         const M: usize = N;
+    |                          ^ relative value path, not in scope where `m3::Scoped!` is called
+    |
+    = help: the trait `InModuleOf_Scoped` is not implemented for `announce::__private::ThisCall`
+    = note: `m3::Scoped` is used outside its module `m3`
+    = note: write `N` with an absolute path (e.g. `crate::N`)
+note: required by a bound in `_::announce_check::Check::used_outside_its_module`
+   --> tests/ui/same_context_causes.rs:202:13
+    |
+202 |         m3::Scoped!,
+    |             ^^^^^^ required by this bound in `Check::used_outside_its_module`
