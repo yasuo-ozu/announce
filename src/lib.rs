@@ -3,6 +3,595 @@
 #![doc(html_favicon_url = "https://raw.githubusercontent.com/yasuo-ozu/announce/main/logo.png")]
 #![no_std]
 
+/// Makes an item readable by macros in any crate.
+///
+/// `#[announce]` keeps the item as written and emits a `macro_rules!` with the
+/// item's name next to it: the *trampoline*. Calling the trampoline passes the item,
+/// as tokens, to a callback macro. It works on a struct, enum, union, trait, type
+/// alias and inline `mod`.
+///
+/// ```
+/// # macro_rules! my_callback { ($($t:tt)*) => {}; }
+/// # mod path { pub mod to {
+/// #[announce::announce]
+/// pub trait Greet { fn hi(&self) -> &'static str; }
+/// # } }
+///
+/// // In any crate: pass the definition of `Greet` to `my_callback!`.
+/// path::to::Greet! { [path::to::Greet!, my_callback!] REST }
+/// ```
+///
+/// `my_callback!` receives the definition, and `REST` unchanged:
+///
+/// ```text
+/// my_callback! {
+///     @announce_format "1"
+///     [my_callback!]
+///     path::to::Greet! => [META] { pub trait Greet { fn hi(&self) -> &'static str; } }
+///     REST
+/// }
+/// ```
+///
+/// `@announce_format "1"` starts every call that announce makes to the next macro: it
+/// is the version of the wire format, and a macro of yours can match it to know that
+/// announce called it (see the [wire format]). A call by hand needs none.
+///
+/// `META` lists what the definer attached: checks, `meta` entries and so on. It is
+/// empty without options. In the item, `#[cfg]` is already evaluated in the defining
+/// crate, `crate::` reads `$crate::`, and doc attributes are gone (see
+/// [Docs](#docs)). The [wire format] is the same for every item. Write callbacks
+/// with [`announce::helper`] (and announce items your own macro builds with
+/// [`announce::machinery`]); both need the feature `proc-macro-api` of `announce`,
+/// which is on by default. A `#![no_std]` crate that only defines items turns it off
+/// (`default-features = false`) and still has `#[announce]`.
+///
+/// # Options
+///
+/// Options go in the attribute, separated by commas:
+/// `#[announce(macro_name = Name, my_lib::check)]`.
+///
+/// - `macro_name = Ident`: name of the trampoline. Default: the item's name. Set it
+///   when a derive or attribute macro owns that name: the derive forwards to the
+///   trampoline with `announce::helper::redirect`. One item has one trampoline: when
+///   it is announced more than once, every announcement must give the same name (see
+///   [Several announcements on one item](#several-announcements-on-one-item)).
+/// - `crate = path`: path to the `announce` crate in generated code. Default: read
+///   from the `Cargo.toml` of the crate being compiled, so a renamed dependency
+///   works. A proc-macro library whose users do not depend on `announce` must set
+///   it (see [`announce::machinery`]). When the item has several announcements, it
+///   must be on the first one to expand, or on every one (see
+///   [Several announcements on one item](#several-announcements-on-one-item)).
+/// - `meta = path(args)`: adds `path(args)` to `META` for consumers. It is never
+///   called. May repeat. `(args)` is optional.
+/// - `path` or `path(args)`, without `=`: a check. It runs at the definition, as
+///   `path! { @announce_format "1" (args), ITEM }` (`()` for a bare `path`), so its
+///   `compile_error!` shows
+///   where the item is defined, not where it is used. It is also listed in `META`.
+///   A check can own attributes: see
+///   [Checks and attributes of your own](#checks-and-attributes-of-your-own).
+/// - `mock = path`: the item stands in for the item at `path` (`announce-std` uses
+///   this for std items). It is kept in a hidden module, so it is still
+///   type-checked. `META` gets `mock(path)`.
+/// - `repeater = crate::Repeater`: lets the item use types that do not resolve in
+///   other crates. See [Type context](#type-context).
+/// - `allow_primitive = bool`: primitive types (`u8`, `bool`, `str`, ...) need no
+///   repeater. Default: `true`.
+/// - `allow_std_prelude = bool`: bare std prelude names (`String`, `Vec<u8>`,
+///   `Option<T>`, `Clone`, ...) need no repeater. Default: `false`.
+/// - `emit_item = bool`: with `false`, emit only the trampoline, not the item.
+///   Default: `true`. Its main use is in [Inline modules](#inline-modules). The item is
+///   dropped last, so the macros on it expand first: see
+///   [Several announcements on one item](#several-announcements-on-one-item).
+/// - `layout = auto | single | direct` (advanced): how the trampoline holds the
+///   item. Default: `auto`. See [Size and recursion](#size-and-recursion).
+/// - `docs = bool`: with `true`, the item that callbacks and checks receive keeps
+///   its doc attributes. Default: `false`. See [Docs](#docs).
+/// - `strict = bool`: with `false`, a type or path that cannot be named outside its module is
+///   recorded for the calls to check, not an error at the definition. Default: `true`. See
+///   [Items that resolve in their module only](#items-that-resolve-in-their-module-only).
+///
+/// ```ignore
+/// #[announce(macro_name = ParseAnnounce, meta = my_lib::info(version = 1))]
+/// pub trait Parse { /* .. */ }
+///
+/// // Runs `my_lib::no_tuple! { (named), struct S { .. } }` next to the item
+/// // (after the query of "Checks and attributes of your own").
+/// #[announce(my_lib::no_tuple(named))]
+/// pub struct S { pub a: u8 }
+/// ```
+///
+/// # Several announcements on one item
+///
+/// An item can be announced by more than one: your `#[announce]` and the
+/// `#[announce(..)]` that a macro of a library puts on the items it produces. They are
+/// **merged**: one trampoline, one `Announce` impl, and one `META` with what all of them
+/// attached. This works for every kind of item.
+///
+/// - **The runner makes the trampoline, last.** The first time `#[announce]` expands it
+///   emits the item and nothing else, with the hidden attribute
+///   `#[announce::__private::__announce_runner(..)]`, the *runner*, as the last
+///   of its attributes. The runner holds the options. It expands after every other
+///   attribute macro and derive on the item (rustc expands the attributes from the top),
+///   and then it makes the trampoline. So the item is announced as it is after the other
+///   macros have run, and a macro that announces what it produces (`#[a] #[announce]
+///   item`, where `a` emits `#[announce(..)]`) is merged. A `#[derive(..)]` has expanded
+///   by then as well: rustc has taken it off the item, so it is not in what callbacks
+///   receive. A later `#[announce(..)]` finds the runner, and merges its options into it.
+/// - **One expansion for a plain item.** An item that has no outer attribute that could
+///   expand after `#[announce]` is announced at once, with no runner. `///` documentation
+///   (the attribute `doc`), `#[repr(..)]` and the other built-in attributes that no
+///   macro can be (`allow`, `warn`, `deny`, `forbid`, `expect`, `must_use`, `deprecated`,
+///   `non_exhaustive`, `inline`, `cold`, `track_caller`, `no_mangle`, `automatically_derived`
+///   and `macro_use`, written as one name) do not count, and nor do the attributes that
+///   the checks of this announcement own. A `#[derive(..)]`, a `#[cfg_attr(..)]`, any other
+///   attribute and a path such as `#[x::doc]` do.
+/// - **A bare `#[announce]` is an attribute macro like any other.** Rustc finds the macro
+///   that the name means where the item is: this one if it is imported from `announce`,
+///   the macro of another crate if that is what is imported under the name `announce`.
+///   `#[announce]` neither reads nor removes the other attributes of the item, so a
+///   foreign attribute macro named `announce` runs as it would without this crate.
+/// - The runner is found by its name, never by the path `announce`: an attribute of
+///   another crate that is named `announce`, with a path (`#[metrics::announce(level = 2)]`),
+///   is never merged, and a renamed import
+///   (`use announce::announce as ann; #[ann] #[ann(..)]`) is an announcement like any other.
+/// - Merging options: checks and `meta` entries are united, the first announcement's
+///   first, without duplicates. `allow_primitive`, `allow_std_prelude` and `docs` are on if
+///   any of them is on (`allow_primitive` is off only if all say so); `strict` is off if any
+///   says `strict = false`. `crate` is the
+///   first announcement's, else the other's: two paths to `announce` do not conflict.
+///   `mock`, `repeater`, `layout` and `emit_item` take the value that is set; two values
+///   that differ are an error at the attribute that was expanded, and the item is kept.
+/// - **`crate = ..` goes on the first announcement.** The first one to expand (the topmost
+///   `#[announce]`) writes the runner and the sentinel with its own path, its `crate = ..` or
+///   else the one read from `Cargo.toml`, before the others are merged. A crate that reaches
+///   `announce` only through a re-export needs `crate = ..` on that announcement, or on every
+///   one. On a later one alone, the path of the first does not resolve (E0433, "could not
+///   find `announce` in the list of imported crates").
+/// - One item has one trampoline, so the announcements must agree on its name: the
+///   `macro_name`, else the name of the item. They merge only if these names are equal
+///   (the explicit `macro_name` is kept). `#[announce] #[announce(macro_name = ParseAlt)]
+///   pub trait Parse {}` is an error, not a trampoline `ParseAlt` with `Parse!` gone:
+///   use the same `macro_name` (or none) in every announcement. Announce a copy for a
+///   second name (see `emit_item` under "Inline modules").
+/// - **`mock` and `emit_item = false`** are options like the others: the announcement
+///   goes the same way, and the runner drops the item when the merged options say so (the
+///   value that is set wins over the one that is not). So announcements below such an
+///   announcement are merged, not lost. The macros below it expand on the item first, and
+///   a derive that implements a trait for the item you drop fails (`cannot find type`),
+///   where it was silently dropped with the item before.
+/// - Checks are asked once for an announcement. The names of the attributes that they
+///   own travel in the runner and are united when announcements merge. `#[announce]` puts
+///   the attributes its checks own right after the runner (rustc rejects an attribute that
+///   nothing knows above a macro that has still to expand), and the runner removes them.
+/// - **A macro that drops the attributes of the item is an error at the definition.** A macro
+///   below `#[announce]` that returns the item without its outer attributes (one that rebuilds
+///   its input from the fields it parsed, say) drops the runner, and then nothing would
+///   announce the item. The announcement that puts the runner on the item also emits a
+///   *sentinel* after the item, which fails at the definition if the runner never runs: for a
+///   struct, enum or union without generic parameters, announced without `mock` and
+///   `emit_item = false`, a check that the item implements `Announce` (the error is that of
+///   `Announce`, "`S` is not announced", at the name of the item, though the item has an
+///   `#[announce]`: the macro removed it); for everything else the sentinel is a call of the
+///   trampoline, so the error is "cannot find macro `S`". An announcement that merges into
+///   a runner emits none, and nor does an item announced at once. Because the first
+///   announcement checks the `Announce` impl, `mock` and `emit_item = false` have to be on
+///   the first announcement of such a struct, enum or union: on a later one they are an error
+///   (no impl to find). Errors that the runner reports are reported at expansion, before the
+///   sentinel's, and the sentinel adds none of its own after a type error of the item or a
+///   version error from this `announce`; a version error reported by the other `announce`
+///   (which removes this runner) is followed by the sentinel's error.
+/// - **The format of the runner is versioned.** Its arguments start with the entry
+///   `__announce_format_version = "1"`, which every `announce` that reads them checks
+///   first, without reading the rest. If an item has runners of other versions (two versions
+///   of the `announce` crate announce it), that is one compile error that lists the
+///   versions and tells to use one version in every crate (`cargo tree -i announce`
+///   shows them). Announce 0.1 has no runner, so an `#[announce]` of 0.1 on the item of
+///   one of this version is not merged: it makes a second trampoline (E0252). This marker
+///   is not the `@announce_format "1"` that starts every call of a chain (see the [wire
+///   format]): that one versions the calls between macros, this one the arguments of the
+///   attribute. They are bumped independently.
+/// - **`#[cfg]` below `#[announce]`.** The trampoline goes with the item: `#[announce]
+///   #[cfg(a)] struct S;` with `a` false emits nothing.
+/// - A macro that announces what it produces puts the attribute first among the
+///   attributes of its output (`quote! { #[announce::announce(..)] #item }`). One that
+///   adds it below the others (`item.attrs.push(..)`) is expanded after the runner, which
+///   sees it, reports it as an error and removes it, where it would make a second
+///   trampoline (E0252 and E0119). It sees a qualified path that ends in `announce`
+///   (`#[::announce::announce]`, `#[x::announce]`). A bare `#[announce]` or a renamed import
+///   (`#[ann]`) put there is not seen, and does make a second trampoline.
+/// - A derive cannot do this: it cannot change its item, so it cannot announce it. A
+///   library that wants the items of its users announced asks them for `#[announce]`, or
+///   provides an attribute macro that emits it.
+///
+/// ```ignore
+/// use announce::announce;
+///
+/// #[announce(meta = a::info)]
+/// #[announce(my_lib::check)]   // one trampoline: META has both
+/// pub struct S(pub u8);
+/// ```
+///
+/// # Calling a trampoline
+///
+/// ```text
+/// path::Item! { [path::Item!, other::Def!, cb!] REST }
+/// // cb! { @announce_format "1" [cb!] other::Def! => [META] { DEF } path::Item! => [META] { ITEM } REST }
+/// ```
+///
+/// The bracketed list names the trampolines to call, then the callback. Each
+/// trampoline adds its entry and calls the next element, so `cb!` runs once, with
+/// every definition. The newest entry comes first and `REST` is never touched
+/// ([wire format]).
+///
+/// - A list element is `path!`, `#[derive(path)] Name` or `#[attr] Name`. The last
+///   two reach a trampoline through a derive or attribute macro that owns the name
+///   (see `macro_name`). That route works in item position only.
+/// - A leading `(..)` group of global options is forwarded unchanged by every hop.
+/// - A transformer is a list element right after the definition. It rewrites the
+///   entry and forwards to the rest, as in `[Item!, ::announce::signature_only!, cb!]`
+///   (see [`signature_only!`](macro@signature_only), or write your own with
+///   `announce::helper::transformer`). The caller chooses transformers, never the
+///   definition.
+/// - The call works in any other position too: statement, expression, type and
+///   pattern, also for items containing `$`.
+/// - A long chain can reach rustc's `recursion_limit`: see
+///   [Size and recursion](#size-and-recursion).
+///
+/// # Checks and attributes of your own
+///
+/// A check can own attribute names. A library can then put attributes of its own
+/// inside the item. Rustc would reject them ("cannot find attribute"), because no
+/// derive declares them:
+///
+/// ```ignore
+/// #[announce(my_lib::check)]
+/// pub struct S {
+///     #[my_lib(skip)]
+///     pub a: u8,
+///     pub b: u8,
+/// }
+/// ```
+///
+/// - `#[announce]` **removes** the owned attributes from the item it emits, so rustc
+///   never sees them (the runner does it when it expands, see
+///   [Several announcements on one item](#several-announcements-on-one-item)).
+/// - The payload **keeps** them. Callbacks see them, and `META` lists the names as
+///   one element, `attrs(my_lib, other)` (`announce::helper::Entry::owned_attrs`). A
+///   callback that emits the item itself must remove them first
+///   (`announce::helper::Entry::item_without_owned_attrs`).
+/// - The check gets the item **with** them and can validate them. Its
+///   `compile_error!` points at the attribute where the item is defined.
+///
+/// Put `#[announce]` above the item's own owned attributes. Rustc resolves
+/// attributes from the top, so an attribute above `#[announce]` is rejected before
+/// `#[announce]` can remove it.
+///
+/// An owned name `my_lib` matches `#[my_lib]`, `#[my_lib(..)]`, `#[my_lib = ..]` and
+/// `#[my_lib::..]`, anywhere in the item: fields, variants, methods, an inline `mod`
+/// and more (exact rules: [`announce::helper::attrs`]). A name that rustc or a
+/// standard tool uses (`cfg`, `doc`, `derive`, `allow`, `rustfmt`, `rustc_*`, ..)
+/// cannot be owned: that is an error where `#[announce]` is used. Two checks must not
+/// own the same name for different purposes. The other macros on the item see the owned
+/// attributes until the runner removes them (it is the last to expand), and must leave
+/// them alone.
+///
+/// **The query.** With checks, `#[announce]` first asks each of them which attribute
+/// names it owns. **Every check must answer**, also one that owns no attribute.
+/// `announce::helper::check` runs a proc-macro check and answers for you. A
+/// `macro_rules!` check needs one more arm, and both arms start with
+/// `@announce_format "1"`, like every call of announce. The protocol is in
+/// [`announce::helper::attrs`]. Without checks there is no query.
+///
+/// **`#[cfg]` and `#[cfg_attr]`.** Owned attributes are removed after the item's
+/// cfgs are evaluated in the defining crate. An owned attribute inside
+/// `#[cfg_attr(feature = "x", my_lib(skip))]` is there when the feature is on, and is
+/// removed like any other. (For this, an item with owned attributes is emitted by the
+/// hidden derive that evaluates the cfgs, not by `#[announce]` itself. An item whose
+/// checks own nothing is emitted as written.)
+///
+/// # Docs
+///
+/// Callbacks do not need documentation, so by default **the item that callbacks and
+/// checks receive has no doc attributes**. The item that `#[announce]` emits keeps
+/// all of them: rustdoc shows the definition as you wrote it, and
+/// `#![deny(missing_docs)]` still passes. Dropping docs also makes the trampoline
+/// smaller, which is part of the defining crate's metadata (an item with a few lines
+/// of documentation on each method is about a sixth smaller).
+///
+/// - Removed: every `#[doc = ..]` attribute. That is what `///`, `//!`, `/** .. */`
+///   and `#[doc = "text"]` all are, also `#[doc = include_str!(..)]`. They go from
+///   every place where owned attributes are found (see
+///   [Checks and attributes of your own](#checks-and-attributes-of-your-own)), so also
+///   from fields, variants, methods and an inline `mod` with its inner attributes. Not
+///   from inside macro invocations and `macro_rules!` bodies.
+/// - Kept: the list forms `#[doc(hidden)]`, `#[doc(alias = "x")]`, `#[doc(inline)]`,
+///   `#[doc(cfg(..))]` and the like. They steer rustdoc and are not text, and a
+///   callback that re-emits the item may want them.
+/// - Docs are removed after `#[cfg]` and `#[cfg_attr]` are evaluated, so
+///   `#[cfg_attr(feature = "x", doc = "..")]` goes whether or not the feature is on,
+///   and `#[cfg_attr(feature = "x", doc(hidden))]` stays when it is.
+/// - A check gets the same item as the payload: without docs, with its owned
+///   attributes.
+/// - `docs = true` keeps the doc attributes in the payload and in what checks get.
+///   It is also `announce::machinery::Options::docs`.
+/// - With `mock`, the hidden copy that rustc compiles keeps its docs like any
+///   emitted item.
+///
+/// ```
+/// # use announce::announce;
+/// /// Says hello.
+/// #[announce]                    // callbacks get `pub trait Greet { fn hi(&self); }`
+/// pub trait Greet {
+///     /// Says hi.
+///     fn hi(&self);
+/// }
+///
+/// #[announce(docs = true)]       // callbacks get the `#[doc = ".."]` attributes too
+/// pub struct Point { /** x */ pub x: i32 }
+/// ```
+///
+/// # Size and recursion
+///
+/// The item and its `META` live in the trampoline's body, so they are part of the
+/// defining crate's metadata, once for every copy the trampoline makes. `layout`
+/// chooses how the trampoline holds the item. Callbacks see the same tokens either
+/// way.
+///
+/// - `direct`: the item is copied into each of the three arms. A call is one macro
+///   expansion.
+/// - `single`: the item is held once, so the metadata is about a third of `direct`.
+///   A call takes three nested expansions (two through the derive and attribute
+///   route).
+/// - `auto` (the default): `single` for an item of more than 300 tokens with its
+///   `META` (`announce::machinery::SINGLE_COPY_THRESHOLD`; about 21 trait methods),
+///   `direct` for a smaller one.
+///
+/// Most definers need no other value than `auto`.
+///
+/// Rustc's `recursion_limit` (128 by default) counts nested expansions, and a chain
+/// nests all of its macros. A chain fits the default limit with up to 127 small
+/// definitions, 63 small ones that contain `$`, or 42 large ones. A longer chain
+/// needs `#![recursion_limit = "256"]` (or more) in the crate that makes the call.
+///
+/// # Type context
+///
+/// The item's tokens are used again in another crate, so every path in them must mean
+/// the same thing there. `#[announce]` checks this at the definition and reports an
+/// error at a path that would not resolve. Most items need nothing.
+///
+/// ## What resolves everywhere
+///
+/// These need no action:
+///
+/// - primitive types (`u8`, `bool`, `str`, ...), unless `allow_primitive = false`;
+/// - `crate::..`, `$crate::..` and absolute `::..` paths such as
+///   `::std::vec::Vec<u8>` or `::core::fmt::Display` (a callback sees `$crate::..`
+///   for `crate::..`);
+/// - the item's own generic parameters, and the generics of its methods and generic
+///   associated types;
+/// - `Self`, and associated types of `Self` or of a parameter (`Self::Out`,
+///   `T::Output`), on their own or inside an absolute type
+///   (`::std::boxed::Box<Self::Out>`). Inside a *relative* type, see
+///   "`Self` in a relative type" below;
+/// - std prelude names (`String`, `Vec<u8>`, `Option<T>`, `Clone`, ...), only with
+///   `allow_std_prelude = true`. This goes by the bare name, with or without generic
+///   arguments. It is off by default, because the caller's prelude may differ.
+///
+/// A type built only from these is fine too: `(u8, bool)`, `&'static str`,
+/// `[u8; 4]`, `fn(u8) -> bool`, `::std::boxed::Box<T>`.
+///
+/// Everything else is *relative*: a `Local` imported by a `use`, `super::X`, and
+/// `std::vec::Vec<u8>` without the leading `::`. A bare `Vec<u8>` is relative unless
+/// `allow_std_prelude = true`.
+///
+/// ## Relative types: `repeater`
+///
+/// A relative type is an error ("`Local` cannot be named outside its module"), unless the
+/// definer gives a `repeater`. The repeater is a trait of the
+/// defining crate that carries the types to the callback. Create it with
+/// [`define_repeater!`], and name it as `crate::path::to::Repeater` in the option.
+/// It works on a struct, enum, union and trait.
+///
+/// ```ignore
+/// mod inner { pub struct Local(pub u8); }
+/// use inner::Local;
+///
+/// announce::define_repeater!(pub Repeater);
+///
+/// // `Local` and `Vec<T>` are relative here.
+/// #[announce(repeater = crate::Repeater)]
+/// pub struct Holder<T> { pub a: Local, pub b: Vec<T>, pub c: u8 }
+/// ```
+///
+/// The item is announced as written. type-leak analyses it and numbers the relative
+/// types it finds: the *entries* `0, 1, ..`. For each entry, `#[announce]` emits an
+/// impl of the repeater for `()` next to the item. The generics that the type uses
+/// are encoded in the first argument, and `ID` is a number chosen for the item:
+///
+/// ```text
+/// impl crate::Repeater<(), ID, 0> for () { type Type = Local; }
+/// impl<T> crate::Repeater<(T,), ID, 1> for () { type Type = Vec<T>; }
+/// ```
+///
+/// With a `repeater`, `META` always has one more element, `type_leak(..)`, with no
+/// entries when no type needed it. A callback reads it with
+/// `announce::helper::Entry::type_leak`. Its format and the encoding of the generics
+/// are in [`announce::helper::TypeLeak`]. `TypeLeak::apply` rewrites every entry in an
+/// item to `<() as $crate::Repeater<ARGS, ID, I>>::Type`:
+///
+#[cfg_attr(feature = "proc-macro-api", doc = "```")]
+#[cfg_attr(not(feature = "proc-macro-api"), doc = "```ignore")]
+/// # use announce::helper::Input;
+/// # fn items(input: &Input) -> syn::Result<Vec<syn::Item>> {
+/// # let mut out = Vec::new();
+/// for entry in input.entries_in_order() {
+///     let mut item = entry.item()?;           // the definition, as written
+///     if let Some(tl) = entry.type_leak()? {  // `None` without a repeater
+///         tl.apply(&mut item);
+///     }
+///     // emit `item`
+/// #   out.push(item);
+/// }
+/// # Ok(out)
+/// # }
+/// #
+/// # let input: Input = syn::parse_quote! { [cb!] a::S! => [] { pub struct S; } };
+/// # assert_eq!(items(&input)?.len(), 1);
+/// # Ok::<(), syn::Error>(())
+/// ```
+///
+/// `Holder` then reads:
+///
+/// ```text
+/// pub struct Holder<T> {
+///     pub a: <() as $crate::Repeater<(), ID, 0>>::Type,
+///     pub b: <() as $crate::Repeater<(T,), ID, 1>>::Type,
+///     pub c: u8,
+/// }
+/// ```
+///
+/// That resolves in any crate, because `$crate` is the defining crate. A callback
+/// that writes the item at another place, such as the `impl Tr<u8> for X` of a
+/// trait, uses `TypeLeak::try_apply_at` with a `UseSite`.
+///
+/// ## Errors a repeater does not fix
+///
+/// A repeater carries types only. The rest must resolve by itself:
+///
+/// - **Trait paths**: supertraits, bounds in generics and `where` clauses, and
+///   `impl` bounds must be absolute. `trait Sub: Base` is an error; write
+///   `crate::Base`. `T: std::fmt::Display` is an error too; write
+///   `::core::fmt::Display`. `Sized` and `?Sized` may be written bare (`T: ?Sized`,
+///   `where Self: Sized`). With `allow_std_prelude = true`, the other bare prelude
+///   traits (`Clone`, `Send`, ...) pass. A trait object (`::std::boxed::Box<dyn Base>`)
+///   is a type, which the repeater carries whole.
+/// - **Value paths** in enum discriminants, const defaults and the const arguments of a
+///   bound (`T: crate::Tr<{ N }>`) must be absolute (`crate::N`), start with `Self::`, or
+///   be a const parameter. An array length or a const argument inside a type
+///   (`[u8; N]`, `Wrap<{ N }>`) is carried with the type: with a relative constant `N`
+///   the type is relative, and needs a `repeater`.
+/// - **Type aliases** must use absolute paths on the right-hand side, and take no
+///   `repeater`. `type A = Option<Local>` is an error; write
+///   `::core::option::Option<crate::Local>`.
+/// - A relative type may mention a const parameter only if the parameter has a
+///   primitive type (`bool`, `char`, any integer). A const parameter of a type alias
+///   (`const N: Idx`, even an absolute alias) cannot be encoded.
+///
+/// The type analysis rejects more, at the offending type ("`Local<'_>` cannot be named
+/// outside its module (a type that cannot be carried)"), whatever the `repeater`. In each
+/// case, write the relative type with an absolute path (`crate::..`, `::other_crate::..`),
+/// and nothing needs to be carried:
+///
+/// - **`Self` in a relative type.** `Self` has no meaning in the repeater's impl, so
+///   `fn f(&self) -> Local<Self>` and `Local<Self::Out>` are errors, while
+///   `::std::boxed::Box<Self::Out>` and a bare `Self::Out` are fine. In a struct,
+///   enum or union, `Local<Self::A>` must be written out
+///   (`Local<<Self as crate::Trait>::A>`). `Local<T::Output>` is fine, `T` being a
+///   parameter of the item.
+/// - **A bound cycle.** A relative type in a bound or `where` clause that mentions
+///   the bounded parameter, as in `struct S<T: ::core::convert::From<Local<T>>>(T)`,
+///   is an error: the rewritten bound would have to hold before it can be checked.
+///   `T: ::core::convert::From<Local<u8>>` and `U: ::core::convert::From<Local<T>>`
+///   are fine.
+/// - **A relative type with `'_`** among its own arguments (`Local<'_>`). An elided
+///   lifetime of a reference around it (`&Local`) is fine.
+/// - **A macro call in an array length**, unless it is absolute: `[u8; two!()]` is an
+///   error, `[u8; crate::two!()]` is fine.
+/// - **A relative type as the type of a const parameter**: `const N: Idx` with
+///   `type Idx = usize` is an error. Write the primitive type (`usize`, `bool`,
+///   `char`, ..).
+/// - **A method lifetime that only a relative type keeps** (E0195). In a trait,
+///   `fn f<'a>(&self, a: Local<'a>) -> &'a u8` is an error, because the copy would
+///   have `'a` only inside a projection. Keep `'a` in another argument (`&'a self`,
+///   `b: &'a u8`) or write `Local` with an absolute path.
+///
+/// ## Items that resolve in their module only
+///
+/// A type or path that cannot be named outside its module (a relative type without a
+/// `repeater`, a relative trait or value path, a type the analysis refuses, a const generic that
+/// cannot be encoded) is an error at the definition: one for each, at its tokens in the item and
+/// with what the definer can do, all reported at once. A `repeater` carries the relative types,
+/// but not a trait path or a const parameter that is not of a primitive type.
+///
+/// ```text
+/// error: `Local` cannot be named outside its module: add `repeater = ..` to the `#[announce]`, or write the path absolutely
+///  --> src/lib.rs:6:16
+///   |
+/// 6 |         pub a: Local,
+///   |                ^^^^^
+/// ```
+///
+/// An item meant for its own module only is announced with `strict = false`. The definition is
+/// no error then: its `META` has `type_leak_error(..)` ([wire format]) instead of `type_leak(..)`,
+/// and a private marker that only the item's module (its function bodies and the submodules that
+/// `use super::*`) can see. A callback built with announce 0.2 ignores the record and takes the
+/// item for one that resolves everywhere, which works in that module. The caller or the callback
+/// decides what the record means:
+///
+/// - `Entry::type_leak()` returns it as an error, as a proc macro cannot tell where it is
+///   called: one line for each cause at the path of the trampoline, such as ``this macro cannot
+///   use `m::Item`: `Local` cannot be named outside its module; add `repeater = ..` to its
+///   `#[announce]`, or write the path absolutely``.
+/// - `Entry::leak_failure()` returns the record.
+/// - `Entry::item_resolved(krate)` is the item to emit and what goes with it: with a table the
+///   rewritten item, with a record the item as written and a check
+///   (`LeakFailure::assume_success`) that fails to compile unless the call is in the item's
+///   module. A callback that emits the item elsewhere gets rustc's own "cannot find type"
+///   errors first, and then the error of the check; with a relative trait path in a bound
+///   (`trait Sub: Base`) rustc stops at "cannot find trait" (E0405) before it.
+/// - [`announce::same_context!`] in the chain emits only that check.
+///
+/// Inside means the module where the call is written. A module that imports the trampoline
+/// with `use` is outside.
+///
+/// The check is a `const _` item, which does not go inside an `impl` or `trait` block: a
+/// callback whose output goes there puts the tokens of `Entry::item_resolved` beside the block.
+/// Mistakes in the options stay errors, with or without `strict = false`: a `repeater` on a
+/// type alias or on an item that is not analysed, and a `repeater` of another crate.
+///
+/// ## What is not checked
+///
+/// - Bodies of provided trait methods. `fn g(&self) -> u8 { helper() }` passes, but a
+///   callback that re-emits the body needs `helper` to resolve.
+///   [`signature_only!`](macro@signature_only) replaces such bodies.
+/// - Types named in the default of an associated const. `const N: usize =
+///   ::core::mem::size_of::<Local>();` passes the value-path check, but `Local` is not
+///   read, so it is not carried. (Array lengths, const arguments, discriminants and
+///   the defaults of const parameters are read.)
+/// - Attribute arguments, such as `#[serde(with = "m")]`. They are neither checked nor
+///   rewritten.
+///
+/// ## Inline modules
+///
+/// Inline modules are not analysed, and a `repeater` on one is an error. A library
+/// that handles the paths itself announces a copy wrapped in an inline `mod` of the
+/// same name, with `emit_item = false`:
+///
+/// ```
+/// # use announce::announce;
+/// #[announce(emit_item = false, macro_name = MyTraitCopy, meta = my_lib::info(..))]
+/// pub mod MyTrait { pub trait MyTrait: Base { fn f(&self) -> Local; } }
+/// ```
+///
+/// Only the trampoline is emitted, not the `mod`, so the copy does not clash with the
+/// real `MyTrait`. The library makes every path in the module resolve for its
+/// callbacks, and a callback unwraps the module. The copy is another item, so it has a
+/// `macro_name` of its own.
+///
+/// # The `Announce` impl
+///
+/// `#[announce]` also implements the `Announce` trait, so a consumer can ask for a
+/// clear error when an item is not announced. It does so for structs, enums and
+/// unions, and for `dyn Trait` of simple dyn-compatible traits (no generics, `&self`
+/// or `&mut self` methods only, at most `Send` and `Sync` as supertraits). With
+/// `emit_item = false` or `mock` there is no impl.
+///
+/// [wire format]: https://docs.rs/announce/latest/announce/helper/struct.Input.html#the-wire-format
+/// [`announce::same_context!`]: https://docs.rs/announce/latest/announce/macro.same_context.html
+/// [`announce::helper::attrs`]: https://docs.rs/announce/latest/announce/helper/attrs/index.html
+/// [`announce::helper::TypeLeak`]: https://docs.rs/announce/latest/announce/helper/struct.TypeLeak.html
+/// [`announce::helper`]: https://docs.rs/announce/latest/announce/helper/index.html
+/// [`announce::machinery`]: https://docs.rs/announce/latest/announce/machinery/index.html
 pub use announce_macros::announce;
 pub use announce_macros::define_repeater;
 
