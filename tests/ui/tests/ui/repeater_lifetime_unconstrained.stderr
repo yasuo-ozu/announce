@@ -1,4 +1,4 @@
-error: `Wrap<'a>` cannot be named outside its module (a type that cannot be carried): write the path absolutely
+error: `Wrap<'a>` leaves the lifetime `'a` of the method unconstrained in the copy (E0195): keep `'a` in another argument of the method (for example `&'a self`), or write `Wrap<'a>` with an absolute path
   --> tests/ui/repeater_lifetime_unconstrained.rs:14:24
    |
 14 |     fn i<'a>(&self, a: Wrap<'a>) -> &'a u8;

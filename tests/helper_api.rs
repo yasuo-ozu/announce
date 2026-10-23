@@ -358,7 +358,7 @@ fn recorded_leak_failure() {
     );
     assert!(
         check.ends_with(
-            "fn__check(){Check::used_outside_its_module(__AnnounceProbe::<42u64>.__announce_ctx());}};"
+            "fn__check(){announce_check::Check::used_outside_its_module(__AnnounceProbe::<42u64>.__announce_ctx());}};"
         ),
         "{}",
         check

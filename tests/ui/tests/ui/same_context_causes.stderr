@@ -4,10 +4,10 @@ error[E0277]: use absolute path: 'UiBase'
 26 |     pub trait Many: UiBase {
    |                     ^^^^^^ relative trait path, not in scope where `m::Many!` is called
    |
-   = help: the trait `_::InModuleOf_Many` is not implemented for `announce::__private::ThisCall`
+   = help: the trait `_::announce_check::InModuleOf_Many` is not implemented for `announce::__private::ThisCall`
    = note: `m::Many` is used outside its module `m`
    = note: write `UiBase` with an absolute path (e.g. `crate::UiBase`)
-note: required by a bound in `_::Check::used_outside_its_module`
+note: required by a bound in `_::announce_check::Check::used_outside_its_module`
   --> tests/ui/same_context_causes.rs:94:12
    |
 94 |         m::Many!,
@@ -19,10 +19,10 @@ error[E0277]: use absolute path: 'LEN'
 27 |         const M: usize = LEN;
    |                          ^^^ relative value path, not in scope where `m::Many!` is called
    |
-   = help: the trait `_::InModuleOf_Many` is not implemented for `announce::__private::ThisCall`
+   = help: the trait `_::announce_check::InModuleOf_Many` is not implemented for `announce::__private::ThisCall`
    = note: `m::Many` is used outside its module `m`
    = note: write `LEN` with an absolute path (e.g. `crate::LEN`)
-note: required by a bound in `_::Check::used_outside_its_module`
+note: required by a bound in `_::announce_check::Check::used_outside_its_module`
   --> tests/ui/same_context_causes.rs:94:12
    |
 94 |         m::Many!,
@@ -34,11 +34,11 @@ error[E0277]: use absolute path: 'UiWrap<'_>'
 28 |         fn f(&self, a: UiWrap<'_>, c: [u8; LEN]);
    |                        ^^^^^^^^^^ cannot be carried, so `m::Many!` works only in `m`
    |
-   = help: the trait `_::InModuleOf_Many` is not implemented for `announce::__private::ThisCall`
+   = help: the trait `_::announce_check::InModuleOf_Many` is not implemented for `announce::__private::ThisCall`
    = note: `m::Many` is used outside its module `m`
    = note: it cannot be leaked as a whole because of `'_`
    = note: write `UiWrap` with an absolute path (e.g. `crate::UiWrap`, or `::other_crate::UiWrap` for an item of another crate)
-note: required by a bound in `_::Check::used_outside_its_module`
+note: required by a bound in `_::announce_check::Check::used_outside_its_module`
   --> tests/ui/same_context_causes.rs:94:12
    |
 94 |         m::Many!,
@@ -50,10 +50,10 @@ error[E0277]: use absolute path: 'LEN'
 28 |         fn f(&self, a: UiWrap<'_>, c: [u8; LEN]);
    |                                       ^^^^^^^^^ relative type, not in scope where `m::Many!` is called
    |
-   = help: the trait `_::InModuleOf_Many` is not implemented for `announce::__private::ThisCall`
+   = help: the trait `_::announce_check::InModuleOf_Many` is not implemented for `announce::__private::ThisCall`
    = note: `m::Many` is used outside its module `m`
    = note: write `LEN` with an absolute path (e.g. `crate::LEN`), or add `repeater = ..` to the `#[announce]` of `Many`
-note: required by a bound in `_::Check::used_outside_its_module`
+note: required by a bound in `_::announce_check::Check::used_outside_its_module`
   --> tests/ui/same_context_causes.rs:94:12
    |
 94 |         m::Many!,
@@ -68,7 +68,7 @@ error[E0277]: use absolute path: 'UiBase'
    = help: the trait `InModuleOf_InBound` is not implemented for `announce::__private::ThisCall`
    = note: `m::InBound` is used outside its module `m`
    = note: write `UiBase` with an absolute path (e.g. `crate::UiBase`)
-note: required by a bound in `_::Check::used_outside_its_module`
+note: required by a bound in `_::announce_check::Check::used_outside_its_module`
   --> tests/ui/same_context_causes.rs:95:12
    |
 95 |         m::InBound!,
@@ -80,10 +80,10 @@ error[E0277]: use absolute path: 'UiAssoc'
 40 |     pub trait Objects: UiAssoc {
    |                        ^^^^^^^ relative trait path, not in scope where `m::Objects!` is called
    |
-   = help: the trait `_::InModuleOf_Objects` is not implemented for `announce::__private::ThisCall`
+   = help: the trait `_::announce_check::InModuleOf_Objects` is not implemented for `announce::__private::ThisCall`
    = note: `m::Objects` is used outside its module `m`
    = note: write `UiAssoc` with an absolute path (e.g. `crate::UiAssoc`)
-note: required by a bound in `_::Check::used_outside_its_module`
+note: required by a bound in `_::announce_check::Check::used_outside_its_module`
   --> tests/ui/same_context_causes.rs:96:12
    |
 96 |         m::Objects!,
@@ -95,12 +95,12 @@ error[E0277]: use absolute path: 'UiBase'
 41 |         fn f(&self, a: &dyn UiBase) -> <Self as UiAssoc>::X;
    |                             ^^^^^^ cannot be carried, so `m::Objects!` works only in `m`
    |
-   = help: the trait `_::InModuleOf_Objects` is not implemented for `announce::__private::ThisCall`
+   = help: the trait `_::announce_check::InModuleOf_Objects` is not implemented for `announce::__private::ThisCall`
    = note: `m::Objects` is used outside its module `m`
    = note: it cannot be leaked as a whole because of `dyn UiBase`
    = note: the lifetime of the trait object defaults to that of the enclosing reference or path
    = note: write `UiBase` with an absolute path (e.g. `crate::UiBase`, or `::other_crate::UiBase` for an item of another crate), or name the lifetime of the trait object (e.g. `&'a dyn Trait` or `dyn Trait + 'a`)
-note: required by a bound in `_::Check::used_outside_its_module`
+note: required by a bound in `_::announce_check::Check::used_outside_its_module`
   --> tests/ui/same_context_causes.rs:96:12
    |
 96 |         m::Objects!,
@@ -112,11 +112,11 @@ error[E0277]: use absolute path: 'UiAssoc::X'
 41 |         fn f(&self, a: &dyn UiBase) -> <Self as UiAssoc>::X;
    |                                                 ^^^^^^^^^^^ cannot be carried, so `m::Objects!` works only in `m`
    |
-   = help: the trait `_::InModuleOf_Objects` is not implemented for `announce::__private::ThisCall`
+   = help: the trait `_::announce_check::InModuleOf_Objects` is not implemented for `announce::__private::ThisCall`
    = note: `m::Objects` is used outside its module `m`
    = note: it cannot be leaked as a whole because of `Self`
    = note: write `UiAssoc::X` with an absolute path (e.g. `crate::UiAssoc::X`, or `::other_crate::UiAssoc::X` for an item of another crate)
-note: required by a bound in `_::Check::used_outside_its_module`
+note: required by a bound in `_::announce_check::Check::used_outside_its_module`
   --> tests/ui/same_context_causes.rs:96:12
    |
 96 |         m::Objects!,
@@ -128,11 +128,11 @@ error[E0277]: use absolute path: 'Vec<&'_ u8>'
 46 |         fn f(&self, a: Vec<&'_ u8>);
    |                        ^^^^^^^^^^^ cannot be carried, so `m::Prelude!` works only in `m`
    |
-   = help: the trait `_::InModuleOf_Prelude` is not implemented for `announce::__private::ThisCall`
+   = help: the trait `_::announce_check::InModuleOf_Prelude` is not implemented for `announce::__private::ThisCall`
    = note: `m::Prelude` is used outside its module `m`
    = note: a relative type cannot be carried with `'_` in it
    = note: write `::std::vec::Vec<..>` instead of `Vec<..>`, or set `allow_std_prelude = true` to accept prelude names
-note: required by a bound in `_::Check::used_outside_its_module`
+note: required by a bound in `_::announce_check::Check::used_outside_its_module`
   --> tests/ui/same_context_causes.rs:97:12
    |
 97 |         m::Prelude!,
@@ -148,7 +148,7 @@ error[E0277]: use absolute path: 'UiIdx'
    = note: `m::ConstTy` is used outside its module `m`
    = note: it cannot be leaked as a whole because of `const N: UiIdx`
    = note: write `UiIdx` with an absolute path (e.g. `crate::UiIdx`, or `::other_crate::UiIdx` for an item of another crate)
-note: required by a bound in `_::Check::used_outside_its_module`
+note: required by a bound in `_::announce_check::Check::used_outside_its_module`
   --> tests/ui/same_context_causes.rs:98:12
    |
 98 |         m::ConstTy!,
@@ -163,7 +163,7 @@ error[E0277]: use absolute path: 'Option<u8>'
    = help: the trait `InModuleOf_Alias` is not implemented for `announce::__private::ThisCall`
    = note: `m::Alias` is used outside its module `m`
    = note: write `Option` with an absolute path (it is a name of the std prelude, which a caller may shadow), or add `allow_std_prelude = true` to the `#[announce]` of `Alias`
-note: required by a bound in `_::Check::used_outside_its_module`
+note: required by a bound in `_::announce_check::Check::used_outside_its_module`
   --> tests/ui/same_context_causes.rs:99:12
    |
 99 |         m::Alias!,
@@ -175,10 +175,10 @@ error[E0277]: use absolute path: 'UiLocal'
  59 |         pub a: (UiLocal, u8),
     |                 ^^^^^^^ relative type, not in scope where `m::Item!` is called
     |
-    = help: the trait `_::InModuleOf_Item` is not implemented for `announce::__private::ThisCall`
+    = help: the trait `_::announce_check::InModuleOf_Item` is not implemented for `announce::__private::ThisCall`
     = note: `m::Item` is used outside its module `m`
     = note: write `UiLocal` with an absolute path (e.g. `crate::UiLocal`), or add `repeater = ..` to the `#[announce]` of `Item`
-note: required by a bound in `_::Check::used_outside_its_module`
+note: required by a bound in `_::announce_check::Check::used_outside_its_module`
    --> tests/ui/same_context_causes.rs:100:12
     |
 100 |         m::Item!,
@@ -190,10 +190,10 @@ error[E0277]: use absolute path: 'UiOther'
  62 |         pub d: UiOther,
     |                ^^^^^^^ relative type, not in scope where `m::Item!` is called
     |
-    = help: the trait `_::InModuleOf_Item` is not implemented for `announce::__private::ThisCall`
+    = help: the trait `_::announce_check::InModuleOf_Item` is not implemented for `announce::__private::ThisCall`
     = note: `m::Item` is used outside its module `m`
     = note: write `UiOther` with an absolute path (e.g. `crate::UiOther`), or add `repeater = ..` to the `#[announce]` of `Item`
-note: required by a bound in `_::Check::used_outside_its_module`
+note: required by a bound in `_::announce_check::Check::used_outside_its_module`
    --> tests/ui/same_context_causes.rs:100:12
     |
 100 |         m::Item!,
@@ -205,10 +205,10 @@ error[E0277]: use absolute path: 'UiUnique'
  68 |         pub b: &'static mut UiUnique,
     |                ^^^^^^^^^^^^^^^^^^^^^ relative type, not in scope where `m::Behind!` is called
     |
-    = help: the trait `_::InModuleOf_Behind` is not implemented for `announce::__private::ThisCall`
+    = help: the trait `_::announce_check::InModuleOf_Behind` is not implemented for `announce::__private::ThisCall`
     = note: `m::Behind` is used outside its module `m`
     = note: write `UiUnique` with an absolute path (e.g. `crate::UiUnique`), or add `repeater = ..` to the `#[announce]` of `Behind`
-note: required by a bound in `_::Check::used_outside_its_module`
+note: required by a bound in `_::announce_check::Check::used_outside_its_module`
    --> tests/ui/same_context_causes.rs:101:12
     |
 101 |         m::Behind!,
@@ -220,10 +220,10 @@ error[E0277]: use absolute path: 'UiRaw'
  67 |         pub a: *const UiRaw,
     |                       ^^^^^ relative type, not in scope where `m::Behind!` is called
     |
-    = help: the trait `_::InModuleOf_Behind` is not implemented for `announce::__private::ThisCall`
+    = help: the trait `_::announce_check::InModuleOf_Behind` is not implemented for `announce::__private::ThisCall`
     = note: `m::Behind` is used outside its module `m`
     = note: write `UiRaw` with an absolute path (e.g. `crate::UiRaw`), or add `repeater = ..` to the `#[announce]` of `Behind`
-note: required by a bound in `_::Check::used_outside_its_module`
+note: required by a bound in `_::announce_check::Check::used_outside_its_module`
    --> tests/ui/same_context_causes.rs:101:12
     |
 101 |         m::Behind!,
@@ -238,7 +238,7 @@ error[E0277]: use absolute path: 'UiOther'
     = help: the trait `InModuleOf_Generic` is not implemented for `announce::__private::ThisCall`
     = note: `m::Generic` is used outside its module `m`
     = note: write `UiOther` with an absolute path (e.g. `crate::UiOther`), or add `repeater = ..` to the `#[announce]` of `Generic`
-note: required by a bound in `_::Check::used_outside_its_module`
+note: required by a bound in `_::announce_check::Check::used_outside_its_module`
    --> tests/ui/same_context_causes.rs:102:12
     |
 102 |         m::Generic!,
@@ -253,7 +253,7 @@ error[E0277]: use absolute path: 'UiTwice'
     = help: the trait `InModuleOf_Twice` is not implemented for `announce::__private::ThisCall`
     = note: `m::Twice` is used outside its module `m`
     = note: write `UiTwice` with an absolute path (e.g. `crate::UiTwice`), or add `repeater = ..` to the `#[announce]` of `Twice`
-note: required by a bound in `_::Check::used_outside_its_module`
+note: required by a bound in `_::announce_check::Check::used_outside_its_module`
    --> tests/ui/same_context_causes.rs:103:12
     |
 103 |         m::Twice!,
@@ -265,10 +265,10 @@ error[E0277]: use absolute path: 'UiLocal'
 124 |         fn f(&self, a: UiLocal) -> UiOther;
     |                        ^^^^^^^ relative type, not in scope where `m2::InSignature!` is called
     |
-    = help: the trait `_::InModuleOf_InSignature` is not implemented for `announce::__private::ThisCall`
+    = help: the trait `_::announce_check::InModuleOf_InSignature` is not implemented for `announce::__private::ThisCall`
     = note: `m2::InSignature` is used outside its module `m2`
     = note: write `UiLocal` with an absolute path (e.g. `crate::UiLocal`), or add `repeater = ..` to the `#[announce]` of `InSignature`
-note: required by a bound in `_::Check::used_outside_its_module`
+note: required by a bound in `_::announce_check::Check::used_outside_its_module`
    --> tests/ui/same_context_causes.rs:155:13
     |
 155 |         m2::InSignature!,
@@ -280,10 +280,10 @@ error[E0277]: use absolute path: 'UiOther'
 124 |         fn f(&self, a: UiLocal) -> UiOther;
     |                                    ^^^^^^^ relative type, not in scope where `m2::InSignature!` is called
     |
-    = help: the trait `_::InModuleOf_InSignature` is not implemented for `announce::__private::ThisCall`
+    = help: the trait `_::announce_check::InModuleOf_InSignature` is not implemented for `announce::__private::ThisCall`
     = note: `m2::InSignature` is used outside its module `m2`
     = note: write `UiOther` with an absolute path (e.g. `crate::UiOther`), or add `repeater = ..` to the `#[announce]` of `InSignature`
-note: required by a bound in `_::Check::used_outside_its_module`
+note: required by a bound in `_::announce_check::Check::used_outside_its_module`
    --> tests/ui/same_context_causes.rs:155:13
     |
 155 |         m2::InSignature!,
@@ -298,7 +298,7 @@ error[E0277]: use absolute path: 'UiBase'
     = help: the trait `InModuleOf_InWhere` is not implemented for `announce::__private::ThisCall`
     = note: `m2::InWhere` is used outside its module `m2`
     = note: write `UiBase` with an absolute path (e.g. `crate::UiBase`)
-note: required by a bound in `_::Check::used_outside_its_module`
+note: required by a bound in `_::announce_check::Check::used_outside_its_module`
    --> tests/ui/same_context_causes.rs:156:13
     |
 156 |         m2::InWhere!,
@@ -313,7 +313,7 @@ error[E0277]: use absolute path: 'UiBase'
     = help: the trait `InModuleOf_InMethod` is not implemented for `announce::__private::ThisCall`
     = note: `m2::InMethod` is used outside its module `m2`
     = note: write `UiBase` with an absolute path (e.g. `crate::UiBase`)
-note: required by a bound in `_::Check::used_outside_its_module`
+note: required by a bound in `_::announce_check::Check::used_outside_its_module`
    --> tests/ui/same_context_causes.rs:157:13
     |
 157 |         m2::InMethod!,
@@ -329,7 +329,7 @@ error[E0277]: use absolute path: 'UiWrap<'_>'
     = note: `m2::Elided` is used outside its module `m2`
     = note: it cannot be leaked as a whole because of `'_`
     = note: write `UiWrap` with an absolute path (e.g. `crate::UiWrap`, or `::other_crate::UiWrap` for an item of another crate)
-note: required by a bound in `_::Check::used_outside_its_module`
+note: required by a bound in `_::announce_check::Check::used_outside_its_module`
    --> tests/ui/same_context_causes.rs:158:13
     |
 158 |         m2::Elided!,
@@ -345,7 +345,7 @@ error[E0277]: use absolute path: 'UiG<Self::A>'
     = note: `m2::SelfInside` is used outside its module `m2`
     = note: it cannot be leaked as a whole because of `Self::A`
     = note: write `UiG` with an absolute path (e.g. `crate::UiG`, or `::other_crate::UiG` for an item of another crate)
-note: required by a bound in `_::Check::used_outside_its_module`
+note: required by a bound in `_::announce_check::Check::used_outside_its_module`
    --> tests/ui/same_context_causes.rs:159:13
     |
 159 |         m2::SelfInside!,

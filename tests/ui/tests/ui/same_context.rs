@@ -135,3 +135,26 @@ macro_rules! expr_cb {
 fn in_expr() -> u8 {
     m::Item! { (expr) [m::Item!, announce::same_context!, expr_cb!] }
 }
+
+// A module with an item named `diagnostic`: the attributes of the check do not see it. The call in
+// the module passes, also from a submodule that imports it, and the one outside fails like any
+// other.
+mod shadowed {
+    pub struct UiLocal;
+    pub mod diagnostic {}
+
+    #[announce::announce(strict = false)]
+    pub struct Item {
+        pub a: UiLocal,
+    }
+
+    Item! { [Item!, announce::same_context!] }
+
+    mod with_the_names {
+        use super::*;
+
+        Item! { [Item!, announce::same_context!] }
+    }
+}
+
+shadowed::Item! { [shadowed::Item!, announce::same_context!] }

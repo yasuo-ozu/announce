@@ -14,8 +14,9 @@ use syn::parse::{Parse, ParseStream, Parser};
 use syn::{LitInt, LitStr, Path, Result, Token};
 use template_quote::{quote, ToTokens};
 
-// The reasons of a cause (`LeakError::reason`): the first four are names that resolve in the
-// item's module only, `REFUSED` a type that type-leak refuses (`Wrap<'_>`, `Local<Self>`).
+// The reasons of a cause (`LeakError::reason`, which documents them): the first four are names that
+// resolve in the item's module only, `REFUSED` a type that type-leak refuses (`Wrap<'_>`,
+// `Local<Self>`), `NOT_PRIMITIVE` a const generic of another type than a primitive.
 pub(crate) const WITHOUT_REPEATER: &str = "without `repeater`";
 pub(crate) const TRAIT_PATH: &str = "with a relative trait path in a bound";
 pub(crate) const VALUE_PATH: &str = "with a relative value path";
@@ -37,6 +38,15 @@ fn why(reason: &str) -> String {
     match reason {
         WITHOUT_REPEATER => String::new(),
         _ => format!(" ({})", why_text(reason)),
+    }
+}
+
+/// "TYPE cannot be carried (WHY)", for a cause that no table can carry.
+fn cannot_be_carried(e: &LeakError) -> String {
+    match e.reason.as_str() {
+        // The headline already says it.
+        REFUSED => format!("{} cannot be carried", what(e)),
+        reason => format!("{} cannot be carried{}", what(e), why(reason)),
     }
 }
 
@@ -95,6 +105,24 @@ pub struct LeakError {
     /// The offending tokens as written, with their spans.
     pub tokens: TokenStream,
     /// A short phrase telling a name that resolves in the module only from what no table can carry.
+    /// The phrases below are recognised, matched exactly. They set the wording of the errors and
+    /// the texts that the record leaves out (the headline, the note and the help):
+    ///
+    /// - `` without `repeater` ``, `with a relative trait path in a bound`, `with a relative value
+    ///   path` and `with a relative path in a type alias`: a name that resolves in the item's
+    ///   module only. The errors say that it "cannot be named outside its module"; the headline
+    ///   is `use absolute path: 'PATH'`, the label says that the path is relative and not in scope
+    ///   where the trampoline is called, and the help says to write it absolutely
+    ///   (`` without `repeater` `` also offers `repeater = ..`).
+    /// - `with a type that cannot be carried`: a type that type-leak refuses, with type-leak's
+    ///   texts. The errors say that it "cannot be carried", and the label that the trampoline
+    ///   works only in the item's module.
+    /// - `with a const generic that is not of a primitive type`: "cannot be carried" too, with a
+    ///   headline, a note and a help of its own (use a primitive type).
+    ///
+    /// Any other phrase is a cause that cannot be carried as well: the headline is `cannot be
+    /// carried: 'TYPE'`, the phrase without its leading `with ` is the note and the reason in
+    /// the errors, and the help says to write the path absolutely.
     pub reason: String,
     /// The headline, for example `use absolute path: 'Local'`.
     pub message: Option<String>,
@@ -105,7 +133,8 @@ pub struct LeakError {
 }
 
 impl LeakError {
-    /// An error at `tokens` with the phrase `reason` and no texts of its own.
+    /// An error at `tokens` with the phrase `reason` ([`reason`](Self::reason) lists the ones that
+    /// change the texts) and no texts of its own.
     pub fn new(tokens: impl ToTokens, reason: impl Into<String>) -> Self {
         LeakError {
             tokens: tokens.to_token_stream(),
@@ -326,10 +355,8 @@ impl LeakFailure {
             let (what, reason) = (what(e), e.reason.as_str());
             let clause = if is_scope(reason) {
                 format!("{} cannot be named outside its module{}", what, why(reason))
-            } else if reason == REFUSED {
-                format!("{} cannot be carried", what)
             } else {
-                format!("{} cannot be carried{}", what, why(reason))
+                cannot_be_carried(e)
             };
             let message = format!(
                 "{}: {}; {}",
@@ -350,17 +377,32 @@ impl LeakFailure {
         })
     }
 
-    /// One error per cause at its tokens in the item:
-    /// "TYPE cannot be named outside its module (WHY): FIX".
+    /// One error per cause at its tokens in the item: "TYPE cannot be named outside its module
+    /// (WHY): FIX" for a name that resolves in the module only; for the others, what the record
+    /// says: its message if it is a sentence of its own, else "TYPE cannot be carried (WHY)", and
+    /// its help for the fix.
     pub(crate) fn to_definition_error(&self) -> syn::Error {
         combine(self.errors.iter().map(|e| {
-            let fix = fix_for(&e.reason, "the `#[announce]`");
-            let message = format!(
-                "{} cannot be named outside its module{}: {}",
-                what(e),
-                why(&e.reason),
-                fix
-            );
+            let message = if is_scope(&e.reason) {
+                let fix = fix_for(&e.reason, "the `#[announce]`");
+                format!(
+                    "{} cannot be named outside its module{}: {}",
+                    what(e),
+                    why(&e.reason),
+                    fix
+                )
+            } else {
+                // A headline that only quotes the type (`use absolute path: 'TYPE'`) says less.
+                let headline = match &e.message {
+                    Some(m) if !m.ends_with('\'') => m.clone(),
+                    _ => cannot_be_carried(e),
+                };
+                let fix = e
+                    .help
+                    .clone()
+                    .unwrap_or_else(|| fix_for(&e.reason, "the `#[announce]`"));
+                format!("{}: {}", headline, fix)
+            };
             syn::Error::new_spanned(&e.tokens, message)
         }))
         .unwrap_or_else(|| {
@@ -421,11 +463,13 @@ impl LeakFailure {
     /// `&'static Local` and `[Local; 2]` are one, `Wrap<u8>` and `Wrap<u16>` two) that underlines
     /// all of the cause in the definition. `announce::same_context!` shows the error. The texts
     /// need Rust 1.78 (`#[diagnostic::on_unimplemented]`); 1.85 keeps the error short
-    /// (`#[diagnostic::do_not_recommend]`).
+    /// (`#[diagnostic::do_not_recommend]`). Those attributes do not resolve in a
+    /// `#[no_implicit_prelude]` module, where the check does not compile.
     ///
     /// The check is a `const _` item, so it cannot stand in an `impl` or `trait` block: emit it
     /// beside the impl. `krate` is the path of the `announce` crate where the tokens are emitted
-    /// (`::announce` or `$crate`), the one the definition used.
+    /// (`::announce` or `$crate`), the one the definition used; part of the check is in a module
+    /// of its own, where a path that resolves only in the caller's module does not.
     pub fn assume_success(&self, krate: &Path) -> TokenStream {
         let causes = self.distinct_causes();
         if causes.is_empty() {
@@ -493,24 +537,29 @@ impl LeakFailure {
                 #[allow(unused_imports)]
                 use #krate::__private::ContextFallback as _;
                 use #krate::__private::Probe as __AnnounceProbe;
-                #texts
-                #[allow(non_camel_case_types)]
-                trait #tr {}
-                #not_recommended
-                impl #tr for #krate::__private::ThisCallInTheModule {}
-                // Associated: the callee's path can then span the cause (a free fn adds a second
-                // span, "required by a bound introduced by this call").
-                #[allow(dead_code)]
-                struct Check;
-                impl Check {
-                    fn used_outside_its_module<T: #tr>(_: T) {}
+                // A module of its own: the attributes are resolved without the names of the
+                // caller's module, where `diagnostic` may be an item of the user's. `pub(super)`
+                // and not `pub`, which `unreachable_pub` would report.
+                mod announce_check {
+                    #texts
+                    #[allow(non_camel_case_types)]
+                    pub(super) trait #tr {}
+                    #not_recommended
+                    impl #tr for #krate::__private::ThisCallInTheModule {}
+                    // Associated: the callee's path can then span the cause (a free fn adds a
+                    // second span, "required by a bound introduced by this call").
+                    #[allow(dead_code)]
+                    pub(super) struct Check;
+                    impl Check {
+                        pub(super) fn used_outside_its_module<T: #tr>(_: T) {}
+                    }
                 }
                 #[allow(dead_code)]
                 fn __check()
             },
             span,
         );
-        let check = respan(quote! { Check:: }, first);
+        let check = respan(quote! { announce_check::Check:: }, first);
         let name = respan(quote! { used_outside_its_module }, last);
         let probe = respan(quote! { __AnnounceProbe::<#id>.__announce_ctx }, first);
         let unit = paren(TokenStream::new(), last);
@@ -777,18 +826,47 @@ mod tests {
         );
         let mut raw = failure(&[]);
         raw.ident = syn::parse_quote!(r#type);
+        // Quotes, backslashes and a raw string in the texts are escaped by the writer.
+        let mut tricky = failure(&[("Local", WITHOUT_REPEATER)]);
+        tricky.errors[0] = tricky.errors[0]
+            .clone()
+            .with_message(r##"say "hi" \ r#"raw"# \"##)
+            .with_notes([r#"a "note" with \ and \"quotes\""#, "line\nbreak\ttab"])
+            .with_help(r#"write "Local" as C:\dir\"#);
+        let texts = |f: &LeakFailure| -> Vec<_> {
+            let texts = |e: &LeakError| (e.reason.clone(), e.message.clone(), e.notes.clone());
+            f.errors
+                .iter()
+                .map(|e| (texts(e), e.help.clone()))
+                .collect()
+        };
         for (f, krate) in [
             (f.clone(), None),
             (f.with_krate("my_lib"), Some("my_lib")),
             (raw, None),
+            (tricky, None),
         ] {
             let back: LeakFailure = syn::parse2(f.meta()).unwrap();
             assert_eq!(squash(back.meta()), squash(f.meta()));
+            // From text as well as from tokens, and each text as it was.
+            assert_eq!(texts(&back), texts(&f));
+            assert_eq!(texts(&read_meta(&f.meta().to_string()).unwrap()), texts(&f));
             assert_eq!(back.ident, f.ident);
             assert_eq!(squash(&back.path), squash(&f.ident));
             assert_eq!(back.krate.as_deref(), krate);
             assert_eq!(squash(f.meta()).contains("krate"), krate.is_some());
         }
+        // A record written with raw string literals is read as well.
+        let literal = read_meta(
+            r###"type_leak_error(id = 1u64, item = B, errors = [(A) r#"with "q""# {
+                message = r#"a "m" \ b"#, notes = [r"c:\dir", r#"say "n""#], help = r"h\" }])"###,
+        )
+        .unwrap();
+        let e = &literal.errors[0];
+        assert_eq!(e.reason, r#"with "q""#);
+        assert_eq!(e.message.as_deref(), Some(r#"a "m" \ b"#));
+        assert_eq!(e.notes, [r"c:\dir", r#"say "n""#]);
+        assert_eq!(e.help.as_deref(), Some(r"h\"));
     }
 
     #[test]
@@ -1182,10 +1260,27 @@ mod tests {
                 "use::announce::__private::ContextFallbackas_;use::announce::__private::Probeas__AnnounceProbe;",
                 "traitInModuleOf_Leaky{}",
                 "implInModuleOf_Leakyfor::announce::__private::ThisCallInTheModule{}",
-                "structCheck;implCheck{fnused_outside_its_module<T:InModuleOf_Leaky>(_:T){}}",
-                "fn__check(){Check::used_outside_its_module(__AnnounceProbe::<42u64>.__announce_ctx());}};",
+                "structCheck;implCheck{pub(super)fnused_outside_its_module<T:InModuleOf_Leaky>(_:T){}}",
+                "fn__check(){announce_check::Check::used_outside_its_module(__AnnounceProbe::<42u64>.__announce_ctx());}};",
             ],
         );
+        // The trait and its attributes are in a module of their own, out of the caller's names;
+        // the probe is called in the caller's scope.
+        let (outside, inside) = out.split_once("modannounce_check{").unwrap();
+        let (inside, call) = inside.split_once("}#[allow(dead_code)]fn__check").unwrap();
+        assert!(
+            !outside.contains("diagnostic") && !call.contains("diagnostic"),
+            "{}",
+            out
+        );
+        has(
+            inside,
+            &[
+                "pub(super)traitInModuleOf_Leaky{}",
+                "pub(super)structCheck;",
+            ],
+        );
+        assert!(call.contains("__announce_ctx"), "{}", out);
         let texts = out.contains("#[diagnostic::on_unimplemented(");
         assert_eq!(texts, cfg!(announce_diagnostic), "{}", out);
         if texts {
@@ -1206,12 +1301,46 @@ mod tests {
 
     #[test]
     fn the_definition_error_says_what_the_definer_can_do() {
-        let f = failure(&[
+        let mut f = failure(&[
             ("A", WITHOUT_REPEATER),
             ("B < T >", TRAIT_PATH),
             ("", "with a type that cannot be encoded (x)"),
             ("crate :: Idx", NOT_PRIMITIVE),
+            ("Wrap < '_ >", REFUSED),
+            ("Vec < &'_ u8 >", "with the relative prelude name `Vec`"),
+            ("Self", "with `Self` in a type alias"),
+            ("m ! (Self)", REFUSED),
         ]);
+        // What the record carries: a plain headline is not shown, a sentence of its own is.
+        for (i, message, help) in [
+            (
+                3,
+                "const parameter of a non-primitive type: 'crate::Idx'",
+                "use a primitive type",
+            ),
+            (
+                4,
+                "use absolute path: 'Wrap < '_ >'",
+                "write `Wrap` with an absolute path",
+            ),
+            (
+                5,
+                "use absolute path: 'Vec < &'_ u8 >'",
+                "write `::std::vec::Vec<..>`",
+            ),
+            (
+                6,
+                "`Self` has no meaning here",
+                "write the type instead of `Self`",
+            ),
+            (
+                7,
+                "`m!(Self)` names `Self` in a default",
+                "write the default without `Self`",
+            ),
+        ] {
+            f.errors[i] = f.errors[i].clone().with_message(message).with_help(help);
+        }
         let errors: Vec<String> = f
             .to_definition_error()
             .into_iter()
@@ -1224,11 +1353,15 @@ mod tests {
                  or write the path absolutely",
                 "`B<T>` cannot be named outside its module (a relative trait path in a bound): \
                  write the path absolutely",
-                "a type of the item cannot be named outside its module \
-                 (a type that cannot be encoded (x)): write the path absolutely",
-                "`crate::Idx` cannot be named outside its module \
-                 (a const generic that is not of a primitive type): \
-                 use a primitive type for the const parameter",
+                "a type of the item cannot be carried (a type that cannot be encoded (x)): \
+                 write the path absolutely",
+                "`crate::Idx` cannot be carried (a const generic that is not of a primitive type): \
+                 use a primitive type",
+                "`Wrap<'_>` cannot be carried: write `Wrap` with an absolute path",
+                "`Vec<&'_ u8>` cannot be carried (the relative prelude name `Vec`): \
+                 write `::std::vec::Vec<..>`",
+                "`Self` has no meaning here: write the type instead of `Self`",
+                "`m!(Self)` names `Self` in a default: write the default without `Self`",
             ]
         );
         assert_eq!(failure(&[]).to_definition_error().into_iter().count(), 1);

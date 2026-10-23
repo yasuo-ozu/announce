@@ -1,4 +1,4 @@
-error: `crate::Idx` cannot be named outside its module (a const generic that is not of a primitive type): use a primitive type for the const parameter
+error: `crate::Idx` cannot be carried (a const generic that is not of a primitive type): use a primitive type for the const parameter
   --> tests/ui/leak_unsupported.rs:13:32
    |
 13 | pub struct AliasConst<const N: crate::Idx>(pub Arr<N>);

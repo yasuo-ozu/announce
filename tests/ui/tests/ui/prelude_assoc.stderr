@@ -1,10 +1,10 @@
-error: `Option<Self::Out>` cannot be named outside its module (the relative prelude name `Option`): write the path absolutely
+error: `Option<Self::Out>` cannot be carried (the relative prelude name `Option`): write `::core::option::Option<..>` instead of `Option<..>`, or set `allow_std_prelude = true` to accept prelude names
  --> tests/ui/prelude_assoc.rs:9:20
   |
 9 |     fn f(&self) -> Option<Self::Out>;
   |                    ^^^^^^^^^^^^^^^^^
 
-error: `Option<Self::Out>` cannot be named outside its module (the relative prelude name `Option`): write the path absolutely
+error: `Option<Self::Out>` cannot be carried (the relative prelude name `Option`): write `::core::option::Option<..>` instead of `Option<..>`, or set `allow_std_prelude = true` to accept prelude names
   --> tests/ui/prelude_assoc.rs:15:20
    |
 15 |     fn f(&self) -> Option<Self::Out>;

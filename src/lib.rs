@@ -799,12 +799,15 @@ pub mod __private {
 ///    = help: the trait `InModuleOf_Item` is not implemented for `announce::__private::ThisCall`
 ///    = note: `m::Item` is used outside its module `m`
 ///    = note: write `Local` with an absolute path (e.g. `crate::Local`), or add `repeater = ..` to the `#[announce]` of `Item`
-/// note: required by a bound in `_::Check::used_outside_its_module`
+/// note: required by a bound in `_::announce_check::Check::used_outside_its_module`
 ///   --> src/main.rs:11:16
 ///    |
 /// 11 | m::Item! { [m::Item!, announce::same_context!] }
 ///    |                ^^^^ required by this bound in `Check::used_outside_its_module`
 /// ```
+///
+/// On Rust 1.78 and later the check does not compile in a `#[no_implicit_prelude]` module, which
+/// has no `diagnostic` attributes in scope, so leave `same_context!` out of calls there.
 ///
 /// The check is a `const _` item, so `same_context!` works in item and statement position, and in
 /// expression position when the call starts with the `(expr)` option
