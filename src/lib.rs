@@ -799,7 +799,7 @@ pub mod __private {
 ///    = help: the trait `InModuleOf_Item` is not implemented for `announce::__private::ThisCall`
 ///    = note: `m::Item` is used outside its module `m`
 ///    = note: write `Local` with an absolute path (e.g. `crate::Local`), or add `repeater = ..` to the `#[announce]` of `Item`
-/// note: required by a bound in `_::announce_check::Check::used_outside_its_module`
+/// note: required by a bound in `announce_check::Check::used_outside_its_module`
 ///   --> src/main.rs:11:16
 ///    |
 /// 11 | m::Item! { [m::Item!, announce::same_context!] }
