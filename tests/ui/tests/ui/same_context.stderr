@@ -275,3 +275,18 @@ note: required by a bound in `_::Check::used_outside_its_module`
     |
 127 | announce_test_ui_lib::m::Sub! { [announce_test_ui_lib::m::Sub!, announce::same_context!] }
     |                                                           ^^^ required by this bound in `Check::used_outside_its_module`
+
+error[E0277]: use absolute path: 'UiLocal'
+   --> tests/ui/same_context.rs:11:16
+    |
+ 11 |         pub a: UiLocal,
+    |                ^^^^^^^ relative type, not in scope where `m::Item!` is called
+    |
+    = help: the trait `in_expr::_::InModuleOf_Item` is not implemented for `announce::__private::ThisCall`
+    = note: `m::Item` is used outside its module `m`
+    = note: write `UiLocal` with an absolute path (e.g. `crate::UiLocal`), or add `repeater = ..` to the `#[announce]` of `Item`
+note: required by a bound in `in_expr::_::Check::used_outside_its_module`
+   --> tests/ui/same_context.rs:136:27
+    |
+136 |     m::Item! { (expr) [m::Item!, announce::same_context!, expr_cb!] }
+    |                           ^^^^ required by this bound in `Check::used_outside_its_module`

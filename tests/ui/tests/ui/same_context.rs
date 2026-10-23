@@ -125,3 +125,13 @@ through_the_check!();
 // trait path.
 announce_test_ui_lib::m::Pair! { [announce_test_ui_lib::m::Pair!, announce::same_context!, announce_test_derive::leak_failures!] PAIR_ROWS }
 announce_test_ui_lib::m::Sub! { [announce_test_ui_lib::m::Sub!, announce::same_context!] }
+
+// In expression position (`(expr)`) the check is a block in front of the callback's value, and
+// fails at the cause as well; the passing case is tests/defs/src/recorded.rs.
+macro_rules! expr_cb {
+    ($($t:tt)*) => { 0 };
+}
+
+fn in_expr() -> u8 {
+    m::Item! { (expr) [m::Item!, announce::same_context!, expr_cb!] }
+}
