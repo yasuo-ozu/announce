@@ -1,5 +1,0 @@
-error: `Local` cannot be named outside its module: add `repeater = ..` to the `#[announce]`, or write the path absolutely
-  --> tests/ui/owned_error_keeps_item.rs:11:12
-   |
-11 |     pub a: Local,
-   |            ^^^^^

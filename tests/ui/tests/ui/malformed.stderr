@@ -1,7 +1,0 @@
-error: announce: invalid trampoline input; expected `Item! { [Item!, next!, ..] .. }` (a head and at least one continuation; a derive or attribute head goes through `announce::helper::redirect`) with an optional leading `@announce_format "1"` (another version is from an incompatible announce)
- --> tests/ui/malformed.rs:1:1
-  |
-1 | announce_test_defs::kinds::Greet! { not a list }
-  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  |
-  = note: this error originates in the macro `announce_test_defs::kinds::Greet` (in Nightly builds, run with -Z macro-backtrace for more info)
