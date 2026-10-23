@@ -288,6 +288,9 @@ mod tests {
         let meta = tl.meta().to_string();
         let with_extra = meta.replace("id = 7u64", "id = 7u64, future = [1, 2], other");
         assert!(syn::parse_str::<TypeLeak>(&with_extra).is_ok());
+        // An unknown value that is not a type ends at the `,` before the next key.
+        let unclosed = meta.replace("id = 7u64", "cmp = a < b, id = 7u64");
+        assert!(syn::parse_str::<TypeLeak>(&unclosed).is_ok());
 
         let old = "type_leak(repeater = ::my::R, id = 7u64, generics = [()], types = [Local])";
         let err = syn::parse_str::<TypeLeak>(old).unwrap_err();

@@ -471,6 +471,12 @@ impl Entry {
             .find(|m| m.path.segments.last().map_or(false, |s| s.ident == name))
     }
 
+    /// The META element that announce writes as `name(..)`: only the bare `name`, so a user
+    /// element `lib::name(..)` is not taken for it.
+    fn reserved_meta(&self, name: &str) -> Option<&Meta> {
+        self.meta.iter().find(|m| m.path.is_ident(name))
+    }
+
     /// The `type_leak(..)` META of an entry announced with `repeater = ..`.
     /// Unknown keys are ignored.
     /// A recorded failure ([`leak_failure`](Self::leak_failure)) is an error
@@ -479,7 +485,7 @@ impl Entry {
         if let Some(failure) = self.leak_failure()? {
             return Err(failure.to_error());
         }
-        let m = match self.find_meta("type_leak") {
+        let m = match self.reserved_meta("type_leak") {
             Some(m) => m,
             None => return Ok(None),
         };
@@ -489,7 +495,7 @@ impl Entry {
     /// The `type_leak_error(..)` META of an entry announced with `strict = false` whose types do
     /// not resolve outside its module. The record's path is the key of the entry.
     pub fn leak_failure(&self) -> Result<Option<LeakFailure>> {
-        let m = match self.find_meta("type_leak_error") {
+        let m = match self.reserved_meta("type_leak_error") {
             Some(m) => m,
             None => return Ok(None),
         };
@@ -1103,7 +1109,9 @@ impl Input {
     /// The check is right only for a path that has an `Announce` impl. An announced `mod`, a
     /// type alias, a trait that is not dyn-compatible, and an item with `emit_item = false` or
     /// `mock` have none, so the check would reject a valid call. It is a `const _` item, so it
-    /// does not go inside an `impl` or `trait` block. In expression position
+    /// does not go inside an `impl` or `trait` block. A generic type needs its arguments in the
+    /// path given to `check_type` (`m::G<u8>`, since the bare `m::G` is rustc's `E0107`);
+    /// [`Cont::bang`] drops them for the fetch. In expression position
     /// ([`is_expression_position`]) the output needs a block, `{ #(#checks)* #ts }`, or the
     /// callback skips the check there.
     pub fn gather(&self, needed: impl IntoIterator<Item = Cont>) -> Gather<'_> {

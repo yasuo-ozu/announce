@@ -22,7 +22,9 @@
   `Entry::item_resolved(&krate)` (the item, and the check of `LeakFailure::assume_success` for a
   record) and `same_context`, the function behind the macro. `Entry::type_leak()` returns a
   record as an error, one line for each cause at the path of the call. A reader skips keys and
-  tokens it does not know.
+  tokens it does not know: a value ends at the next `,` outside groups and `<..>`, except that a
+  `<` that is never closed (`cmp = a < b`) ends at the first `,` that starts the next element
+  (`key =`, or `(TOKENS) "reason"` in the errors), so it does not hide the keys after it.
 - The record is the only difference from any other call: `ANNOUNCE_FORMAT` is still `"1"`. A
   callback built with announce 0.2 ignores it and takes the item for one that resolves
   everywhere, which works in the module of the item.
@@ -38,6 +40,10 @@
   carried with the type by a `repeater`, instead of being errors for their trait or value path;
   without a `repeater` they are relative types. Trait paths in bounds and `impl Trait`, and value
   paths in discriminants, const defaults and the const arguments of a bound, stay errors.
+- `Entry::type_leak()` (and `leak_failure()`, `item_resolved()`) read only the bare `type_leak(..)`
+  and `type_leak_error(..)` elements. A user check or `meta =` with the same last segment
+  (`my::type_leak_error(1)`) is no longer taken for them. `Entry::find_meta` still compares the
+  last segment.
 - Breaking: `TypeLeak::from_kv` is removed. `TypeLeak` implements `syn::parse::Parse` for the
   `type_leak(..)` META element instead (`Entry::type_leak()` is unchanged).
 - Breaking: `KvArgs` and `Meta::kv()` are removed. Parse `key = value` args with your own

@@ -241,8 +241,11 @@ impl Parse for LeakError {
 /// - `krate` (optional): the definer's crate as Cargo names it (`CARGO_CRATE_NAME`), which the
 ///   texts use for a call written through `$crate`; without it the `$crate::` is dropped.
 ///
-/// `id`, `item` and `errors` are required. A reader skips keys it does not know, in the record
-/// and in the braces, and tokens after an error's braces. An entry has this or `type_leak(..)`.
+/// `id`, `item` and `errors` are required. A reader skips keys it
+/// does not know, in the record and in the braces, and tokens after an error's braces. A skipped
+/// value ends at the next `,` outside groups and `<..>`, except that a `<` that is never closed
+/// (`cmp = a < b`) ends at the first `,` that starts the next element: `key =`, or `(TOKENS)
+/// "reason"` in `errors`. An entry has this or `type_leak(..)`.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct LeakFailure {
@@ -824,6 +827,74 @@ mod tests {
             err.to_string(),
             "expected `type_leak_error(..)`, found `type_leak`"
         );
+    }
+
+    #[test]
+    fn a_skipped_value_with_an_unclosed_angle_bracket_ends_before_the_next_key() {
+        // The unknown `cmp` / `ty` values are skipped whole; none hides `item` or `errors`.
+        for value in [
+            "a < b",
+            "a << 2",
+            "a <= b",
+            "x -> y < z",
+            "Vec<u8, A>",
+            "Vec<Map<u8, A>, B>",
+            "Vec<u8, A> < b",
+            "(a < b, c)",
+        ] {
+            let src = format!(
+                "type_leak_error(id = 1u64, cmp = {value}, item = X, flag, errors = [\
+                 (A) \"r\" {{ message = \"m\", cmp = {value}, help = \"h\" }} cmp = {value}, \
+                 (B) \"s\"], cmp = {value})",
+                value = value
+            );
+            let f = read_meta(&src).unwrap_or_else(|e| panic!("`{}`: {}", value, e));
+            assert_eq!(
+                (f.id.base10_digits(), f.ident.to_string()),
+                ("1", "X".into())
+            );
+            assert_eq!(f.errors.len(), 2, "`{}`", value);
+            let a = &f.errors[0];
+            assert_eq!(
+                (a.message.as_deref(), a.help.as_deref()),
+                (Some("m"), Some("h"))
+            );
+        }
+        // The last of the duplicates wins, also after a skipped value.
+        let f = read_meta("type_leak_error(id = 1u64, a < b, id = 2u64, item = X, errors = [])");
+        assert_eq!(f.unwrap().id.base10_digits(), "2");
+    }
+
+    #[test]
+    fn a_user_element_with_the_name_of_a_record_is_not_the_record() {
+        // Announce writes the bare `type_leak(..)` and `type_leak_error(..)`; `my::type_leak_error(1)`
+        // is a check or a `meta =` of the user, and `find_meta` still finds it by its last segment.
+        let user = "my::type_leak_error(1), x::type_leak, lib::type_leak_error";
+        let plain = format!("a::S! => [{}] {{ pub struct S; }}", user);
+        let out = same_context_out(&format!("[sc!, cb!] {}", plain));
+        let rest = format!(
+            "cb!{{@announce_format\"1\"[cb!]{}}}",
+            squash(tokens(&plain))
+        );
+        assert_eq!(out, rest);
+        let input: crate::helper::Input = syn::parse_str(&format!("[cb!] {}", plain)).unwrap();
+        let entry = &input.entries[0];
+        let krate: Path = syn::parse_quote!(::announce);
+        assert!(entry.leak_failure().unwrap().is_none());
+        assert!(entry.type_leak().unwrap().is_none());
+        assert_eq!(entry.item_resolved(&krate).unwrap().1.to_string(), "");
+        assert_eq!(
+            squash(entry.find_meta("type_leak_error").unwrap()),
+            "my::type_leak_error(1)"
+        );
+        // The record is found beside them.
+        let record =
+            "type_leak_error(id = 7u64, item = S, errors = [(Local) \"without `repeater`\"])";
+        let src = format!("[cb!] a::S! => [{}, {}] {{ pub struct S; }}", user, record);
+        let input: crate::helper::Input = syn::parse_str(&src).unwrap();
+        let failure = input.entries[0].leak_failure().unwrap().unwrap();
+        assert_eq!(failure.id.base10_digits(), "7");
+        assert!(input.entries[0].type_leak().is_err());
     }
 
     #[test]
