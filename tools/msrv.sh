@@ -2,7 +2,7 @@
 # Builds and tests announce on its minimum Rust versions, in a scratch copy:
 #   1.57   announce, announce-core (with `announce::helper`), announce-macros and
 #          announce-std; announce without its default feature `proc-macro-api`. Not
-#          the tests (announce-tests, nostd, renamed): their definers use `repeater`s
+#          the tests (announce-tests, renamed): their definers use `repeater`s
 #   1.59   the whole workspace, without the UI tests: `tests/ui_*.rs` are emptied in
 #          the copy, as they assert the texts of a current rustc
 #   1.78   announce and announce-core, and the texts of a failing `announce::same_context!`:

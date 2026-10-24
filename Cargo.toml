@@ -50,7 +50,6 @@ members = [
     "announce-macros",
     "announce-std",
     "tests",
-    "tests/nostd",
     "tests/renamed",
 ]
 # A plain `cargo test` / `cargo build` in a workspace with a root package acts
@@ -62,7 +61,6 @@ default-members = [
     "announce-macros",
     "announce-std",
     "tests",
-    "tests/nostd",
     "tests/renamed",
 ]
 # `tests/renamed-ws` is its own workspace, because it tests a workspace-inherited

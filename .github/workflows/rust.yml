@@ -25,14 +25,13 @@ jobs:
       run: cargo test --workspace --verbose
     - name: Test announce without its default feature
       run: cargo test -p announce --no-default-features --verbose
-    - name: Build no_std definers for a target without std
+    - name: Build announce for a target without std
       # `announce` without the default feature `proc-macro-api` has no proc-macro2
       # or syn in the graph of the target. `-p` keeps the other members, which turn
-      # the feature on, out of the build. The tests of the trampolines of
-      # tests/nostd run in `cargo test --workspace` above.
+      # the feature on, out of the build. The `#![no_std]` definer of tests/nostd.rs
+      # is built for the host by `cargo test --workspace` above.
       run: |
         rustup target add x86_64-unknown-none
-        cargo build -p announce-test-nostd --target x86_64-unknown-none --verbose
         cargo build -p announce -p announce-std --no-default-features --target x86_64-unknown-none --verbose
     - name: Run the renamed-dependency tests (a separate workspace)
       working-directory: tests/renamed-ws
