@@ -522,7 +522,7 @@ pub fn analyze(item: &Item, opts: &crate::options::Options) -> Analysed {
     result
 }
 
-fn analyze_full(item: &Item, opts: &crate::options::Options) -> Analysed {
+pub(crate) fn analyze_full(item: &Item, opts: &crate::options::Options) -> Analysed {
     if !matches!(
         item,
         Item::Struct(_) | Item::Enum(_) | Item::Union(_) | Item::Trait(_) | Item::Type(_)

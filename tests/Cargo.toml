@@ -16,6 +16,8 @@ doctest = false
 
 [dependencies]
 announce = { path = ".." }
+# `announce_core::check_fast_path`, for fast_path.rs.
+announce-core = { path = "../announce-core" }
 # The attribute, and `build::compile` for `build.rs`, which is also a test target (see above).
 subcrate = "0.2.1"
 # For helper_api.rs, and for the proc-macro subcrates (`#[subcrate(proc_macro, ::syn, ..)]`),

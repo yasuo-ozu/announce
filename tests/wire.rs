@@ -1,11 +1,15 @@
 //! The wire format example in the docs of `announce::helper::Input` (section "A real
-//! example"): the chain below gives exactly the documented block, and the block is
-//! read from the source of the docs, so the two cannot drift.
+//! example"), checked both ways. The chain below gives exactly the documented block, and
+//! the block parses as `Input` and `Entry` read it, as the annotations of the docs say.
+//! The block is read from the source of the docs, so the docs, the chain and the parser
+//! cannot drift.
 //!
 //! The definitions are in `announce_tests::defs::wire`. When the output changes on
 //! purpose, update the ```text block in `announce-core/src/helper/mod.rs`.
 
+use announce::helper::Input;
 use announce_tests::defs::wire as defs;
+use template_quote::ToTokens;
 
 /// The callback: it prints its whole input.
 macro_rules! show {
@@ -43,8 +47,8 @@ fn documented() -> String {
     block.join("\n")
 }
 
-fn norm(s: &str) -> String {
-    s.split_whitespace().collect()
+fn norm(s: impl ToString) -> String {
+    s.to_string().split_whitespace().collect()
 }
 
 /// Replaces the digits between `prefix` and `suffix` (the first occurrence, in a
@@ -92,7 +96,7 @@ fn masked_chain(s: &str) -> String {
 
 #[test]
 fn the_documented_wire_format_is_what_a_callback_gets() {
-    let documented = norm(&documented());
+    let documented = norm(documented());
     assert!(documented.contains("id=ID,"), "{}", documented);
     // The documented format version is some version of `type-leak`; see `TAG`.
     let (documented, _) = mask(&documented, TAG, "\"", "N");
@@ -100,5 +104,60 @@ fn the_documented_wire_format_is_what_a_callback_gets() {
         masked_chain(WIRE),
         documented,
         "the docs of `announce::helper::Input` show another wire format than the chain gives"
+    );
+}
+
+#[test]
+fn the_documented_example_parses_as_annotated() {
+    // `$crate` is one identifier in the tokens of a macro, but not in text.
+    let text = documented().replace("$crate", "crate");
+    let input: Input = syn::parse_str(&text).expect("the documented example parses");
+
+    assert_eq!(
+        norm(input.options.as_ref().unwrap().to_token_stream()),
+        "expr"
+    );
+    assert!(input.has_option("expr"));
+    assert_eq!(input.list.0.len(), 1);
+    assert_eq!(norm(input.list.0[0].to_token_stream()), "show!");
+    assert_eq!(norm(&input.rest), "somerest");
+
+    // Newest first.
+    assert_eq!(input.entries.len(), 2);
+    let (length, point) = (&input.entries[0], &input.entries[1]);
+    assert_eq!(norm(length.key.to_token_stream()), "defs::Length!");
+    assert_eq!(norm(point.key.to_token_stream()), "defs::Point!");
+    assert_eq!(
+        input
+            .entries_in_order()
+            .map(|e| norm(e.key.to_token_stream()))
+            .collect::<Vec<_>>(),
+        ["defs::Point!", "defs::Length!"]
+    );
+
+    // `Length`: the type table of a repeater.
+    assert_eq!(length.meta.len(), 1);
+    assert!(length.find_meta("type_leak").is_some());
+    assert_eq!(norm(&length.item), "pubstructLength(pubMeters);");
+
+    // `Point`: a check, a `meta = ..` entry and the owned attribute names.
+    assert!(point.has_check("lib_check"));
+    assert_eq!(
+        norm(point.find_meta("info").unwrap().to_token_stream()),
+        "crate::info(1)"
+    );
+    assert_eq!(point.owned_attrs().names().len(), 1);
+    assert_eq!(point.owned_attrs().names()[0], "my_lib");
+    // No docs; the owned attribute is in the payload, and not in the emitted item.
+    let item = point.item().unwrap();
+    assert!(!norm(item.to_token_stream()).contains("doc"));
+    assert_eq!(point.owned_attrs().find(&item).len(), 1);
+    assert_eq!(
+        point
+            .item_without_owned_attrs()
+            .unwrap()
+            .to_token_stream()
+            .to_string(),
+        "pub struct Point { pub x : u8 , pub y : u8 , }"
     );
 }
