@@ -1,9 +1,0 @@
-[package]
-name = "announce-test-ui-lib"
-version = "0.0.0"
-edition = "2021"
-publish = false
-
-# A crate of its own below `tests/ui`: a cause in its source is shown the same on every machine.
-[dependencies]
-announce = { path = "../../.." }

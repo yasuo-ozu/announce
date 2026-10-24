@@ -1,5 +1,0 @@
-error: announce: malformed entry: expected square brackets
- --> tests/ui/malformed_entry.rs:2:76
-  |
-2 | announce_test_derive::summary! { [announce_test_derive::summary!] a::b! => { struct S; } NAME }
-  |                                                                            ^
