@@ -80,6 +80,21 @@ pub mod leaky {
     }
 }
 
+/// A relative type, announced with `strict = false`: recorded, and the check passes in the module.
+pub mod recorded {
+    pub mod inner {
+        pub struct Local(pub u8);
+    }
+    use inner::Local;
+
+    #[announce::announce(strict = false)]
+    pub struct Holder {
+        pub a: Local,
+    }
+
+    Holder! { [Holder!, announce::same_context!] }
+}
+
 /// The `Announce` trait is there without the feature.
 pub fn is_announced<T: ?Sized + announce::Announce>() {}
 

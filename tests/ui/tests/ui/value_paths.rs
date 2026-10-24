@@ -21,6 +21,12 @@ pub struct ConstArg(pub crate::Buf<{ N }>);
 #[announce::announce]
 pub struct ConstParamDefault<const K: usize = N>;
 
+// In a bound a repeater does not help (in a type it carries the constant with it).
+pub trait Tr<const M: usize> {}
+::announce::define_repeater!(pub Repeater);
+#[announce::announce(repeater = crate::Repeater)]
+pub struct ConstArgInBound<T: crate::Tr<{ N }>>(pub T);
+
 // Absolute paths, `Self::..` and const parameters are fine.
 #[announce::announce]
 pub enum Fine {

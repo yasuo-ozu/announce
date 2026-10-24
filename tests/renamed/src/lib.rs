@@ -21,6 +21,20 @@ use inner::Local;
 #[ann::announce(repeater = crate::Repeater, meta = info(1))]
 pub struct WithRepeater<T>(pub T, pub Local);
 
+/// Recorded with `strict = false`: the marker names the renamed dependency, and the check passes.
+#[ann::announce(strict = false)]
+pub struct Recorded {
+    pub a: Local,
+}
+
+#[ann::announce(crate = ::ann, strict = false)]
+pub struct RecordedExplicit {
+    pub a: Local,
+}
+
+Recorded! { [Recorded!, ann::same_context!] }
+RecordedExplicit! { [RecordedExplicit!, ann::same_context!] }
+
 #[ann::announce(mock = crate::Marked)]
 pub trait MarkedMock {
     fn f(&self) -> u8;

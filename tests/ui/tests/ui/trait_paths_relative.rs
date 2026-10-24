@@ -22,7 +22,7 @@ pub trait ImplRet {
     fn f(&self) -> impl Rel;
 }
 
-// ... and in `dyn` (an item reports its first such path).
+// ... and in `dyn`, a relative type (a `repeater` carries it: tests/defs/src/carried.rs).
 #[announce::announce]
 pub trait DynRel {
     fn g(&self) -> ::std::boxed::Box<dyn Rel>;

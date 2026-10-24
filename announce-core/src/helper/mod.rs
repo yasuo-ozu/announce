@@ -12,13 +12,16 @@
 //!   [`CheckInput`].
 //!   [`attrs`] has the attributes that a check can own. [`check_type`] and
 //!   [`check_trait`] test for `announce::Announce`.
-//! - Read META: [`Entry::find_meta`] and [`KvArgs`] parse `key = value` lists.
+//! - Read META: [`Entry::find_meta`] finds an element. [`Meta::parse_args_with`] parses its args.
 //!   [`Entry::owned_attrs`] and [`Entry::item_without_owned_attrs`] read owned
 //!   attributes.
 //! - Resolve relative types:
 //!   [`Entry::type_leak`] reads the [`TypeLeak`] table of a definition announced with
 //!   `repeater = ..`. [`TypeLeak::apply`] rewrites an item so that its types resolve
 //!   in any crate.
+//! - Use relative types as written: [`Entry::item_resolved`] gives the item, and with a
+//!   `strict = false` record ([`Entry::leak_failure`], [`LeakFailure`]) the check that fails
+//!   outside its module (`announce::same_context!`, [`same_context()`]).
 //!
 //! - Detect announce: every call that announce makes starts with the prefix
 //!   `@announce_format "1"` ([`format_prefix`], [`ANNOUNCE_FORMAT`], [`Input::format`]).
@@ -30,13 +33,17 @@
 //! `no_std` definitions).
 
 pub mod attrs;
-mod kv;
+mod keys;
 pub mod leak;
+mod leakfail;
 mod transformer;
 mod typeleak;
 
 pub use attrs::{remove_attributes, CheckCall, OwnedAttrs, Query};
-pub use kv::KvArgs;
+pub(crate) use leakfail::{
+    cause_path, ALIAS, NOT_PRIMITIVE, REFUSED, TRAIT_PATH, VALUE_PATH, WITHOUT_REPEATER,
+};
+pub use leakfail::{same_context, try_same_context, LeakError, LeakFailure};
 pub use transformer::{signature_only, transformer};
 /// The version of `type-leak` that [`TypeLeak`] uses. Name it through this crate,
 /// so there is never a second, incompatible copy.
@@ -397,13 +404,8 @@ impl Meta {
         parser.parse2(self.args.clone().unwrap_or_default())
     }
 
-    /// The args as a [`KvArgs`] list. Absent args give an empty list.
-    pub fn kv(&self) -> Result<KvArgs> {
-        self.parse_args_with(KvArgs::parse)
-    }
-
     /// The args as `key = value` pairs. Values must be expressions; use
-    /// [`kv`](Self::kv) for types and lists.
+    /// [`parse_args_with`](Self::parse_args_with) for types and lists.
     pub fn name_values(&self) -> Result<Vec<syn::MetaNameValue>> {
         let p: Punctuated<syn::MetaNameValue, Token![,]> =
             self.parse_args_with(Punctuated::parse_terminated)?;
@@ -440,7 +442,7 @@ impl ToTokens for Meta {
 pub struct Entry {
     /// The continuation that produced this entry, as written in the list.
     pub key: Cont,
-    /// The META elements: checks, `meta =`, `mock(..)`, `type_leak(..)`.
+    /// The META elements: checks, `meta =`, `mock(..)`, `type_leak(..)`, `type_leak_error(..)`.
     pub meta: Vec<Meta>,
     /// The raw item tokens.
     pub item: TokenStream,
@@ -469,14 +471,70 @@ impl Entry {
             .find(|m| m.path.segments.last().map_or(false, |s| s.ident == name))
     }
 
+    /// The META element that announce writes as `name(..)`: only the bare `name`, so a user
+    /// element `lib::name(..)` is not taken for it.
+    fn reserved_meta(&self, name: &str) -> Option<&Meta> {
+        self.meta.iter().find(|m| m.path.is_ident(name))
+    }
+
     /// The `type_leak(..)` META of an entry announced with `repeater = ..`.
     /// Unknown keys are ignored.
+    /// A recorded failure ([`leak_failure`](Self::leak_failure)) is an error
+    /// ([`LeakFailure::to_error`]); [`item_resolved`](Self::item_resolved) uses the item as written.
     pub fn type_leak(&self) -> Result<Option<TypeLeak>> {
-        let m = match self.find_meta("type_leak") {
+        if let Some(failure) = self.leak_failure()? {
+            return Err(failure.to_error());
+        }
+        let m = match self.reserved_meta("type_leak") {
             Some(m) => m,
             None => return Ok(None),
         };
-        TypeLeak::from_kv(&mut m.kv()?).map(Some)
+        syn::parse2(m.to_token_stream()).map(Some)
+    }
+
+    /// The `type_leak_error(..)` META of an entry announced with `strict = false` whose types do
+    /// not resolve outside its module. The record's path is the key of the entry.
+    pub fn leak_failure(&self) -> Result<Option<LeakFailure>> {
+        let m = match self.reserved_meta("type_leak_error") {
+            Some(m) => m,
+            None => return Ok(None),
+        };
+        let mut failure: LeakFailure = syn::parse2(m.to_token_stream())?;
+        failure.path = self.key.path();
+        Ok(Some(failure))
+    }
+
+    /// The item as a callback emits it, and what goes next to it: with a table
+    /// ([`type_leak`](Self::type_leak)) the item rewritten by [`TypeLeak::apply`]; with a
+    /// recorded failure ([`leak_failure`](Self::leak_failure)) the item as written and
+    /// [`LeakFailure::assume_success`]; otherwise the item and no tokens. `krate` is the path of
+    /// the `announce` crate where the tokens are emitted (`::announce`). The check is a
+    /// `const _` item: put it beside an `impl` or `trait` block, not in it.
+    ///
+    /// ```
+    /// # use announce_core as announce;
+    /// # use announce::helper::Input;
+    /// # use template_quote::quote;
+    /// # let input: Input = syn::parse_quote! { [cb!] a::S! => [] { pub struct S { pub a: u8 } } };
+    /// # let krate: syn::Path = syn::parse_quote!(::announce);
+    /// # let mut out = proc_macro2::TokenStream::new();
+    /// for entry in input.entries_in_order() {
+    ///     let (item, check) = entry.item_resolved(&krate)?;
+    ///     out.extend(quote! { #item #check });
+    /// }
+    /// # // The item has no record: it comes as written, with no check.
+    /// # assert_eq!(out.to_string(), "pub struct S { pub a : u8 }");
+    /// # Ok::<(), syn::Error>(())
+    /// ```
+    pub fn item_resolved(&self, krate: &Path) -> Result<(syn::Item, TokenStream)> {
+        let mut item = self.item()?;
+        if let Some(failure) = self.leak_failure()? {
+            return Ok((item, failure.assume_success(krate)));
+        }
+        if let Some(table) = self.type_leak()? {
+            table.try_apply(&mut item)?;
+        }
+        Ok((item, TokenStream::new()))
     }
 
     /// Whether META lists a check whose last path segment is `name`. Only the
@@ -597,7 +655,10 @@ impl ToTokens for Entry {
 /// - `path(args)`: a `meta = path(args)` entry, never called ([`Entry::find_meta`]);
 /// - `mock(path)`: the item stands in for the item at `path` ([`Entry::mock`]);
 /// - `attrs(a, b)`: the attribute names that checks own ([`Entry::owned_attrs`]);
-/// - `type_leak(..)`: the type table of a `repeater` ([`Entry::type_leak`]).
+/// - `type_leak(..)`: the type table of a `repeater` ([`Entry::type_leak`]);
+/// - `type_leak_error(id = R, item = Name, errors = [(TOKENS) "reason" { .. }, ..], krate = "..")`:
+///   instead of a table, what a definer announced with `strict = false` could not carry
+///   ([`Entry::leak_failure`]; [`LeakFailure`] has the syntax). `ANNOUNCE_FORMAT` is still `"1"`.
 ///
 /// Ignore elements you do not know.
 ///
@@ -986,12 +1047,73 @@ impl Input {
     /// order, when all are present. Otherwise it returns [`Gather::Fetch`]: tokens
     /// that fetch the missing ones and call this callback again.
     ///
-    /// ```ignore
+    /// ```
+    /// # use announce_core as announce;
+    /// # use announce::helper::{Cont, Gather, Input};
+    /// # use proc_macro2::TokenStream;
+    /// # fn run(input: Input, needed: Vec<Cont>) -> syn::Result<TokenStream> {
     /// let entries = match input.gather(needed) {
     ///     Gather::Ready(e) => e,
     ///     Gather::Fetch(ts) => return Ok(ts),
     /// };
+    /// # Ok(entries.iter().map(|e| e.item.clone()).collect())
+    /// # }
+    /// #
+    /// # let needed = || vec![Cont::bang(syn::parse_quote!(a::S))];
+    /// # // `a::S!` is there: `gather` is ready.
+    /// # let input: Input = syn::parse_quote! { [cb!] a::S! => [] { struct S; } };
+    /// # assert_eq!(run(input, needed())?.to_string(), "struct S ;");
+    /// # // It is missing: the tokens fetch it and call the callback again.
+    /// # let out = run(syn::parse_quote! { [cb!] }, needed())?.to_string();
+    /// # assert!(out.starts_with("a :: S !") && out.contains("cb !"), "{}", out);
+    /// # Ok::<(), syn::Error>(())
     /// ```
+    ///
+    /// ## Pairing a fetch with the `Announce` check
+    ///
+    /// A path without `#[announce]` is reported by rustc alone: ``error[E0433]: cannot find
+    /// `Plain` in `m` ``, with a "try to remove `!`" hint that does not help, and only for the
+    /// first missing item. A callback that knows its paths name structs, enums or unions can
+    /// emit [`check_type`] for each next to the fetch. That adds the error "`Plain` is not
+    /// announced" for every missing item at once (rustc's error still comes first). For a simple
+    /// dyn-compatible trait use [`check_trait`].
+    ///
+    /// ```
+    /// # use announce_core as announce;
+    /// use announce::helper::{check_type, Cont, Gather, Input};
+    /// use proc_macro2::TokenStream;
+    /// use template_quote::quote;
+    ///
+    /// // `paths` are structs, enums or unions: each has an `Announce` impl.
+    /// fn run(input: Input, paths: Vec<syn::Path>) -> syn::Result<TokenStream> {
+    ///     let entries = match input.gather(paths.iter().cloned().map(Cont::bang)) {
+    ///         Gather::Ready(e) => e,
+    ///         Gather::Fetch(ts) => {
+    ///             let krate = syn::parse_quote!(::announce);
+    ///             let checks = paths.iter().map(|p| check_type(&krate, &syn::parse_quote!(#p)));
+    ///             return Ok(quote! { #(#checks)* #ts });
+    ///         }
+    ///     };
+    ///     let n = entries.len();
+    ///     Ok(quote!(const COUNT: usize = #n;))
+    /// }
+    /// #
+    /// # // `a::S` is not there yet: the check goes in front of the fetch.
+    /// # let input: Input = syn::parse_quote! { [cb!] };
+    /// # let out = run(input, vec![syn::parse_quote!(a::S)])?.to_string();
+    /// # assert!(out.starts_with("const _ : () ="), "{}", out);
+    /// # assert!(out.contains("announce :: Announce") && out.contains("a :: S !"), "{}", out);
+    /// # Ok::<(), syn::Error>(())
+    /// ```
+    ///
+    /// The check is right only for a path that has an `Announce` impl. An announced `mod`, a
+    /// type alias, a trait that is not dyn-compatible, and an item with `emit_item = false` or
+    /// `mock` have none, so the check would reject a valid call. It is a `const _` item, so it
+    /// does not go inside an `impl` or `trait` block. A generic type needs its arguments in the
+    /// path given to `check_type` (`m::G<u8>`, since the bare `m::G` is rustc's `E0107`);
+    /// [`Cont::bang`] drops them for the fetch. In expression position
+    /// ([`is_expression_position`]) the output needs a block, `{ #(#checks)* #ts }`, or the
+    /// callback skips the check there.
     pub fn gather(&self, needed: impl IntoIterator<Item = Cont>) -> Gather<'_> {
         let needed: Vec<Cont> = needed.into_iter().collect();
         // A callback asking for itself (or for its own head path) would
@@ -1237,9 +1359,14 @@ macro_rules! callback {
 /// ([`OwnedAttrs::check_names`]), or `f` fails) becomes a `compile_error!`, like in
 /// [`callback()`]. So the result can be returned from the proc macro as it is.
 ///
-/// ```ignore
-/// /// Rejects `#[my_lib(bad)]` and tuple structs.
-/// #[proc_macro]
+/// In a proc-macro crate this is a `#[proc_macro]` function. The example is run as a
+/// doctest, which cannot define a proc macro: it has no attribute, and `proc_macro`
+/// stands for `proc_macro2`.
+///
+/// ```
+/// # use announce_core as announce;
+/// # use proc_macro2 as proc_macro;
+/// /// Rejects `#[my_lib(bad)]`.
 /// pub fn my_check(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 ///     announce::helper::check(input.into(), &["my_lib", "other"], |c| {
 ///         // `c` is an `announce::helper::CheckInput`.
@@ -1252,6 +1379,13 @@ macro_rules! callback {
 ///     })
 ///     .into()
 /// }
+/// #
+/// # // The attribute is owned by the check, and allowed.
+/// # let ok = my_check(syn::parse_quote! { (), struct S { #[my_lib(skip)] a: u8 } });
+/// # assert!(ok.is_empty(), "{}", ok);
+/// # // `bad` is an error at the attribute.
+/// # let err = my_check(syn::parse_quote! { (), struct S { #[my_lib(bad)] a: u8 } }).to_string();
+/// # assert!(err.contains("compile_error") && err.contains("`bad` is not allowed"), "{}", err);
 /// ```
 ///
 /// The function can be tested with `proc_macro2` streams, because it does not use the
@@ -1360,14 +1494,28 @@ pub fn payload(item: TokenStream) -> Option<TokenStream> {
 /// of the call. The trampoline needs its own path to call itself again, when it holds
 /// a large item once, and a real `$` to un-escape an item that has `$` in it.
 ///
-/// ```ignore
-/// #[proc_macro_derive(Parse)]
+/// In a proc-macro crate this is a `#[proc_macro_derive(Parse)]` function. The example is run
+/// as a doctest, which cannot define a proc macro: it has no attribute, and `proc_macro`
+/// stands for `proc_macro2`.
+///
+/// ```
+/// # use announce_core as announce;
+/// # use announce::helper::{Cont, ContList};
+/// # use proc_macro2 as proc_macro;
+/// # use proc_macro::TokenStream;
 /// pub fn derive_parse(input: TokenStream) -> TokenStream {
 ///     if let Some(out) = announce::helper::redirect(input.clone().into(), &syn::parse_quote!(::pars::ParseAnnounce)) {
 ///         return out.into();
 ///     }
 ///     // normal derive
+/// #   TokenStream::new()
 /// }
+/// #
+/// # // The dummy of a trampoline call goes to `::pars::ParseAnnounce!`, other items do not.
+/// # let dummy = ContList(vec![Cont::derive(syn::parse_quote!(Parse))]).invoke(TokenStream::new());
+/// # let out = derive_parse(dummy).to_string();
+/// # assert!(out.starts_with(":: pars :: ParseAnnounce !"), "{}", out);
+/// # assert!(derive_parse(syn::parse_quote! { struct S; }).is_empty());
 /// ```
 pub fn redirect(item: TokenStream, target: &Path) -> Option<TokenStream> {
     // The payload starts with `@announce_format "VERSION"`, written by whoever
@@ -1802,44 +1950,8 @@ mod tests {
 }
 
 #[cfg(test)]
-mod kv_tests {
+mod stable_referrer_tests {
     use super::*;
-
-    #[test]
-    fn kv_types_lists_flags_and_errors() {
-        let m: Meta = syn::parse_quote!(lib::info(ty = ::std::collections::HashMap<u8, Vec<u8>>, out = fn() -> u8, xs = [A, b::C], on));
-        let mut kv = m.kv().unwrap();
-        let ty: syn::Type = kv.require("ty").unwrap();
-        assert_eq!(
-            ty.to_token_stream().to_string().replace(' ', ""),
-            "::std::collections::HashMap<u8,Vec<u8>>"
-        );
-        let out: syn::Type = kv.require("out").unwrap();
-        assert_eq!(
-            out.to_token_stream().to_string().replace(' ', ""),
-            "fn()->u8"
-        );
-        let xs: Vec<Path> = kv.list("xs").unwrap().unwrap();
-        assert_eq!(xs.len(), 2);
-        assert!(kv.flag("on").unwrap());
-        assert!(kv.get::<syn::Type>("absent").unwrap().is_none());
-        kv.finish().unwrap();
-
-        let mut kv: KvArgs = syn::parse_quote!(a = 1, b = 2);
-        let _: syn::LitInt = kv.require("a").unwrap();
-        assert!(kv
-            .finish()
-            .unwrap_err()
-            .to_string()
-            .contains("unknown key `b`"));
-        assert!(syn::parse2::<KvArgs>(template_quote::quote!(a = 1, a = 2)).is_err());
-        let mut kv: KvArgs = syn::parse_quote!();
-        assert!(kv
-            .require::<syn::Type>("x")
-            .unwrap_err()
-            .to_string()
-            .contains("missing `x`"));
-    }
 
     #[test]
     fn stable_referrer_is_deterministic() {
@@ -1980,25 +2092,6 @@ mod options_tests {
 }
 
 #[cfg(test)]
-mod kv_balance_tests {
-    use super::*;
-
-    #[test]
-    fn unbalanced_angle_is_an_error() {
-        let e = syn::parse2::<KvArgs>(template_quote::quote!(a = x < y, b = 1)).unwrap_err();
-        assert!(
-            e.to_string().contains("unbalanced `<` in the value of `a`"),
-            "{}",
-            e
-        );
-        assert!(syn::parse2::<KvArgs>(template_quote::quote!(a = 1 << 2, b = 3)).is_err());
-        let mut kv: KvArgs = syn::parse_quote!(a = (x < y), b = 1, f = fn() -> u8);
-        assert!(kv.tokens("a").is_some() && kv.tokens("b").is_some() && kv.tokens("f").is_some());
-        kv.finish().unwrap();
-    }
-}
-
-#[cfg(test)]
 mod low_audit_tests {
     use super::*;
 
@@ -2036,122 +2129,6 @@ mod low_audit_tests {
             Gather::Fetch(ts) => assert!(ts.to_string().contains("which is the callback itself")),
             Gather::Ready(_) => panic!(),
         }
-    }
-}
-
-#[cfg(test)]
-mod kv_error_tests {
-    use super::*;
-
-    fn parse(ts: TokenStream) -> Result<KvArgs> {
-        syn::parse2(ts)
-    }
-
-    #[test]
-    fn missing_value_after_equals_is_an_error() {
-        let e = parse(template_quote::quote!(a =)).unwrap_err().to_string();
-        assert_eq!(e, "missing value for `a`");
-        let e = parse(template_quote::quote!(a = , b = 1))
-            .unwrap_err()
-            .to_string();
-        assert_eq!(e, "missing value for `a`");
-        let e = parse(template_quote::quote!(ok = 1, b =))
-            .unwrap_err()
-            .to_string();
-        assert_eq!(e, "missing value for `b`");
-    }
-
-    #[test]
-    fn get_on_a_flag_key_needs_a_value() {
-        let mut kv: KvArgs = syn::parse_quote!(f, a = 1);
-        let e = kv.get::<syn::Type>("f").unwrap_err().to_string();
-        assert_eq!(e, "`f` needs a value");
-        // `require` reports the same error, not "missing".
-        let mut kv: KvArgs = syn::parse_quote!(f);
-        assert_eq!(
-            kv.require::<syn::Type>("f").unwrap_err().to_string(),
-            "`f` needs a value"
-        );
-    }
-
-    #[test]
-    fn list_on_a_flag_key_needs_a_bracketed_value() {
-        let mut kv: KvArgs = syn::parse_quote!(f, a = 1);
-        let e = kv.list::<syn::Path>("f").unwrap_err().to_string();
-        assert_eq!(e, "`f` needs a `[..]` value");
-    }
-
-    #[test]
-    fn flag_on_a_key_with_a_value_takes_no_value() {
-        let mut kv: KvArgs = syn::parse_quote!(a = 1);
-        let e = kv.flag("a").unwrap_err().to_string();
-        assert_eq!(e, "`a` takes no value");
-        // An absent flag is false and does not consume anything else.
-        let mut kv: KvArgs = syn::parse_quote!(b = 1);
-        assert!(!kv.flag("a").unwrap());
-        assert!(kv.tokens("b").is_some());
-    }
-
-    #[test]
-    fn list_on_a_non_bracketed_value_is_an_error() {
-        let mut kv: KvArgs = syn::parse_quote!(a = 1);
-        let e = kv.list::<syn::LitInt>("a").unwrap_err().to_string();
-        assert!(e.contains("expected square brackets"), "{}", e);
-        let mut kv: KvArgs = syn::parse_quote!(a = (x, y));
-        let e = kv.list::<syn::Path>("a").unwrap_err().to_string();
-        assert!(e.contains("expected square brackets"), "{}", e);
-        let mut kv: KvArgs = syn::parse_quote!(a = [1, 2] extra);
-        assert!(kv.list::<syn::LitInt>("a").is_err());
-    }
-
-    #[test]
-    fn list_element_and_value_parse_errors_surface() {
-        let mut kv: KvArgs = syn::parse_quote!(a = [x, 1]);
-        assert!(kv.list::<syn::Path>("a").is_err());
-        let mut kv: KvArgs = syn::parse_quote!(a = 1);
-        assert!(kv.get::<syn::Path>("a").is_err());
-    }
-
-    #[test]
-    fn list_accepts_empty_and_trailing_comma() {
-        let mut kv: KvArgs = syn::parse_quote!(a = [], b = [x::Y, z,]);
-        assert!(kv.list::<Path>("a").unwrap().unwrap().is_empty());
-        assert_eq!(kv.list::<Path>("b").unwrap().unwrap().len(), 2);
-        kv.finish().unwrap();
-    }
-
-    #[test]
-    fn taken_keys_are_gone_and_finish_names_the_first_leftover() {
-        let mut kv: KvArgs = syn::parse_quote!(a = 1, b, c = 2);
-        assert!(kv.tokens("a").is_some());
-        assert!(kv.tokens("a").is_none());
-        assert_eq!(kv.finish().unwrap_err().to_string(), "unknown key `b`");
-    }
-
-    #[test]
-    fn duplicate_keys_and_keywords() {
-        let e = parse(template_quote::quote!(a, a)).unwrap_err().to_string();
-        assert_eq!(e, "duplicate key `a`");
-        // Keywords are fine as keys.
-        let mut kv: KvArgs = syn::parse_quote!(type = u8, crate = a::b, fn);
-        assert!(kv.get::<syn::Type>("type").unwrap().is_some());
-        assert!(kv.get::<Path>("crate").unwrap().is_some());
-        assert!(kv.flag("fn").unwrap());
-        kv.finish().unwrap();
-    }
-
-    #[test]
-    fn values_run_to_the_next_top_level_comma() {
-        // `1 b = 2` is all one value; two flags need a comma between them.
-        let mut kv = parse(template_quote::quote!(a = 1 b = 2)).unwrap();
-        assert_eq!(kv.tokens("a").unwrap().to_string().replace(' ', ""), "1b=2");
-        assert!(parse(template_quote::quote!(a b)).is_err());
-    }
-
-    #[test]
-    fn equality_comparison_is_a_flag_followed_by_junk() {
-        // `a == b` is not `a = (= b)`: `==` ends neither value nor key.
-        assert!(parse(template_quote::quote!(a == b)).is_err());
     }
 }
 
@@ -2210,24 +2187,20 @@ mod gap_tests {
         // No args: empty list.
         let m: Meta = syn::parse_quote!(lib::info);
         assert!(m.name_values().unwrap().is_empty());
-        // A flag, or a non-expression value, is an error; `kv` accepts them.
+        // A flag is an error.
         let m: Meta = syn::parse_quote!(lib::info(a = 1, on));
         assert!(m.name_values().is_err());
-        let m: Meta = syn::parse_quote!(lib::info(a = 1, on));
-        assert!(m.kv().is_ok());
         // Array expressions are expressions; types are not.
         let m: Meta = syn::parse_quote!(lib::info(xs = [A, B]));
         assert_eq!(m.name_values().unwrap().len(), 1);
         let m: Meta = syn::parse_quote!(lib::info(ty = Vec<u8, A>));
         assert!(m.name_values().is_err());
-        assert!(m.kv().is_ok());
     }
 
     #[test]
     fn meta_args_default_to_empty() {
         let m: Meta = syn::parse_quote!(lib::info);
         assert!(m.args.is_none());
-        assert!(m.kv().unwrap().finish().is_ok());
         assert_eq!(s(&m), "lib::info");
         let m: Meta = syn::parse_quote!(lib::info(1, 2));
         assert_eq!(s(&m), "lib::info(1,2)");

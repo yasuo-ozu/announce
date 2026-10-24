@@ -829,3 +829,64 @@ pub fn format_report_fn(input: TokenStream) -> TokenStream {
 pub fn pass_through_fn(input: TokenStream) -> TokenStream {
     announce::helper::transformer(input.into(), Ok).into()
 }
+
+// ---- items whose types do not resolve outside their module (tests/defs/src/recorded.rs) ----
+
+/// `resolved_copy! { [..] NAME }`: a copy named `NAME` of the item of every entry, as
+/// `Entry::item_resolved` gives it, with its check.
+#[proc_macro]
+pub fn resolved_copy(input: TokenStream) -> TokenStream {
+    announce::helper::callback(input.into(), |input| {
+        let name: syn::Ident = input.rest_as()?;
+        let krate: syn::Path = syn::parse_quote!(::announce);
+        let mut out = TokenStream2::new();
+        for e in input.entries_in_order() {
+            let (mut item, check) = e.item_resolved(&krate)?;
+            match &mut item {
+                syn::Item::Struct(i) => i.ident = name.clone(),
+                syn::Item::Enum(i) => i.ident = name.clone(),
+                syn::Item::Trait(i) => i.ident = name.clone(),
+                syn::Item::Type(i) => i.ident = name.clone(),
+                other => return Err(syn::Error::new_spanned(other, "expected a type or trait")),
+            }
+            out.extend(quote! { #item #check });
+        }
+        Ok(out)
+    })
+    .into()
+}
+
+/// `leak_failures! { [..] NAME }`: `pub const NAME: &[&str]` has a row for every entry:
+/// `"table"` with a `type_leak(..)`, `"-"` with neither, and with a `type_leak_error(..)` the
+/// causes as `"TOKENS@REASON|TOKENS@REASON"` (the tokens without spaces). `NAME_ERR: &[bool]` is
+/// `true` where `Entry::type_leak()` is an error.
+#[proc_macro]
+pub fn leak_failures(input: TokenStream) -> TokenStream {
+    announce::helper::callback(input.into(), |input| {
+        let name: syn::Ident = input.rest_as()?;
+        let err_name = syn::Ident::new(&format!("{}_ERR", name), name.span());
+        let (mut rows, mut errs) = (Vec::new(), Vec::new());
+        for e in input.entries_in_order() {
+            errs.push(e.type_leak().is_err());
+            rows.push(match e.leak_failure()? {
+                Some(f) => f
+                    .errors
+                    .iter()
+                    .map(|x| {
+                        let tokens = template_quote::ToTokens::to_token_stream(&x.tokens);
+                        let tokens = tokens.to_string().split_whitespace().collect::<String>();
+                        format!("{}@{}", tokens, x.reason)
+                    })
+                    .collect::<Vec<_>>()
+                    .join("|"),
+                None if e.type_leak()?.is_some() => "table".to_string(),
+                None => "-".to_string(),
+            });
+        }
+        Ok(quote! {
+            pub const #name: &[&str] = &[ #(#rows),* ];
+            pub const #err_name: &[bool] = &[ #(#errs),* ];
+        })
+    })
+    .into()
+}

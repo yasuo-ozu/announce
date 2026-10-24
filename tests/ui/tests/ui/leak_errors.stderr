@@ -1,0 +1,143 @@
+error: `UiLocal` cannot be named outside its module: add `repeater = ..` to the `#[announce]`, or write the path absolutely
+  --> tests/ui/leak_errors.rs:29:16
+   |
+29 |         pub a: UiLocal,
+   |                ^^^^^^^
+
+error: `UiLocal` cannot be named outside its module: add `repeater = ..` to the `#[announce]`, or write the path absolutely
+  --> tests/ui/leak_errors.rs:36:16
+   |
+36 |         pub a: UiLocal,
+   |                ^^^^^^^
+
+error: `UiLocal` cannot be named outside its module: add `repeater = ..` to the `#[announce]`, or write the path absolutely
+  --> tests/ui/leak_errors.rs:43:16
+   |
+43 |         pub a: UiLocal,
+   |                ^^^^^^^
+
+error: `UiLocal` cannot be named outside its module: add `repeater = ..` to the `#[announce]`, or write the path absolutely
+  --> tests/ui/leak_errors.rs:51:16
+   |
+51 |         pub a: UiLocal,
+   |                ^^^^^^^
+
+error: `UiBase` cannot be named outside its module (a relative trait path in a bound): write the path absolutely
+  --> tests/ui/leak_errors.rs:57:20
+   |
+57 |     pub trait Sub: UiBase {
+   |                    ^^^^^^
+
+error: `LEN` cannot be named outside its module (a relative value path): write the path absolutely
+  --> tests/ui/leak_errors.rs:58:26
+   |
+58 |         const M: usize = LEN;
+   |                          ^^^
+
+error: `UiWrap<'_>` cannot be carried: write `UiWrap` with an absolute path (e.g. `crate::UiWrap`, or `::other_crate::UiWrap` for an item of another crate)
+  --> tests/ui/leak_errors.rs:59:24
+   |
+59 |         fn f(&self, a: UiWrap<'_>, b: UiLocal, c: [u8; LEN]);
+   |                        ^^^^^^^^^^
+
+error: `UiLocal` cannot be named outside its module: add `repeater = ..` to the `#[announce]`, or write the path absolutely
+  --> tests/ui/leak_errors.rs:59:39
+   |
+59 |         fn f(&self, a: UiWrap<'_>, b: UiLocal, c: [u8; LEN]);
+   |                                       ^^^^^^^
+
+error: `[u8; LEN]` cannot be named outside its module: add `repeater = ..` to the `#[announce]`, or write the path absolutely
+  --> tests/ui/leak_errors.rs:59:51
+   |
+59 |         fn f(&self, a: UiWrap<'_>, b: UiLocal, c: [u8; LEN]);
+   |                                                   ^^^^^^^^^
+
+error: `UiBase` cannot be named outside its module (a relative trait path in a bound): write the path absolutely
+  --> tests/ui/leak_errors.rs:64:23
+   |
+64 |     pub type Alias<T: UiBase> = Option<(UiArr<{ LEN }>, T)>;
+   |                       ^^^^^^
+
+error: `Option<(UiArr<{ LEN }>, T)>` cannot be named outside its module (a relative path in a type alias): write the path absolutely
+  --> tests/ui/leak_errors.rs:64:33
+   |
+64 |     pub type Alias<T: UiBase> = Option<(UiArr<{ LEN }>, T)>;
+   |                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: `UiBase` cannot be named outside its module (a relative trait path in a bound): write the path absolutely
+  --> tests/ui/leak_errors.rs:68:29
+   |
+68 |     pub trait WithRepeater: UiBase {
+   |                             ^^^^^^
+
+error: `LEN` cannot be named outside its module (a relative value path): write the path absolutely
+  --> tests/ui/leak_errors.rs:69:26
+   |
+69 |         const M: usize = LEN;
+   |                          ^^^
+
+error: `UiIdx` cannot be carried: write `UiIdx` with an absolute path (e.g. `crate::UiIdx`, or `::other_crate::UiIdx` for an item of another crate)
+  --> tests/ui/leak_errors.rs:75:33
+   |
+75 |     pub struct ConstTy<const N: UiIdx>(pub UiArr<N>);
+   |                                 ^^^^^
+
+error: `UiLocal` cannot be named outside its module: add `repeater = ..` to the `#[announce]`, or write the path absolutely
+  --> tests/ui/leak_errors.rs:80:20
+   |
+80 |             pub a: UiLocal,
+   |                    ^^^^^^^
+
+error: `UiWrap<'a>` leaves the lifetime `'a` of the method unconstrained in the copy (E0195): keep `'a` in another argument of the method (for example `&'a self`), or write `UiWrap<'a>` with an absolute path
+   --> tests/ui/leak_errors.rs:114:28
+    |
+114 |         fn f<'a>(&self, a: UiWrap<'a>) -> &'a u8;
+    |                            ^^^^^^^^^^
+
+error: `UiBase` cannot be named outside its module (a relative trait path in a bound): write the path absolutely
+   --> tests/ui/leak_errors.rs:119:23
+    |
+119 |     pub trait Shadow: UiBase {
+    |                       ^^^^^^
+
+error: `UiLocal` cannot be named outside its module: add `repeater = ..` to the `#[announce]`, or write the path absolutely
+   --> tests/ui/leak_errors.rs:121:24
+    |
+121 |         fn g(&self) -> UiLocal;
+    |                        ^^^^^^^
+
+error: `UiWrap<'_>` cannot be carried: write `UiWrap` with an absolute path (e.g. `crate::UiWrap`, or `::other_crate::UiWrap` for an item of another crate)
+   --> tests/ui/leak_errors.rs:127:24
+    |
+127 |         fn a(&self, x: UiWrap<'_>);
+    |                        ^^^^^^^^^^
+
+error: `UiWrap<'_>` cannot be carried: write `UiWrap` with an absolute path (e.g. `crate::UiWrap`, or `::other_crate::UiWrap` for an item of another crate)
+   --> tests/ui/leak_errors.rs:128:24
+    |
+128 |         fn b(&self, y: UiWrap<'_>);
+    |                        ^^^^^^^^^^
+
+error: `UiBase` cannot be named outside its module (a relative trait path in a bound): write the path absolutely
+   --> tests/ui/leak_errors.rs:133:27
+    |
+133 |     pub struct Encoded<T: UiBase, const N: crate::inner::UiIdx>(pub UiArr<N>, pub T);
+    |                           ^^^^^^
+
+error: `crate::inner::UiIdx` cannot be carried (a const generic that is not of a primitive type): use a primitive type for the const parameter
+   --> tests/ui/leak_errors.rs:133:44
+    |
+133 |     pub struct Encoded<T: UiBase, const N: crate::inner::UiIdx>(pub UiArr<N>, pub T);
+    |                                            ^^^^^^^^^^^^^^^^^^^
+
+error: `N` cannot be named outside its module (a relative value path): write the path absolutely
+   --> tests/ui/leak_errors.rs:138:26
+    |
+138 |         const M: usize = N;
+    |                          ^
+
+error: `ty!(Self)` is in the default of a parameter, and names `Self`: write the default without `Self`: name the type instead of `Self` in `ty!(Self)`
+   --> tests/ui/leak_errors.rs:150:32
+    |
+150 |     pub struct InMacro<T = ty!(Self)>(pub T, pub UiLocal);
+    |                                ^^^^

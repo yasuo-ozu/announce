@@ -1,5 +1,58 @@
 # Changelog
 
+## 0.3.0 (unreleased)
+
+### Added
+
+- `#[announce(strict = false)]` (default `true`; merged announcements are strict unless one says
+  `false`). A type or path that cannot be named outside its module is an error at the definition,
+  as in 0.2. With `strict = false` it is recorded in the `META` (`type_leak_error(..)`, below)
+  with a private marker that only the item's module can see, and the call checks it.
+- `announce::same_context!`, a callback for the chain of a trampoline call that requires the
+  call to be in the module of the items it receives (their function bodies and `use super::*`
+  submodules too). It gives one error for each cause, at the type or path in the definition,
+  worded like the errors of type-leak. The texts need Rust 1.78
+  (`#[diagnostic::on_unimplemented]`); 1.85 shortens the error. The check is a `const _` item:
+  put it beside an `impl`, not in it. A later callback that emits the item elsewhere gets
+  rustc's own errors first.
+- `announce::helper::LeakFailure` and `LeakError`, read (`syn::parse::Parse`) from the new
+  `META` element `type_leak_error(id = R, item = Name, errors = [(TOKENS) "reason" { message =
+  "..", notes = [".."], help = ".." }, ..], krate = "..")`; `krate` is the definer's crate, which
+  the texts use for a call written through `$crate`. Also `Entry::leak_failure()`,
+  `Entry::item_resolved(&krate)` (the item, and the check of `LeakFailure::assume_success` for a
+  record) and `same_context`, the function behind the macro. `Entry::type_leak()` returns a
+  record as an error, one line for each cause at the path of the call. A reader skips keys and
+  tokens it does not know: a value ends at the next `,` outside groups and `<..>`, except that a
+  `<` that is never closed (`cmp = a < b`) ends at the first `,` that starts the next element
+  (`key =`, or `(TOKENS) "reason"` in the errors), so it does not hide the keys after it.
+- The record is the only difference from any other call: `ANNOUNCE_FORMAT` is still `"1"`. A
+  callback built with announce 0.2 ignores it and takes the item for one that resolves
+  everywhere, which works in the module of the item.
+- `announce::helper::try_same_context`, `same_context` with the error returned as a `syn::Error`.
+- `announce::machinery::Options::strict` (default `true`), the field that `strict = false` sets.
+
+### Changed
+
+- The definition error for a failure of the analysis is one error for each offending type or
+  path, at its tokens in the item, saying what the definer can do (``add `repeater = ..` to
+  the `#[announce]`, or write the path absolutely``). All the causes of an item are reported at
+  once (also in the record of `strict = false`): a relative trait or value path no longer hides
+  the relative types and the refused types, nor does any refusal of type-leak.
+- A trait object (`dyn Base`) and the constants inside a type (`[u8; N]`, `Wrap<{ N }>`) are
+  carried with the type by a `repeater`, instead of being errors for their trait or value path;
+  without a `repeater` they are relative types. Trait paths in bounds and `impl Trait`, and value
+  paths in discriminants, const defaults and the const arguments of a bound, stay errors.
+- `Entry::type_leak()` (and `leak_failure()`, `item_resolved()`) read only the bare `type_leak(..)`
+  and `type_leak_error(..)` elements. A user check or `meta =` with the same last segment
+  (`my::type_leak_error(1)`) is no longer taken for them. `Entry::find_meta` still compares the
+  last segment.
+- A value path names a const parameter only where the parameter is in scope: the const
+  parameter `N` of a method no longer lets `const M: usize = N;` of the trait pass.
+- Breaking: `TypeLeak::from_kv` is removed. `TypeLeak` implements `syn::parse::Parse` for the
+  `type_leak(..)` META element instead (`Entry::type_leak()` is unchanged).
+- Breaking: `KvArgs` and `Meta::kv()` are removed. Parse `key = value` args with your own
+  `syn::parse::Parse` impl, through `Meta::parse_args_with`.
+
 ## 0.2.0
 
 ### Merging

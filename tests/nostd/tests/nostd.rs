@@ -103,6 +103,21 @@ fn the_repeater_option_works() {
     );
 }
 
+mod recorded {
+    announce_test_nostd::recorded::Holder! { [announce_test_nostd::recorded::Holder!, capture!] }
+}
+
+#[test]
+fn a_relative_type_without_a_repeater_is_recorded() {
+    let out = norm(recorded::OUT);
+    assert!(!out.contains("type_leak("), "{}", out);
+    assert!(
+        out.contains("type_leak_error(id=") && out.contains("errors=[(Local)"),
+        "{}",
+        out
+    );
+}
+
 #[test]
 fn announce_impls_are_there() {
     announce_test_nostd::is_announced::<announce_test_nostd::Named>();

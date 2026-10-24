@@ -16,8 +16,14 @@
 //! announce = "0.2"
 //! ```
 //!
-//! ```ignore
-//! #[proc_macro_attribute]
+//! In a proc-macro crate this is a `#[proc_macro_attribute]` function. The example is only
+//! compiled as a doctest, which cannot define a proc macro.
+//!
+//! ```
+//! # extern crate proc_macro;
+//! # use proc_macro::TokenStream;
+//! # use template_quote as quote;
+//! # fn rewrite(item: proc_macro2::TokenStream) -> proc_macro2::TokenStream { item }
 //! pub fn my_attr(attr: TokenStream, item: TokenStream) -> TokenStream {
 //!     // Parse and rewrite the item ...
 //!     let item: proc_macro2::TokenStream = rewrite(item.into());
@@ -43,7 +49,9 @@
 //! a path that its users can reach. The library re-exports the crate
 //! (`#[doc(hidden)] pub use announce;`, next to the re-export of its macros), and
 //! the macro passes `crate = ::my_lib::announce`. If the users do depend on
-//! `announce`, nothing is needed.
+//! `announce`, nothing is needed. When the item has several announcements, the option
+//! counts on the first one to expand, or on every one (see [Several announcements on one
+//! item](macro@crate::announce#several-announcements-on-one-item)).
 //!
 //! # Output
 //!
@@ -104,7 +112,8 @@
 //! path in `crate = ..` must reach it, which a library that re-exports `announce`
 //! does. `finish!` expands to the output above, without the attributes that the
 //! checks own. [`finish`] is the function behind that macro; a library does not
-//! call it.
+//! call it. The marker of a `strict = false` item also names the hidden `__private::Probe`
+//! and `__private::ThisCallInTheModule` through that path.
 //!
 //! ```
 //! use announce::machinery::announce;

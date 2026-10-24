@@ -1,0 +1,15 @@
+[package]
+name = "announce-test-compat-02-callback"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+proc-macro = true
+
+[dependencies]
+# announce 0.2.0, as published: it knows nothing of `type_leak_error(..)`.
+announce02 = { package = "announce", version = "=0.2.0" }
+syn = { version = "2", features = ["full"] }
+quote = "1"
+proc-macro2 = "1"

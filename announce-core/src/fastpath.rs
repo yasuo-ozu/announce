@@ -114,7 +114,7 @@ struct Fast {
     scopes: Vec<Scope>,
 }
 
-const PRIMITIVES: &[&str] = &[
+pub(crate) const PRIMITIVES: &[&str] = &[
     "bool", "char", "str", "u8", "u16", "u32", "u64", "u128", "usize", "i8", "i16", "i32", "i64",
     "i128", "isize", "f32", "f64",
 ];
@@ -619,11 +619,7 @@ impl<'ast> Visit<'ast> for Fast {
 /// is given the item for (`leak::analyze`): an item that is accepted must have no
 /// required entry and no error.
 #[cfg(test)]
-pub(crate) fn check_analysis(
-    item: &Item,
-    opts: &Options,
-    result: &syn::Result<Option<crate::leak::Analysis>>,
-) {
+pub(crate) fn check_analysis(item: &Item, opts: &Options, result: &crate::leak::Analysed) {
     if !accepts(item, opts) {
         return;
     }
@@ -640,7 +636,7 @@ pub(crate) fn check_analysis(
             }
         }
         Err(e) => panic!(
-            "the fast path accepted an item that the analysis rejects: {}\n{}",
+            "the fast path accepted an item that the analysis rejects: {:?}\n{}",
             e,
             item.to_token_stream()
         ),
@@ -939,7 +935,7 @@ mod tests {
                 continue;
             }
             let a = analyze(&it, &Options::default())
-                .unwrap_or_else(|e| panic!("{}: {}", src, e))
+                .unwrap_or_else(|e| panic!("{}: {:?}", src, e))
                 .unwrap();
             assert_eq!(a.required().count(), 0, "{}", src);
         }

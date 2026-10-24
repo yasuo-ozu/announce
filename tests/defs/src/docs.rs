@@ -142,7 +142,7 @@ pub mod checked {
     }
 }
 
-/// With owned attributes the derive emits the item (not #[announce]): it keeps its docs.
+/// With owned attributes the derive emits the item (not [`#[announce]`](macro@announce)): it keeps its docs.
 #[announce(crate::rules_check)]
 pub struct Owned {
     /// Doc of a.
