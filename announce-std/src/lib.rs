@@ -23,41 +23,28 @@
 //! works in bounds, but `impl announce_std::fmt::Debug for X` does not implement
 //! the real `Debug`. Write impls against the real path from `mock(..)`.
 //!
-//! **Not mocked.** `BuildHasher::hash_one` is stable only since Rust 1.71, and
-//! announce-std supports older compilers (MSRV 1.57), so a consumer that forwards
-//! it would break there. The `BuildHasher` mock has `build_hasher` only. To hash a
-//! value, use `Hash::hash`: `x.hash(&mut b.build_hasher())`, then `finish()` on
-//! the hasher.
+//! **Version gates.** The mocks have what the compiling rustc has. A trait that is newer
+//! than the compiler is not mocked, and neither is a method that is newer (they are
+//! left out, not gated by a `cfg`): `Termination` from 1.61, `ToOwned::clone_into` from
+//! 1.63, `IntoFuture` from 1.64, `BuildHasher::hash_one` from 1.71,
+//! `Seek::seek_relative` from 1.80, and `core::error::Error` from 1.81 (before that the
+//! mock is of `std::error::Error`, with the `std` feature). On a compiler before 1.71,
+//! hash a value with `x.hash(&mut b.build_hasher())`, then `finish()` on the hasher.
 //!
-//! **Version gates.** Mocks of traits newer than the MSRV (1.57), or changed after
-//! it, are gated with `#[cfg(announce_std_rust_1_N)]`. `build.rs` sets that cfg on
-//! rustc 1.N and later, using `rustversion` attributes (`Termination` 1.61,
-//! `IntoFuture` 1.64, and the 1.80, 1.81 and 1.94 variants).
+//! **How the mocks are made.** `std-traits.txt` holds the signatures of the mocked
+//! traits, each with the Rust version since which it is stable. The dev tool
+//! `tools/gen-std` writes it from std's own source (the `rust-src` component of a
+//! toolchain):
+//!
+//! ```text
+//! cargo run --manifest-path tools/gen-std/Cargo.toml --target-dir target/gen-std
+//! ```
+//!
+//! With `-- --check` it tells whether the file is up to date. Which traits and methods
+//! are mocked is listed in the tool. `build.rs` reads the file, keeps what the compiling
+//! rustc has, and writes the mocks to `OUT_DIR`, where this file includes them.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 #![allow(clippy::all)]
 
-pub mod alloc;
-pub mod any;
-pub mod borrow;
-pub mod clone;
-pub mod cmp;
-pub mod convert;
-pub mod default;
-pub mod error;
-pub mod fmt;
-pub mod future;
-pub mod hash;
-#[cfg(feature = "std")]
-pub mod io;
-pub mod iter;
-pub mod marker;
-#[cfg(feature = "std")]
-pub mod net;
-pub mod ops;
-#[cfg(feature = "std")]
-pub mod process;
-#[cfg(feature = "std")]
-pub mod string;
-#[cfg(feature = "std")]
-pub mod task;
+include!(concat!(env!("OUT_DIR"), "/mocks.rs"));

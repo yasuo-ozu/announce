@@ -43,6 +43,6 @@ fn _new_mocks<
 }
 
 #[test]
-fn hand_written_mocks() {
+fn mocks_of_any_clone_copy_default() {
     _new_mocks::<u8>();
 }

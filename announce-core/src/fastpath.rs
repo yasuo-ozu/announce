@@ -749,20 +749,15 @@ mod tests {
     }
 
     /// Every definition in the source of the test suites of the repository
-    /// (`tests/`, the std mocks of `announce-std`, and this crate's own sources,
-    /// whose tests are full of items in strings that the unit tests below cover
-    /// separately). The items are those a user could pass to `#[announce]`, and more.
+    /// (`tests/`, and this crate's own sources, whose tests are full of items in
+    /// strings that the unit tests below cover separately). The items are those a
+    /// user could pass to `#[announce]`, and more.
     /// Without the repository (a packaged crate) there are none.
     #[test]
     fn fast_path_never_accepts_more_than_the_analysis_on_the_test_suites() {
         let root = FsPath::new(env!("CARGO_MANIFEST_DIR")).join("..");
         let mut files = Vec::new();
-        for dir in [
-            "tests",
-            "announce-std/src",
-            "announce-core/src/helper",
-            "src",
-        ] {
+        for dir in ["tests", "announce-core/src/helper", "src"] {
             rust_files(&root.join(dir), &mut files);
         }
         if files.is_empty() {
