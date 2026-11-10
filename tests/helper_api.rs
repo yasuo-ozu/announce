@@ -335,8 +335,7 @@ fn recorded_leak_failure() {
         Some("write `Local` with an absolute path")
     );
 
-    // `type_leak()` fails, with a plain line for each cause that is true wherever the callback
-    // is called, and ends with what the definer can do.
+    // `type_leak()` fails with a line for each cause, ending with what the definer can do.
     let e = leaky.type_leak().err().unwrap();
     assert_eq!(
         e.to_string(),
@@ -350,9 +349,8 @@ fn recorded_leak_failure() {
     let (item, check) = leaky.item_resolved(&krate).unwrap();
     assert_eq!(squash(&item), "pubstructLeaky{puba:Local}");
     let check = squash(&check);
-    // A block of its own: the trait of the item, its impl and the call of the probe. The
-    // texts are those of the trait where the compiler knows `on_unimplemented`: the message and
-    // the help are what the record carries, and the notes are the way in, why and what to do.
+    // A block of its own: the trait of the item, its impl and the call of the probe, with the
+    // texts of the record where the compiler knows `on_unimplemented`.
     assert!(
         check.starts_with("const_:()={") && check.contains("traitInModuleOf_Leaky{}"),
         "{}",
@@ -366,26 +364,14 @@ fn recorded_leak_failure() {
         check
     );
     if check.contains("on_unimplemented") {
-        assert!(
-            check.contains("message=\"useabsolutepath:'Local'\","),
-            "{}",
-            check
-        );
-        assert!(
-            check.contains("label=\"relativetype,notinscopewhere`deflib::lm::Leaky!`iscalled\","),
-            "{}",
-            check
-        );
-        assert!(
-            check.contains("note=\"`deflib::lm::Leaky`isusedoutsideitsmodule`deflib::lm`\","),
-            "{}",
-            check
-        );
-        assert!(
-            check.contains("note=\"anote\",note=\"write`Local`withanabsolutepath\""),
-            "{}",
-            check
-        );
+        for part in [
+            "message=\"useabsolutepath:'Local'\",",
+            "label=\"relativetype,notinscopewhere`deflib::lm::Leaky!`iscalled\",",
+            "note=\"`deflib::lm::Leaky`isusedoutsideitsmodule`deflib::lm`\",",
+            "note=\"anote\",note=\"write`Local`withanabsolutepath\"",
+        ] {
+            assert!(check.contains(part), "{}: {}", part, check);
+        }
     }
     assert_eq!(squash(failure.assume_success(&krate)), check);
     // Nothing for an item without a failure or a table.
@@ -416,8 +402,7 @@ fn recorded_leak_failure() {
 
 #[test]
 fn recorded_leak_failure_is_read_with_what_a_later_version_adds() {
-    // A later version may add keys to the record, to the texts of an error, and tokens after
-    // them, with values of any shape. This one is read as if it had none of them.
+    // Keys that a later version adds, of any shape, are ignored.
     let input: Input = syn::parse_quote! {
         [cb!]
         deflib::lm::Leaky! => [

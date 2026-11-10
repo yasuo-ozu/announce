@@ -1,7 +1,6 @@
-//! Readers for the `key = value` lists that the definer writes in META: the records
-//! [`LeakFailure`](crate::helper::LeakFailure) and [`TypeLeak`](crate::helper::TypeLeak) parse.
-//! A reader takes the keys it knows and skips the rest, so a later version can add keys with any
-//! value.
+//! Readers for the `name(key = value, ..)` META elements that announce writes
+//! ([`TypeLeak`](crate::helper::TypeLeak), [`LeakFailure`](crate::helper::LeakFailure)). A
+//! reader skips the keys it does not know, so a later version can add keys with any value.
 
 use proc_macro2::{Ident, TokenTree};
 use syn::ext::IdentExt;
@@ -9,53 +8,58 @@ use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::{Error, Result, Token};
 
-/// Reads `key = value, ..` (a trailing comma is fine) up to the end of `input`. `value` reads
-/// the value of a key in `known`; the value of any other key is skipped ([`skip_to_comma`]), and
-/// so is a bare key (a flag), because a later version may add keys with any value.
+/// Reads `name(key = value, ..)`. `value` reads the value of a key and tells whether it knows
+/// the key; a key it does not know, with or without a value, is skipped.
+pub(crate) fn read_element(
+    input: ParseStream,
+    name: &str,
+    value: impl FnMut(&str, ParseStream) -> Result<bool>,
+) -> Result<Ident> {
+    let ident: Ident = input.parse()?;
+    if ident != name {
+        let found = format!("expected `{}(..)`, found `{}`", name, ident);
+        return Err(Error::new(ident.span(), found));
+    }
+    let args;
+    syn::parenthesized!(args in input);
+    read_keys(&args, value)?;
+    Ok(ident)
+}
+
+/// Reads `key = value, ..` up to the end of `input`, as [`read_element`] does.
 pub(crate) fn read_keys(
     input: ParseStream,
-    known: &[&str],
-    mut value: impl FnMut(&Ident, ParseStream) -> Result<()>,
+    mut value: impl FnMut(&str, ParseStream) -> Result<bool>,
 ) -> Result<()> {
     while !input.is_empty() {
-        let key = Ident::parse_any(input)?;
-        let is_known = known.iter().any(|k| key == *k);
-        if input.peek(Token![=]) && !input.peek(Token![==]) {
-            input.parse::<Token![=]>()?;
-            if is_known {
-                value(&key, input)?;
-            } else {
-                skip_to_comma(input)?;
-            }
-        } else if is_known {
-            return Err(Error::new(key.span(), format!("`{}` needs a value", key)));
+        let key = Ident::parse_any(input)?.to_string();
+        if input.parse::<Option<Token![=]>>()?.is_none() || !value(&key, input)? {
+            skip_to_comma(input)?;
         }
-        if input.is_empty() {
-            break;
+        if !input.is_empty() {
+            input.parse::<Token![,]>()?;
         }
-        input.parse::<Token![,]>()?;
     }
     Ok(())
 }
 
-/// Sets `slot` to the value of `key`, which may be given once.
-pub(crate) fn once<T>(slot: &mut Option<T>, key: &Ident, value: T) -> Result<()> {
-    match slot.replace(value) {
-        None => Ok(()),
-        Some(_) => Err(Error::new(key.span(), format!("duplicate key `{}`", key))),
-    }
+/// The value of `key`, or the error for a missing one.
+pub(crate) fn need<T>(value: Option<T>, element: &Ident, key: &str) -> Result<T> {
+    value.ok_or_else(|| {
+        let missing = format!("missing `{}` in the `{}(..)` META", key, element);
+        Error::new(element.span(), missing)
+    })
 }
 
 /// A bracketed list of `T`.
 pub(crate) fn bracketed_list<T: Parse>(input: ParseStream) -> Result<Vec<T>> {
     let content;
     syn::bracketed!(content in input);
-    Ok(Punctuated::<T, Token![,]>::parse_terminated(&content)?
-        .into_iter()
-        .collect())
+    let list = Punctuated::<T, Token![,]>::parse_terminated(&content)?;
+    Ok(list.into_iter().collect())
 }
 
-/// Skips what a later version adds (the value of a key, tokens after an error), up to the next `,` outside groups and `<..>`.
+/// Skips up to the next `,` outside groups and `<..>`.
 pub(crate) fn skip_to_comma(input: ParseStream) -> Result<()> {
     let (mut depth, mut arrow) = (0usize, false);
     while !input.is_empty() && !(depth == 0 && input.peek(Token![,])) {

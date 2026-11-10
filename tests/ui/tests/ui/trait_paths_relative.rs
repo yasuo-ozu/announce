@@ -22,8 +22,7 @@ pub trait ImplRet {
     fn f(&self) -> impl Rel;
 }
 
-// ... but a trait object is a type, carried like one: with no `repeater` it is a relative type
-// (an error on `dyn Rel`), with one it is fine (tests/defs/src/carried.rs).
+// ... and in `dyn`, a relative type (a `repeater` carries it: tests/defs/src/carried.rs).
 #[announce::announce]
 pub trait DynRel {
     fn g(&self) -> ::std::boxed::Box<dyn Rel>;

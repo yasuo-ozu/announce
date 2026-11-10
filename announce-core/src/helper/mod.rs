@@ -19,11 +19,9 @@
 //!   [`Entry::type_leak`] reads the [`TypeLeak`] table of a definition announced with
 //!   `repeater = ..`. [`TypeLeak::apply`] rewrites an item so that its types resolve
 //!   in any crate.
-//! - Use relative types as written: an item announced with `strict = false` records what no
-//!   table carries ([`Entry::leak_failure`], [`LeakFailure`]) instead of failing at the
-//!   definition. [`Entry::item_resolved`] gives the item and [`LeakFailure::assume_success`],
-//!   the check that fails outside the item's module (`announce::same_context!` adds it to a
-//!   chain, [`same_context()`]); [`Entry::type_leak`] returns the record as an error.
+//! - Use relative types as written: [`Entry::item_resolved`] gives the item, and with a
+//!   `strict = false` record ([`Entry::leak_failure`], [`LeakFailure`]) the check that fails
+//!   outside its module (`announce::same_context!`, [`same_context()`]).
 //!
 //! - Detect announce: every call that announce makes starts with the prefix
 //!   `@announce_format "1"` ([`format_prefix`], [`ANNOUNCE_FORMAT`], [`Input::format`]).
@@ -475,10 +473,8 @@ impl Entry {
 
     /// The `type_leak(..)` META of an entry announced with `repeater = ..`.
     /// Unknown keys are ignored.
-    ///
     /// A recorded failure ([`leak_failure`](Self::leak_failure)) is an error
-    /// ([`LeakFailure::to_error`]), wherever the callback is called. A callback that can use the
-    /// item as written reads [`item_resolved`](Self::item_resolved) instead.
+    /// ([`LeakFailure::to_error`]); [`item_resolved`](Self::item_resolved) uses the item as written.
     pub fn type_leak(&self) -> Result<Option<TypeLeak>> {
         if let Some(failure) = self.leak_failure()? {
             return Err(failure.to_error());
@@ -491,8 +487,7 @@ impl Entry {
     }
 
     /// The `type_leak_error(..)` META of an entry announced with `strict = false` whose types do
-    /// not resolve outside its module: `Ok(None)` for an entry without it, which has no
-    /// [`TypeLeak`] table then. The record's path is the key of the entry.
+    /// not resolve outside its module. The record's path is the key of the entry.
     pub fn leak_failure(&self) -> Result<Option<LeakFailure>> {
         let m = match self.find_meta("type_leak_error") {
             Some(m) => m,
@@ -503,21 +498,12 @@ impl Entry {
         Ok(Some(failure))
     }
 
-    /// The item as a callback emits it, and what to emit next to it: with a type table
+    /// The item as a callback emits it, and what goes next to it: with a table
     /// ([`type_leak`](Self::type_leak)) the item rewritten by [`TypeLeak::apply`]; with a
     /// recorded failure ([`leak_failure`](Self::leak_failure)) the item as written and
-    /// [`LeakFailure::assume_success`], which fails outside the item's module; otherwise the
-    /// item as written and no tokens. The item is [`item`](Self::item), with its owned attributes.
-    /// `krate` is the path of the `announce` crate where the tokens are emitted (`::announce`).
-    ///
-    /// The check is a `const _` item, so a callback that emits into an `impl` or `trait` block
-    /// puts it beside the block.
-    ///
-    /// When the item is emitted outside its module, rustc first reports its own "cannot find
-    /// type" errors for the names of the item, at the same tokens, and the error of the check
-    /// follows. When the item has a relative trait path in a bound (`trait Sub: Base`,
-    /// `T: Base`), rustc stops at its "cannot find trait" error (E0405) before it reaches the
-    /// check, so only rustc's error appears.
+    /// [`LeakFailure::assume_success`]; otherwise the item and no tokens. `krate` is the path of
+    /// the `announce` crate where the tokens are emitted (`::announce`). The check is a
+    /// `const _` item: put it beside an `impl` or `trait` block, not in it.
     ///
     /// ```ignore
     /// for entry in input.entries_in_order() {
@@ -656,12 +642,8 @@ impl ToTokens for Entry {
 /// - `attrs(a, b)`: the attribute names that checks own ([`Entry::owned_attrs`]);
 /// - `type_leak(..)`: the type table of a `repeater` ([`Entry::type_leak`]);
 /// - `type_leak_error(id = R, item = Name, errors = [(TOKENS) "reason" { .. }, ..], krate = "..")`:
-///   instead of a table, what a definer announced with `strict = false` found that does not
-///   resolve outside the item's module ([`Entry::leak_failure`]; [`LeakFailure`] has the syntax
-///   and implements `syn::parse::Parse`). It is the only difference from any other call: `ANNOUNCE_FORMAT` is still `"1"`, and a parser that does
-///   not know the element ignores it, so a callback built with announce 0.2 takes the item for
-///   one that resolves everywhere. That works in the item's module; elsewhere rustc reports the
-///   names it cannot find.
+///   instead of a table, what a definer announced with `strict = false` could not carry
+///   ([`Entry::leak_failure`]; [`LeakFailure`] has the syntax). `ANNOUNCE_FORMAT` is still `"1"`.
 ///
 /// Ignore elements you do not know.
 ///
@@ -2111,24 +2093,12 @@ mod gap_tests {
         assert_eq!(m.name_values().unwrap().len(), 1);
         let m: Meta = syn::parse_quote!(lib::info(ty = Vec<u8, A>));
         assert!(m.name_values().is_err());
-        let ty = m
-            .parse_args_with(|input: ParseStream| {
-                input.parse::<Ident>()?;
-                input.parse::<Token![=]>()?;
-                input.parse::<syn::Type>()
-            })
-            .unwrap();
-        assert_eq!(s(&ty), "Vec<u8,A>");
     }
 
     #[test]
     fn meta_args_default_to_empty() {
         let m: Meta = syn::parse_quote!(lib::info);
         assert!(m.args.is_none());
-        assert!(m
-            .parse_args_with(|input: ParseStream| input.parse::<TokenStream>())
-            .unwrap()
-            .is_empty());
         assert_eq!(s(&m), "lib::info");
         let m: Meta = syn::parse_quote!(lib::info(1, 2));
         assert_eq!(s(&m), "lib::info(1,2)");

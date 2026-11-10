@@ -12,7 +12,6 @@ pub mod merge;
 pub mod owned;
 pub mod paths;
 pub mod recorded;
-pub mod recorded_calls;
 pub mod runner;
 pub mod wire;
 

@@ -104,9 +104,8 @@
 //! path in `crate = ..` must reach it, which a library that re-exports `announce`
 //! does. `finish!` expands to the output above, without the attributes that the
 //! checks own. [`finish`] is the function behind that macro; a library does not
-//! call it. The same path reaches the hidden `__private::Probe` and
-//! `__private::ThisCallInTheModule` that the marker of an item announced with `strict = false`
-//! and a recorded leak failure names (see [`same_context!`](macro@crate::same_context)).
+//! call it. The marker of a `strict = false` item also names the hidden `__private::Probe`
+//! and `__private::ThisCallInTheModule` through that path.
 //!
 //! ```
 //! use announce::machinery::announce;

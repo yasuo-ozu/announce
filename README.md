@@ -89,9 +89,7 @@ path::Item! { [path::Item!, other::Def!, cb!] REST }
   [`#[announce(my_lib::check)]`](https://docs.rs/announce/latest/announce/attr.announce.html#checks-and-attributes-of-your-own).
 - Metadata for consumers: `#[announce(meta = my_lib::info(k = v))]`.
 - Types that are relative to the defining crate: [`repeater`](https://docs.rs/announce/latest/announce/attr.announce.html#type-context).
-  A type that does not resolve outside its module is an error at the definition (`strict`, on
-  by default). An item meant for its own module only is announced with `strict = false`, and a
-  caller puts
+  An item meant for its own module only is announced with `strict = false`, and a caller puts
   [`announce::same_context!`](https://docs.rs/announce/latest/announce/macro.same_context.html)
   in its chain to require that context.
 - Transformers chosen by the caller, such as

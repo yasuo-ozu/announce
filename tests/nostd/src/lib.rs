@@ -80,9 +80,7 @@ pub mod leaky {
     }
 }
 
-/// A relative type without a `repeater`, announced with `strict = false`: recorded, with the
-/// marker next to the item. The check of `announce::same_context!` passes in the module of the
-/// item, and the generated code needs only the hidden `announce::__private` here as well.
+/// A relative type, announced with `strict = false`: recorded, and the check passes in the module.
 pub mod recorded {
     pub mod inner {
         pub struct Local(pub u8);

@@ -21,9 +21,7 @@ use inner::Local;
 #[ann::announce(repeater = crate::Repeater, meta = info(1))]
 pub struct WithRepeater<T>(pub T, pub Local);
 
-/// A relative type without a `repeater` is recorded with `strict = false`: the marker next to
-/// the item names the renamed dependency (`::ann::__private`), and the check of
-/// `ann::same_context!` passes in the module of the item.
+/// Recorded with `strict = false`: the marker names the renamed dependency, and the check passes.
 #[ann::announce(strict = false)]
 pub struct Recorded {
     pub a: Local,

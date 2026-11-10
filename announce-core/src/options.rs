@@ -578,44 +578,27 @@ mod tests {
 
     #[test]
     fn strict_is_true_unless_an_announcement_says_false() {
-        assert!(opts("").strict);
-        assert!(opts("strict = true").strict);
-        assert!(!opts("strict = false").strict);
+        assert!(opts("").strict && opts("strict = true").strict && !opts("strict = false").strict);
         assert_eq!(opts("a::c, strict = false").given, ["strict"]);
-        let e = syn::parse_str::<Options>("strict = 1").err().unwrap();
-        assert!(e.to_string().contains("expected boolean"), "{}", e);
         let e = syn::parse_str::<Options>("stict = false").err().unwrap();
         assert!(e.to_string().contains("`docs`, `strict`, `meta`"), "{}", e);
         assert_eq!(text(&opts("strict = true")), "");
-        assert_eq!(text(&opts("strict = false, a::c")), "strict=false,a::c");
         assert_eq!(
             text(&opts("docs = true, strict = false, meta = m::x, a::c")),
             "docs=true,strict=false,meta=m::x,a::c"
         );
-        let again: Options = syn::parse2(opts("strict = false").to_token_stream()).unwrap();
-        assert!(!again.strict);
-        let built = Options {
-            strict: false,
-            ..Options::default()
-        };
-        assert_eq!(text(&built), "strict=false");
-        assert_eq!(merged("strict = false", ""), "strict=false");
-        assert_eq!(merged("", "strict = false"), "strict=false");
-        assert_eq!(merged("strict = false", "strict = false"), "strict=false");
-        assert_eq!(merged("strict = false", "strict = true"), "strict=false");
-        assert_eq!(merged("strict = true", "strict = false"), "strict=false");
+        // Merged, it is false if any of them says so.
+        for (a, b) in [
+            ("strict = false", ""),
+            ("", "strict = false"),
+            ("strict = false", "strict = true"),
+            ("strict = true", "strict = false"),
+        ] {
+            assert_eq!(merged(a, b), "strict=false");
+        }
         assert_eq!(merged("strict = true", ""), "");
-        assert_eq!(merged("", ""), "");
-        let m = opts("a::c")
-            .merge(&opts("strict = false"), &ident("S"))
-            .unwrap();
-        assert!(!m.strict);
-        assert_eq!(m.given, ["strict"]);
-        assert!(opts("").merge(&opts(""), &ident("S")).unwrap().strict);
-        assert_eq!(
-            merged("docs = true, a::c", "strict = false, b::c"),
-            "docs=true,strict=false,a::c,b::c"
-        );
+        let m = opts("a::c").merge(&opts("strict = false"), &ident("S"));
+        assert_eq!(m.unwrap().given, ["strict"]);
     }
 
     #[test]

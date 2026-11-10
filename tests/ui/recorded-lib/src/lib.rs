@@ -1,16 +1,15 @@
-//! Items whose types do not resolve outside their module, and that have no `repeater`: with
-//! `strict = false` the definition records that. `tests/ui/tests/ui/recorded_cross_crate.rs` calls them from
-//! another crate. The lines of the items are in the expected output of that test.
+//! Items whose types do not resolve outside their module, announced with `strict = false`
+//! (`tests/ui/tests/ui/same_context.rs`, `recorded_outside.rs` and `recorded_type_leak.rs` use
+//! them from another crate), and macros of a library over them.
 
 pub mod m {
     use announce::announce;
 
     pub mod inner {
         pub struct UiLocal(pub u8);
-        pub struct UiOther(pub u8);
         pub trait UiBase {}
     }
-    use inner::{UiBase, UiLocal, UiOther};
+    use inner::{UiBase, UiLocal};
 
     #[announce(strict = false)]
     pub struct Holder {
@@ -18,15 +17,7 @@ pub mod m {
     }
 
     #[announce(strict = false)]
-    pub struct Pair {
-        pub a: UiLocal,
-        pub b: UiOther,
-    }
-
-    #[announce(strict = false)]
-    pub trait Sub: UiBase {
-        fn local(&self) -> u8;
-    }
+    pub trait Sub: UiBase {}
 
     #[announce(strict = false)]
     pub struct Plain(pub u8);
@@ -34,8 +25,7 @@ pub mod m {
 
 pub use announce;
 
-/// A macro of a library that announces the item it is given. The item is the user's, so the
-/// error of the default check is at the user's tokens (`tests/ui/tests/ui/leak_errors_lib_macro.rs`).
+/// Announces the item it is given: the item is the user's (`leak_errors.rs`).
 #[macro_export]
 macro_rules! announced {
     ($item:item) => {
@@ -44,10 +34,8 @@ macro_rules! announced {
     };
 }
 
-/// A macro of the library that calls the trampoline of an item of the library through `$crate`,
-/// with the check of the module in the chain. A proc macro cannot tell which crate that `$crate`
-/// is, so the texts of the error name the crate that defined the item
-/// (`tests/ui/tests/ui/recorded_dollar_crate.rs`).
+/// Calls the trampoline of an item of the library through `$crate`. A proc macro cannot tell
+/// which crate that is, so the texts of the error name the crate that defined the item.
 #[macro_export]
 macro_rules! check_holder {
     () => {
@@ -55,11 +43,10 @@ macro_rules! check_holder {
     };
 }
 
-/// The same for a callback of the caller that needs a type table, which is an error wherever it
-/// is called.
+/// The same for a callback of the caller that needs a type table.
 #[macro_export]
-macro_rules! apply_pair {
+macro_rules! apply_holder {
     ($($callback:ident)::+, $name:ident) => {
-        $crate::m::Pair! { [$crate::m::Pair!, $($callback)::+!] $name }
+        $crate::m::Holder! { [$crate::m::Holder!, $($callback)::+!] $name }
     };
 }
