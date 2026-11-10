@@ -111,3 +111,50 @@ announce_test_ui_lib::m::Plain! { [announce_test_ui_lib::m::Plain!, announce::sa
 announce_test_ui_lib::check_holder!();
 
 fn main() {}
+
+// The forwarding macro of `m` in a function body outside the module, and from the parent module.
+mod sibling_fn {
+    pub fn in_fn() {
+        through_the_check!();
+    }
+}
+
+through_the_check!();
+
+// An item of another crate with two causes and a callback after the check, and one with a relative
+// trait path.
+announce_test_ui_lib::m::Pair! { [announce_test_ui_lib::m::Pair!, announce::same_context!, announce_test_derive::leak_failures!] PAIR_ROWS }
+announce_test_ui_lib::m::Sub! { [announce_test_ui_lib::m::Sub!, announce::same_context!] }
+
+// In expression position (`(expr)`) the check is a block in front of the callback's value, and
+// fails at the cause as well; the passing case is tests/defs/src/recorded.rs.
+macro_rules! expr_cb {
+    ($($t:tt)*) => { 0 };
+}
+
+fn in_expr() -> u8 {
+    m::Item! { (expr) [m::Item!, announce::same_context!, expr_cb!] }
+}
+
+// A module with an item named `diagnostic`: the attributes of the check do not see it. The call in
+// the module passes, also from a submodule that imports it, and the one outside fails like any
+// other.
+mod shadowed {
+    pub struct UiLocal;
+    pub mod diagnostic {}
+
+    #[announce::announce(strict = false)]
+    pub struct Item {
+        pub a: UiLocal,
+    }
+
+    Item! { [Item!, announce::same_context!] }
+
+    mod with_the_names {
+        use super::*;
+
+        Item! { [Item!, announce::same_context!] }
+    }
+}
+
+shadowed::Item! { [shadowed::Item!, announce::same_context!] }

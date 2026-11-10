@@ -34,7 +34,7 @@ error: `LEN` cannot be named outside its module (a relative value path): write t
 58 |         const M: usize = LEN;
    |                          ^^^
 
-error: `UiWrap<'_>` cannot be named outside its module (a type that cannot be carried): write the path absolutely
+error: `UiWrap<'_>` cannot be carried: write `UiWrap` with an absolute path (e.g. `crate::UiWrap`, or `::other_crate::UiWrap` for an item of another crate)
   --> tests/ui/leak_errors.rs:59:24
    |
 59 |         fn f(&self, a: UiWrap<'_>, b: UiLocal, c: [u8; LEN]);
@@ -76,7 +76,7 @@ error: `LEN` cannot be named outside its module (a relative value path): write t
 69 |         const M: usize = LEN;
    |                          ^^^
 
-error: `UiIdx` cannot be named outside its module (a type that cannot be carried): write the path absolutely
+error: `UiIdx` cannot be carried: write `UiIdx` with an absolute path (e.g. `crate::UiIdx`, or `::other_crate::UiIdx` for an item of another crate)
   --> tests/ui/leak_errors.rs:75:33
    |
 75 |     pub struct ConstTy<const N: UiIdx>(pub UiArr<N>);

@@ -471,6 +471,12 @@ impl Entry {
             .find(|m| m.path.segments.last().map_or(false, |s| s.ident == name))
     }
 
+    /// The META element that announce writes as `name(..)`: only the bare `name`, so a user
+    /// element `lib::name(..)` is not taken for it.
+    fn reserved_meta(&self, name: &str) -> Option<&Meta> {
+        self.meta.iter().find(|m| m.path.is_ident(name))
+    }
+
     /// The `type_leak(..)` META of an entry announced with `repeater = ..`.
     /// Unknown keys are ignored.
     /// A recorded failure ([`leak_failure`](Self::leak_failure)) is an error
@@ -479,7 +485,7 @@ impl Entry {
         if let Some(failure) = self.leak_failure()? {
             return Err(failure.to_error());
         }
-        let m = match self.find_meta("type_leak") {
+        let m = match self.reserved_meta("type_leak") {
             Some(m) => m,
             None => return Ok(None),
         };
@@ -489,7 +495,7 @@ impl Entry {
     /// The `type_leak_error(..)` META of an entry announced with `strict = false` whose types do
     /// not resolve outside its module. The record's path is the key of the entry.
     pub fn leak_failure(&self) -> Result<Option<LeakFailure>> {
-        let m = match self.find_meta("type_leak_error") {
+        let m = match self.reserved_meta("type_leak_error") {
             Some(m) => m,
             None => return Ok(None),
         };
@@ -505,11 +511,20 @@ impl Entry {
     /// the `announce` crate where the tokens are emitted (`::announce`). The check is a
     /// `const _` item: put it beside an `impl` or `trait` block, not in it.
     ///
-    /// ```ignore
+    /// ```
+    /// # use announce_core as announce;
+    /// # use announce::helper::Input;
+    /// # use template_quote::quote;
+    /// # let input: Input = syn::parse_quote! { [cb!] a::S! => [] { pub struct S { pub a: u8 } } };
+    /// # let krate: syn::Path = syn::parse_quote!(::announce);
+    /// # let mut out = proc_macro2::TokenStream::new();
     /// for entry in input.entries_in_order() {
     ///     let (item, check) = entry.item_resolved(&krate)?;
     ///     out.extend(quote! { #item #check });
     /// }
+    /// # // The item has no record: it comes as written, with no check.
+    /// # assert_eq!(out.to_string(), "pub struct S { pub a : u8 }");
+    /// # Ok::<(), syn::Error>(())
     /// ```
     pub fn item_resolved(&self, krate: &Path) -> Result<(syn::Item, TokenStream)> {
         let mut item = self.item()?;
@@ -1032,12 +1047,73 @@ impl Input {
     /// order, when all are present. Otherwise it returns [`Gather::Fetch`]: tokens
     /// that fetch the missing ones and call this callback again.
     ///
-    /// ```ignore
+    /// ```
+    /// # use announce_core as announce;
+    /// # use announce::helper::{Cont, Gather, Input};
+    /// # use proc_macro2::TokenStream;
+    /// # fn run(input: Input, needed: Vec<Cont>) -> syn::Result<TokenStream> {
     /// let entries = match input.gather(needed) {
     ///     Gather::Ready(e) => e,
     ///     Gather::Fetch(ts) => return Ok(ts),
     /// };
+    /// # Ok(entries.iter().map(|e| e.item.clone()).collect())
+    /// # }
+    /// #
+    /// # let needed = || vec![Cont::bang(syn::parse_quote!(a::S))];
+    /// # // `a::S!` is there: `gather` is ready.
+    /// # let input: Input = syn::parse_quote! { [cb!] a::S! => [] { struct S; } };
+    /// # assert_eq!(run(input, needed())?.to_string(), "struct S ;");
+    /// # // It is missing: the tokens fetch it and call the callback again.
+    /// # let out = run(syn::parse_quote! { [cb!] }, needed())?.to_string();
+    /// # assert!(out.starts_with("a :: S !") && out.contains("cb !"), "{}", out);
+    /// # Ok::<(), syn::Error>(())
     /// ```
+    ///
+    /// ## Pairing a fetch with the `Announce` check
+    ///
+    /// A path without `#[announce]` is reported by rustc alone: ``error[E0433]: cannot find
+    /// `Plain` in `m` ``, with a "try to remove `!`" hint that does not help, and only for the
+    /// first missing item. A callback that knows its paths name structs, enums or unions can
+    /// emit [`check_type`] for each next to the fetch. That adds the error "`Plain` is not
+    /// announced" for every missing item at once (rustc's error still comes first). For a simple
+    /// dyn-compatible trait use [`check_trait`].
+    ///
+    /// ```
+    /// # use announce_core as announce;
+    /// use announce::helper::{check_type, Cont, Gather, Input};
+    /// use proc_macro2::TokenStream;
+    /// use template_quote::quote;
+    ///
+    /// // `paths` are structs, enums or unions: each has an `Announce` impl.
+    /// fn run(input: Input, paths: Vec<syn::Path>) -> syn::Result<TokenStream> {
+    ///     let entries = match input.gather(paths.iter().cloned().map(Cont::bang)) {
+    ///         Gather::Ready(e) => e,
+    ///         Gather::Fetch(ts) => {
+    ///             let krate = syn::parse_quote!(::announce);
+    ///             let checks = paths.iter().map(|p| check_type(&krate, &syn::parse_quote!(#p)));
+    ///             return Ok(quote! { #(#checks)* #ts });
+    ///         }
+    ///     };
+    ///     let n = entries.len();
+    ///     Ok(quote!(const COUNT: usize = #n;))
+    /// }
+    /// #
+    /// # // `a::S` is not there yet: the check goes in front of the fetch.
+    /// # let input: Input = syn::parse_quote! { [cb!] };
+    /// # let out = run(input, vec![syn::parse_quote!(a::S)])?.to_string();
+    /// # assert!(out.starts_with("const _ : () ="), "{}", out);
+    /// # assert!(out.contains("announce :: Announce") && out.contains("a :: S !"), "{}", out);
+    /// # Ok::<(), syn::Error>(())
+    /// ```
+    ///
+    /// The check is right only for a path that has an `Announce` impl. An announced `mod`, a
+    /// type alias, a trait that is not dyn-compatible, and an item with `emit_item = false` or
+    /// `mock` have none, so the check would reject a valid call. It is a `const _` item, so it
+    /// does not go inside an `impl` or `trait` block. A generic type needs its arguments in the
+    /// path given to `check_type` (`m::G<u8>`, since the bare `m::G` is rustc's `E0107`);
+    /// [`Cont::bang`] drops them for the fetch. In expression position
+    /// ([`is_expression_position`]) the output needs a block, `{ #(#checks)* #ts }`, or the
+    /// callback skips the check there.
     pub fn gather(&self, needed: impl IntoIterator<Item = Cont>) -> Gather<'_> {
         let needed: Vec<Cont> = needed.into_iter().collect();
         // A callback asking for itself (or for its own head path) would
@@ -1283,9 +1359,14 @@ macro_rules! callback {
 /// ([`OwnedAttrs::check_names`]), or `f` fails) becomes a `compile_error!`, like in
 /// [`callback()`]. So the result can be returned from the proc macro as it is.
 ///
-/// ```ignore
-/// /// Rejects `#[my_lib(bad)]` and tuple structs.
-/// #[proc_macro]
+/// In a proc-macro crate this is a `#[proc_macro]` function. The example is run as a
+/// doctest, which cannot define a proc macro: it has no attribute, and `proc_macro`
+/// stands for `proc_macro2`.
+///
+/// ```
+/// # use announce_core as announce;
+/// # use proc_macro2 as proc_macro;
+/// /// Rejects `#[my_lib(bad)]`.
 /// pub fn my_check(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 ///     announce::helper::check(input.into(), &["my_lib", "other"], |c| {
 ///         // `c` is an `announce::helper::CheckInput`.
@@ -1298,6 +1379,13 @@ macro_rules! callback {
 ///     })
 ///     .into()
 /// }
+/// #
+/// # // The attribute is owned by the check, and allowed.
+/// # let ok = my_check(syn::parse_quote! { (), struct S { #[my_lib(skip)] a: u8 } });
+/// # assert!(ok.is_empty(), "{}", ok);
+/// # // `bad` is an error at the attribute.
+/// # let err = my_check(syn::parse_quote! { (), struct S { #[my_lib(bad)] a: u8 } }).to_string();
+/// # assert!(err.contains("compile_error") && err.contains("`bad` is not allowed"), "{}", err);
 /// ```
 ///
 /// The function can be tested with `proc_macro2` streams, because it does not use the
@@ -1406,14 +1494,28 @@ pub fn payload(item: TokenStream) -> Option<TokenStream> {
 /// of the call. The trampoline needs its own path to call itself again, when it holds
 /// a large item once, and a real `$` to un-escape an item that has `$` in it.
 ///
-/// ```ignore
-/// #[proc_macro_derive(Parse)]
+/// In a proc-macro crate this is a `#[proc_macro_derive(Parse)]` function. The example is run
+/// as a doctest, which cannot define a proc macro: it has no attribute, and `proc_macro`
+/// stands for `proc_macro2`.
+///
+/// ```
+/// # use announce_core as announce;
+/// # use announce::helper::{Cont, ContList};
+/// # use proc_macro2 as proc_macro;
+/// # use proc_macro::TokenStream;
 /// pub fn derive_parse(input: TokenStream) -> TokenStream {
 ///     if let Some(out) = announce::helper::redirect(input.clone().into(), &syn::parse_quote!(::pars::ParseAnnounce)) {
 ///         return out.into();
 ///     }
 ///     // normal derive
+/// #   TokenStream::new()
 /// }
+/// #
+/// # // The dummy of a trampoline call goes to `::pars::ParseAnnounce!`, other items do not.
+/// # let dummy = ContList(vec![Cont::derive(syn::parse_quote!(Parse))]).invoke(TokenStream::new());
+/// # let out = derive_parse(dummy).to_string();
+/// # assert!(out.starts_with(":: pars :: ParseAnnounce !"), "{}", out);
+/// # assert!(derive_parse(syn::parse_quote! { struct S; }).is_empty());
 /// ```
 pub fn redirect(item: TokenStream, target: &Path) -> Option<TokenStream> {
     // The payload starts with `@announce_format "VERSION"`, written by whoever

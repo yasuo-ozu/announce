@@ -37,6 +37,9 @@ jobs:
     - name: Run the renamed-dependency tests (a separate workspace)
       working-directory: tests/renamed-ws
       run: cargo test --verbose
+    - name: Run the compat test (a callback built with announce 0.2 from crates.io, a separate workspace)
+      working-directory: tests/compat-0.2
+      run: cargo test --verbose
     - name: Run the UI tests
       # trybuild compares compiler output with the snapshots in tests/ui/tests/ui,
       # which were recorded with a nightly rustc; other versions word some errors
@@ -57,7 +60,9 @@ jobs:
   msrv:
     # 1.57: announce, announce-core (with announce::helper), announce-macros,
     # announce-std, the cross-crate tests with subcrate (tests/subcrate), announce
-    # without its default feature; 1.59: the whole workspace (a `repeater` needs 1.59).
+    # without its default feature; 1.59: the whole workspace (a `repeater` needs 1.59);
+    # 1.78: announce and announce-core with `#[diagnostic::on_unimplemented]` and without
+    # `#[diagnostic::do_not_recommend]` (1.85), the path the other toolchains here do not take.
     # tools/msrv.sh builds a scratch copy with an MSRV-compatible lock file.
 
     runs-on: ubuntu-latest
@@ -69,5 +74,6 @@ jobs:
         rustup toolchain install stable --profile minimal
         rustup toolchain install 1.57.0 --profile minimal
         rustup toolchain install 1.59.0 --profile minimal
+        rustup toolchain install 1.78.0 --profile minimal
     - name: Build and test on the minimum Rust versions
       run: sh tools/msrv.sh

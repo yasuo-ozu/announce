@@ -75,8 +75,9 @@ default-members = [
     "tests/subcrate",
 ]
 # `tests/ui` needs a newer rustc (trybuild); `tests/renamed-ws` is its own
-# workspace, because it tests a workspace-inherited rename (`ann-ws.workspace = true`).
-exclude = ["tests/ui", "tests/renamed-ws"]
+# workspace, because it tests a workspace-inherited rename (`ann-ws.workspace = true`);
+# `tests/compat-0.2` is too, because it holds announce 0.2.0 of crates.io beside this one.
+exclude = ["tests/ui", "tests/renamed-ws", "tests/compat-0.2"]
 resolver = "2"
 
 # No `[workspace.package]` / `[workspace.dependencies]` inheritance: the

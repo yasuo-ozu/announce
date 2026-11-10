@@ -1,12 +1,16 @@
 //! Readers for the `name(key = value, ..)` META elements that announce writes
 //! ([`TypeLeak`](crate::helper::TypeLeak), [`LeakFailure`](crate::helper::LeakFailure)). A
-//! reader skips the keys it does not know, so a later version can add keys with any value.
+//! reader skips the keys it does not know, so a later version can add keys. A value is skipped up
+//! to the next `,` that is outside groups and outside `<..>` (so `Map<K, V>` is one value). A `<`
+//! that is never closed, as in `a < b`, ends at the first `,` that starts the next element: `key =`,
+//! or `(TOKENS) "reason"` in a list of errors.
 
 use proc_macro2::{Ident, TokenTree};
 use syn::ext::IdentExt;
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
-use syn::{Error, Result, Token};
+use syn::token::Paren;
+use syn::{Error, LitStr, Result, Token};
 
 /// Reads `name(key = value, ..)`. `value` reads the value of a key and tells whether it knows
 /// the key; a key it does not know, with or without a value, is skipped.
@@ -59,10 +63,11 @@ pub(crate) fn bracketed_list<T: Parse>(input: ParseStream) -> Result<Vec<T>> {
     Ok(list.into_iter().collect())
 }
 
-/// Skips up to the next `,` outside groups and `<..>`.
+/// Skips up to the next `,` outside groups and `<..>`, so a type like `Map<K, V>` is one value. A
+/// `<` that is never closed (`a < b`) ends at the first `,` that starts the next element.
 pub(crate) fn skip_to_comma(input: ParseStream) -> Result<()> {
     let (mut depth, mut arrow) = (0usize, false);
-    while !input.is_empty() && !(depth == 0 && input.peek(Token![,])) {
+    while !input.is_empty() && !(input.peek(Token![,]) && (depth == 0 || element_follows(input))) {
         let c = match input.parse::<TokenTree>()? {
             TokenTree::Punct(p) => Some(p.as_char()),
             _ => None,
@@ -75,4 +80,13 @@ pub(crate) fn skip_to_comma(input: ParseStream) -> Result<()> {
         arrow = c == Some('-');
     }
     Ok(())
+}
+
+/// Whether the `,` at `input` is followed by the next element: `key =` in a record, or
+/// `(TOKENS) "reason"` in a list of errors.
+fn element_follows(input: ParseStream) -> bool {
+    let rest = input.fork();
+    rest.parse::<Token![,]>().is_ok()
+        && (rest.peek(Ident::peek_any) && rest.peek2(Token![=])
+            || rest.peek(Paren) && rest.parse::<TokenTree>().is_ok() && rest.peek(LitStr))
 }

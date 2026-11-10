@@ -68,8 +68,13 @@
 //! `(ARGS), ITEM` ([`CheckInput`](crate::helper::CheckInput)), and runs a closure on it.
 //! (By hand, parse a [`CheckCall`] and answer its [`Query`] with [`Query::answer`].)
 //!
-//! ```ignore
-//! #[proc_macro]
+//! In a proc-macro crate this is a `#[proc_macro]` function. The example is run as a
+//! doctest, which cannot define a proc macro: it has no attribute, and `proc_macro`
+//! stands for `proc_macro2`.
+//!
+//! ```
+//! # use announce_core as announce;
+//! # use proc_macro2 as proc_macro;
 //! pub fn my_check(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 //!     announce::helper::check(input.into(), &["my_lib", "other"], |c| {
 //!         for attr in c.owned_attributes() { /* validate */ }
@@ -77,6 +82,11 @@
 //!     })
 //!     .into()
 //! }
+//! #
+//! # // The query is answered with the names, and the check itself runs on its input.
+//! # let out = my_check(syn::parse_quote! { @__announce_attrs [ me!, next! ] { st } });
+//! # assert!(out.to_string().contains("attrs (my_lib , other)"), "{}", out);
+//! # assert!(my_check(syn::parse_quote! { (), struct S; }).is_empty());
 //! ```
 //!
 //! A `macro_rules!` check has one more arm. It skips its own head, forwards `STATE`
