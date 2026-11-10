@@ -39,11 +39,14 @@
 
 - Breaking: announce builds on the `api-reduction` branch of type-leak (a git dependency until
   it is released), and `announce::type_leak` and `announce::helper::type_leak` are that crate.
-  Its errors are a `Vec<ErrorItem>` with a typed `Cause` and `Reason`
-  (`NotInternableError` is gone), `Leaker::intern_*` return the `ContextId` (and take no
-  `allow_self`), `LeakerConfig` and `Options` are `Rules` and the field
-  `Leaker::check_values` (`Leaker::with_rule(rules)`), `Leaker::result()` is a `LeakerResult`
-  (the `Referrer`, and the errors that remain), the entries are `Referrer::iter()` (there are no
+  Its errors are `ErrorItem`s with a typed `Cause` and `Reason` (`NotInternableError` is gone;
+  `finish()` gives them as a `LeakerResultError`, which `?` turns into one `syn::Error`),
+  `Leaker::intern_*` return the `ContextId` (and take no `allow_self`), `LeakerConfig` and
+  `Options` are `Rules` and the field `Leaker::check_values` (`Leaker::with_rule(rules)`),
+  `Leaker::result()` is a `LeakerResult`
+  (the `Referrer`, and the errors that remain; `finish()` is the only way to the `Referrer`, and
+  `ignore_if(..)` ignores the errors that a closure picks), the entries are `Referrer::iter()`
+  (`Referrer::has_context(id)` tells whether a context is the `Referrer`'s; there are no
   required and optional entries: an absolute path of another crate is an entry unless the rules
   say `external_crates()`, which announce does), and `Referrer::entry_args`, `RepeaterSlots` and
   `UseSite` are `Projection` and `Referrer::complete_args`. A callback must link the same
@@ -54,16 +57,17 @@
   "announced by an older announce", an error. `repeater` and `id` are there only for a
   definition with `repeater = ..`; an item without one that has errors of type-leak and no
   relative type has `type_leak(context = .., result = [..])`. The format of the `Referrer` is 16.
+  Reading the META checks that `context` is one of the contexts of `result`: another is an error.
 - Breaking: the errors of type-leak are not reported at the definition any more, and `#[announce]`
   no longer rewords or records them. The part is copied as written, and the errors travel in the
   META. The consumer reports them, in type-leak's own words, at their tokens in the definition
-  (`TypeLeak::try_apply`, `Entry::item_resolved`, which is an error for an item with errors that
-  remain), or accepts them (`TypeLeak::allow`, `TypeLeak::ignore`). This covers a relative trait
-  path, a relative value path, a type with `'_`, a prelude name in a bound or value, a bound
-  cycle, a relative macro in an array length, the type of a const parameter, `Self` in a type
-  alias, and a method lifetime that only a relative type keeps. A definition with only such
-  errors compiles. `strict = false` records none of them, and `announce::same_context!` does not
-  check them.
+  (`Entry::item_resolved`, which is an error for an item with errors that remain), or accepts
+  them (`allow`, `ignore` and `ignore_if` of type-leak's `LeakerResult`, which is
+  `TypeLeak::result`). This covers a relative trait path, a relative value path, a type with
+  `'_`, a prelude name in a bound or value, a bound cycle, a relative macro in an array length,
+  the type of a const parameter, `Self` in a type alias, and a method lifetime that only a
+  relative type keeps. A definition with only such errors compiles. `strict = false` records
+  none of them, and `announce::same_context!` does not check them.
 - The causes at the definition are announce's own: a relative type without a `repeater`
   (or in a type alias), and an entry that has no impl, because its impl is for `()`: a relative
   type that names `Self` (`Local<Self>`, `Local<Self::A>`), or a const parameter that is not of a
@@ -76,17 +80,19 @@
   it had `ID: u64` and `NTH: usize`. The impls of `#[announce]` write it; a repeater from
   `define_repeater!` of 0.2 must be defined again, and a callback that wrote `Repeater<ARGS, ID,
   NTH>` by hand must use `type_leak::Projection::of` or `Referrer::visitor`.
-- Breaking: `announce::helper::TypeLeak` has the fields `projection: Option<Projection>` (the
-  repeater and the `id`, for the marker `()`; `None` without a repeater), `context: ContextId`
-  and `result: LeakerResult`, and `TypeLeak::new(projection, context, result)`. New:
-  `projection_of(repeater, id)`, `errors()`, `allow(rule)`, `ignore(&error)`, `entries()`,
-  `referrer()`, `try_apply(&mut Item)` (an error for the errors that remain, for entries
-  without a projection and for an entry that cannot be written) and `try_apply_at(&mut Item,
-  &[GenericArgument])` for a use site. Removed: the fields `repeater`, `id` and `referrer`,
-  `types()`, `lookup()`, `slots()`, `entry_args()`, `projection(ix, args)` and
-  `try_apply_at(item, &UseSite)`. `apply` is `try_apply` and panics. `helper::leak::StableReferrer`
-  numbers every entry (it numbered the required ones), and has `stable_index(EntryId)`; its
-  `expand` and `visit_item_mut` give the closure the type of the entry and its number as before.
+- Breaking: `announce::helper::TypeLeak` is the parsed `type_leak(..)` META. It has the fields
+  `projection: Option<Projection>` (the repeater and the `id`, for the marker `()`; `None`
+  without a repeater), `context: ContextId` and `result: LeakerResult`, and
+  `TypeLeak::new(projection, context, result)`, `projection_of(repeater, id)`, `meta()` and
+  `syn::parse::Parse`. It has no methods for the errors or for applying: use type-leak's API on
+  `result` (`errors()`, `allow(..)`, `ignore(..)`, `ignore_if(..)`, then `finish()`, then
+  `Referrer::visitor` and `Referrer::complete_args` for a use site), or `Entry::item_resolved`,
+  which reports all the errors that remain at once and rewrites the item. Removed: the fields
+  `repeater`, `id` and `referrer`, `types()`, `lookup()`, `slots()`, `entry_args()`,
+  `projection(ix, args)`, `apply`, `try_apply` and `try_apply_at(item, &UseSite)`.
+  `helper::leak::StableReferrer` numbers every entry (it numbered the required ones), and has
+  `stable_index(EntryId)`; its `expand` and `visit_item_mut` give the closure the type of the
+  entry and its number as before.
 - The analysis runs type-leak once and keeps its result, where announce rewrote the item and ran
   type-leak again until it accepted it. The messages of type-leak are no longer reworded by
   announce (no more "the table" for "the Referrer", no `crate::` for its example crate

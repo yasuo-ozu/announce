@@ -417,7 +417,7 @@
 /// (`struct u8;`). So `#[announce]` emits type-leak's check
 /// (`Leaker::assertions()`) that the primitive names the item copies as written are the
 /// primitives in the module of the definition, and a `struct u8;` there is an error at the
-/// definition (`mismatched types`, at the `#[announce]`). The names are the primitive types
+/// definition (`mismatched types`, at the name in the item). The names are the primitive types
 /// that `allow_primitive` lets pass, and the type of a const parameter (`const N: u8`)
 /// whatever `allow_primitive` says. The check is a `const _` item with one small function
 /// for each name, and there is none for an item without such a name. An item that the fast
@@ -471,11 +471,11 @@
 /// `announce::helper::Entry::type_leak`. Its format and the encoding of the generics
 #[cfg_attr(
     feature = "proc-macro-api",
-    doc = "are in [`announce::helper::TypeLeak`]. `TypeLeak::try_apply` rewrites every entry in an"
+    doc = "are in [`announce::helper::TypeLeak`]. `Entry::item_resolved` rewrites every entry in an"
 )]
 #[cfg_attr(
     not(feature = "proc-macro-api"),
-    doc = "are in `announce::helper::TypeLeak`. `TypeLeak::try_apply` rewrites every entry in an"
+    doc = "are in `announce::helper::TypeLeak`. `Entry::item_resolved` rewrites every entry in an"
 )]
 /// item to `<() as $crate::Repeater<ARGS, KEY>>::Type`:
 ///
@@ -484,12 +484,12 @@
 /// # use announce::helper::Input;
 /// # fn items(input: &Input) -> syn::Result<Vec<syn::Item>> {
 /// # let mut out = Vec::new();
+/// let krate: syn::Path = syn::parse_quote!(::announce);
 /// for entry in input.entries_in_order() {
-///     let mut item = entry.item()?;           // the definition, as written
-///     if let Some(tl) = entry.type_leak()? {  // `None` without a repeater or an error
-///         tl.try_apply(&mut item)?;           // reports the errors of type-leak
-///     }
-///     // emit `item`
+///     // The definition, with its entries written through the repeater. It is an error if
+///     // errors of type-leak remain: all of them, each over its whole cause.
+///     let (item, check) = entry.item_resolved(&krate)?;
+///     // emit `item` and `check`
 /// #   out.push(item);
 /// }
 /// # Ok(out)
@@ -510,9 +510,15 @@
 /// }
 /// ```
 ///
-/// That resolves in any crate, because `$crate` is the defining crate. A callback
-/// that writes the item at another place, such as the `impl Tr<u8> for X` of a
-/// trait, uses `TypeLeak::try_apply_at` with the generic arguments of the use site.
+/// That resolves in any crate, because `$crate` is the defining crate.
+///
+/// A callback that decides on the errors itself reads the table with `Entry::type_leak`
+/// and uses type-leak's API on its fields: `tl.result.allow(..)`, `ignore(..)` or
+/// `ignore_if(..)`, then `finish()`, which gives the `Referrer` (or the errors that remain),
+/// and `referrer.visitor(tl.context, &projection).visit_item_mut(&mut item)`. A callback
+/// that writes the item at another place, such as the `impl Tr<u8> for X` of a trait, calls
+/// `referrer.complete_args(tl.context, args, &projection)?.visit_item_mut(&mut item)` with the
+/// generic arguments of the use site.
 ///
 /// ## What a repeater does not carry
 ///
@@ -520,11 +526,12 @@
 /// copies each as written: it recovers and goes on, so one analysis lists them all. These
 /// errors are not the definition's. `#[announce]` does not report them. They are in the
 /// `result` of the `type_leak(..)` element, and the consumer decides. A callback that applies
-/// the table (`TypeLeak::try_apply`, `Entry::item_resolved`) gets them as errors, all at once,
-/// in type-leak's own words, at their tokens in the definition. It may allow them first
-/// (`TypeLeak::allow`, `TypeLeak::ignore`) if it promises that the part compiles as written
-/// where it is copied. An item that has such errors and no entry has the element too, with no
-/// `repeater` and no `id`: `type_leak(context = 0, result = [ .. ])`.
+/// the table (`Entry::item_resolved`) gets them as errors, all at once, in type-leak's own
+/// words, at their tokens in the definition. It may allow them first (`allow`, `ignore` and
+/// `ignore_if` of type-leak's `LeakerResult`, the `result` of the `TypeLeak`) if it promises
+/// that the part compiles as written where it is copied. An item that has such errors and no
+/// entry has the element too, with no `repeater` and no `id`:
+/// `type_leak(context = 0, result = [ .. ])`.
 ///
 /// - **Trait paths**: supertraits, bounds in generics and `where` clauses, and
 ///   `impl` bounds must be absolute. `trait Sub: Base` is an error; write

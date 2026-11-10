@@ -49,6 +49,7 @@ use announce::helper::{attrs, leak, type_leak};
 
 use proc_macro2::TokenStream;
 use syn::parse::ParseStream;
+use syn::visit_mut::VisitMut;
 use template_quote::ToTokens;
 
 fn squash(ts: impl ToTokens) -> String {
@@ -271,20 +272,36 @@ fn type_leak_and_transformers() {
     let mut crate_item: syn::Item = syn::parse_quote! { struct S(crate::A); };
     leak::normalize_crate(&mut crate_item);
 
-    // `TypeLeak`: build, write as META, read back, apply.
+    // `TypeLeak`: build, write as META, read back, and use type-leak's API on its fields.
     let projection = TypeLeak::projection_of(syn::parse_quote!(::my::R), 7);
     let tl = TypeLeak::new(Some(projection), context, result);
-    assert_eq!(tl.entries().len(), 1);
-    assert_eq!(squash(&tl.entries()[0].1), "Local");
-    assert!(tl.errors().is_empty());
+    let referrer = tl.result.clone().finish().unwrap();
+    assert_eq!(referrer.iter().count(), 1);
+    assert_eq!(squash(referrer.iter().next().unwrap().1), "Local");
+    assert!(tl.result.errors().is_empty());
     let back: TypeLeak = syn::parse2(tl.meta()).unwrap();
     assert_eq!(back.projection.as_ref().map(|p| p.id), Some(7));
+    // The visitor of the `Referrer` writes the entries, `complete_args` the use site's arguments.
+    let projection = back.projection.as_ref().unwrap();
+    let referrer = back.result.clone().finish().unwrap();
     let mut applied = syn::Item::Struct(item.clone());
-    back.apply(&mut applied);
+    referrer
+        .visitor(back.context, projection)
+        .visit_item_mut(&mut applied);
     assert!(squash(&applied).contains("::my::R"), "{}", squash(&applied));
-    let mut applied = syn::Item::Struct(item);
-    tl.try_apply(&mut applied).unwrap();
-    tl.try_apply_at(&mut applied, &[]).unwrap();
+    let mut at = applied.clone();
+    let mut substitute = referrer
+        .complete_args(back.context, &[], projection)
+        .unwrap();
+    substitute.visit_item_mut(&mut at);
+    assert_eq!(squash(&at), squash(&applied));
+    // `Entry::item_resolved` is the one-line path, and writes the same.
+    let meta = tl.meta();
+    let input: Input = syn::parse_quote! { [cb!] a::S! => [#meta] { #item } };
+    let krate: syn::Path = syn::parse_quote!(::announce);
+    let (resolved, check) = input.entries[0].item_resolved(&krate).unwrap();
+    assert_eq!(squash(&resolved), squash(&applied));
+    assert!(check.is_empty());
 
     // `signature_only`, the function behind `announce::signature_only!`.
     let mut f: syn::Item = syn::parse_quote! { fn f() -> u8 { 1 } };

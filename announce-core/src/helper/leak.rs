@@ -11,7 +11,7 @@
 //!
 //! With `#[announce(repeater = ..)]` none of this is needed. The definer builds the
 //! table, the `type_leak(..)` META carries it, and the callback applies it with
-//! [`TypeLeak::try_apply`](crate::helper::TypeLeak::try_apply).
+//! [`Entry::item_resolved`](crate::helper::Entry::item_resolved).
 
 use proc_macro2::TokenStream;
 use syn::Type;

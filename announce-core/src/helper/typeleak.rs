@@ -1,5 +1,5 @@
 //! The table of an entry announced with `#[announce(repeater = ..)]`: the
-//! `type_leak(..)` META and the rewriting of a payload with it.
+//! `type_leak(..)` META.
 //!
 //! The definer analyses the item with [`type_leak`] and sends the resulting
 //! [`LeakerResult`] to the consumer inside META. Its [`Referrer`] knows the context
@@ -8,9 +8,14 @@
 //! entry of the scope where it is written, never by the entry of a same-named type
 //! of another scope.
 //!
+//! [`TypeLeak`] is only the parsed META. It has no methods for the errors or for the
+//! rewriting: a callback uses type-leak's API on its fields, or
+//! [`Entry::item_resolved`](crate::helper::Entry::item_resolved), which does it in one call.
+//!
 //! The errors of type-leak (the parts that no table can carry) are in the result too.
-//! The definer does not report them: the consumer does, with [`TypeLeak::try_apply`], or
-//! allows them ([`TypeLeak::allow`], [`TypeLeak::ignore`]) before it applies the table.
+//! The definer does not report them: the consumer does. `Entry::item_resolved` reports them
+//! all at once. A callback that allows some first uses `allow`, `ignore` and `ignore_if` of
+//! [`TypeLeak::result`], then `finish`.
 //!
 //! The use-site arguments of a replacement come from [`Referrer::complete_args`]. The
 //! definer's impls come from [`LeakerResult::repeater_impls`], which encodes the same
@@ -20,11 +25,9 @@ use crate::helper::keys::{need, read_element};
 use proc_macro2::{Literal, Span, TokenStream};
 use syn::parse::{Parse, ParseStream};
 use syn::visit_mut::VisitMut;
-use syn::{Error, GenericArgument, Item, Path, Result, Type};
-use template_quote::{quote, ToTokens};
-use type_leak::{
-    Allow, ContextId, EntryId, ErrorItem, ImplSelf, LeakerResult, Projection, Referrer,
-};
+use syn::{Error, Item, Path, Result, Type};
+use template_quote::quote;
+use type_leak::{ContextId, ImplSelf, LeakerResult, Projection, Referrer};
 
 /// Type table of an entry announced with `#[announce(repeater = ..)]`, from
 /// [`Entry::type_leak`](crate::helper::Entry::type_leak).
@@ -43,8 +46,8 @@ use type_leak::{
 /// a lifetime as `&'a ()`, a `usize` const as `[(); N]`, and a const of another primitive type
 /// (`bool`, `char`, `u8` .. `u128`, `i8` .. `i128`, `isize`) through the const
 /// parameter that the repeater has for that type. A lifetime bound (`T: 'a`) is
-/// encoded too (`&'a T`), and the impl does not declare it. [`try_apply`](Self::try_apply)
-/// rewrites an item that way.
+/// encoded too (`&'a T`), and the impl does not declare it.
+/// [`Entry::item_resolved`](crate::helper::Entry::item_resolved) rewrites an item that way.
 ///
 /// The META element is
 ///
@@ -58,12 +61,17 @@ use type_leak::{
 /// not match is an error. `context` is the top-level `ContextId` of the item in it, where a
 /// callback rewrites the item. `repeater` and `id` are there when the definition has
 /// `repeater = ..`, both or neither: without them the META has no impl behind it, and it is
-/// there for the errors of type-leak that the consumer reports ([`errors`](Self::errors)).
+/// there for the errors of type-leak that the consumer reports ([`result`](Self::result)).
 /// Other keys are ignored when reading with `syn::parse2::<TypeLeak>(meta)`.
+///
+/// A callback calls `Entry::item_resolved`. To decide on the errors first, it uses type-leak's
+/// API on the fields: `allow`, `ignore` or `ignore_if` of `result`, then `finish` for the
+/// `Referrer`, then its `visitor` (or `complete_args` for a use site):
 ///
 /// ```
 /// # use announce_core as announce;
 /// use announce::helper::TypeLeak;
+/// use syn::visit_mut::VisitMut;
 ///
 /// let meta: proc_macro2::TokenStream = {
 ///     let mut leaker = announce::helper::type_leak::Leaker::new();
@@ -72,25 +80,35 @@ use type_leak::{
 ///     let projection = TypeLeak::projection_of(syn::parse_quote!(crate::Repeater), 7);
 ///     TypeLeak::new(Some(projection), context, leaker.result()).meta()
 /// };
-/// let table: TypeLeak = syn::parse2(meta)?;
+/// let tl: TypeLeak = syn::parse2(meta)?;
+/// // Errors of type-leak would be accepted here: `tl.result.ignore_if(..)`.
+/// let referrer = tl.result.clone().finish().unwrap();
+/// let projection = tl.projection.as_ref().expect("a repeater");
 /// let mut item: syn::Item = syn::parse_quote! { struct S { a: Local } };
-/// table.try_apply(&mut item)?;
-/// assert!(template_quote::ToTokens::to_token_stream(&item).to_string().contains("crate :: Repeater"));
+/// referrer.visitor(tl.context, projection).visit_item_mut(&mut item);
+/// let written = template_quote::ToTokens::to_token_stream(&item).to_string();
+/// assert!(written.contains("crate :: Repeater"));
 /// # Ok::<(), syn::Error>(())
 /// ```
 #[derive(Clone, Debug)]
 pub struct TypeLeak {
     /// How the definer wrote its impls, and so how the entries are written: the repeater trait
     /// (`$crate::Repeater`) and the `id` of the table, which is the `KEY`'s high half, for the
-    /// marker `()`. `None` for a definition without `repeater`, which has no impl: its entries
-    /// cannot be written (an error), and its table is there for the errors.
+    /// marker `()`. `None` for a definition without `repeater`, which has no impl: its table has
+    /// no entries (the definer refuses entries without a `repeater`) and is there for the errors.
+    ///
+    /// `Referrer::complete_args` takes a `&Projection` even then. Pass `Projection::unused()`:
+    /// nothing is written through it.
     pub projection: Option<Projection>,
-    /// The top-level context of the item in the [`result`](Self::result). Reading the META does
-    /// not check that the result has it (type-leak cannot tell without panicking): a context it
-    /// does not have panics where the table is applied, in type-leak.
+    /// The top-level context of the item in the [`result`](Self::result). Reading the META checks
+    /// that the result has it.
     pub context: ContextId,
     /// The analysis of the item at the definition: the `Referrer` and the errors of type-leak
     /// that remain. Entry `ix` is the entry number of the repeater's `KEY`.
+    ///
+    /// Use type-leak's API on it: `errors()`, `allow(..)`, `ignore(..)` and `ignore_if(..)`, then
+    /// `finish()`, which is the `Referrer`, or the errors that remain: `?` turns them into one
+    /// `syn::Error`, each over its whole cause, as `Entry::item_resolved` reports them.
     pub result: LeakerResult,
 }
 
@@ -111,142 +129,34 @@ impl TypeLeak {
         Projection::new(repeater, id, ImplSelf::Marker(syn::parse_quote!(())))
     }
 
-    /// The errors of type-leak that remain, in the order found. Report them with
-    /// [`try_apply`](Self::try_apply), or drop them with [`allow`](Self::allow) and
-    /// [`ignore`](Self::ignore).
-    pub fn errors(&self) -> &[ErrorItem] {
-        self.result.errors()
-    }
-
-    /// The table without the errors that `rule` accepts: the copy writes that part as it is
-    /// (`LeakerResult::allow`). You promise that it compiles as written where the copy is.
-    #[must_use]
-    pub fn allow(mut self, rule: impl Allow) -> Self {
-        self.result = self.result.allow(rule);
-        self
-    }
-
-    /// The table without the error `error`, one of [`errors`](Self::errors): the copy writes the
-    /// whole part that it is about as it is, and an entry that it is about is no entry any more
-    /// (`LeakerResult::ignore`).
-    #[must_use]
-    pub fn ignore(mut self, error: &ErrorItem) -> Self {
-        self.result = self.result.ignore(error);
-        self
-    }
-
-    /// The `Referrer` of the result, for what [`entries`](Self::entries) does not tell: the
-    /// context of each entry (`Referrer::iter`). It is a copy: `LeakerResult` has no accessor
-    /// for it.
-    pub fn referrer(&self) -> Referrer {
-        self.result.clone().into_referrer()
-    }
-
-    /// The types that are replaced, as the definer wrote them: the entries of the
-    /// [`result`](Self::result), each with its [`EntryId`], in order.
-    pub fn entries(&self) -> Vec<(EntryId, Type)> {
-        self.referrer()
-            .iter()
-            .map(|(entry, ty, _)| (entry, ty.clone()))
-            .collect()
-    }
-
-    /// The errors that remain as one error, or `None` without any: one message for each, as
-    /// type-leak words it, at all of its cause (`Error::from(ErrorItem)` is at the first token of
-    /// the cause on stable).
-    fn remaining(&self) -> Option<Error> {
-        self.errors()
-            .iter()
-            .map(|e| {
-                let message = Error::from(e.clone()).to_string();
-                Error::new_spanned(e.cause.to_token_stream(), message)
-            })
-            .reduce(|mut all, e| {
-                all.combine(e);
-                all
-            })
-    }
-
-    /// The `Referrer`, and the projection to write its entries by, once nothing is in the way: no
-    /// error remains, and the entries can be written (there is a projection, and each entry has an
-    /// impl for the marker, as the definer's impls are).
-    fn ready(&self) -> Result<(Referrer, Option<&Projection>)> {
-        if let Some(error) = self.remaining() {
-            return Err(error);
-        }
-        let referrer = self.referrer();
-        if referrer.is_empty() {
-            return Ok((referrer, self.projection.as_ref()));
-        }
-        let projection = self.projection.as_ref().ok_or_else(|| {
-            Error::new(
-                Span::call_site(),
-                "announce: the `type_leak(..)` META has types to replace but no `repeater` and \
-                 `id`: the definition has no impl to write them by",
-            )
-        })?;
-        let unit: Type = syn::parse_quote!(());
-        for (entry, _, context) in referrer.iter() {
-            projection.of(&unit, context, entry)?;
-        }
-        Ok((referrer, Some(projection)))
-    }
-
-    /// Rewrites every leaked type in `item` (usually the entry's payload) to its
-    /// projection, so the item resolves from any crate. The copy is in the scope
-    /// of the item itself: every generic by its own name.
+    /// Rewrites every leaked type in `item` (the entry's payload) to its projection, for
+    /// [`Entry::item_resolved`](crate::helper::Entry::item_resolved): the item then resolves from
+    /// any crate. The copy is in the scope of the item itself: every generic by its own name.
     ///
-    /// # Panics
-    ///
-    /// If an error of type-leak remains, or the table is inconsistent. Use
-    /// [`try_apply`](Self::try_apply) to get the error.
-    pub fn apply(&self, item: &mut Item) {
-        if let Err(e) = self.try_apply(item) {
-            panic!("announce: cannot apply the type_leak table: {}", e);
+    /// It fails if an error of type-leak remains (all of them, as one error, so that one run lists
+    /// everything the item cannot carry), if there are types to replace but no
+    /// [`projection`](Self::projection), or if the table is inconsistent (an entry has no impl
+    /// for the marker, as the definer's impls are). An empty `Referrer` leaves the item as it is.
+    pub(crate) fn resolve_into(&self, item: &mut Item) -> Result<()> {
+        let referrer = self.result.clone().finish()?;
+        if !referrer.is_empty() {
+            let projection = self.projection.as_ref().ok_or_else(|| {
+                Error::new(
+                    Span::call_site(),
+                    "announce: the `type_leak(..)` META has types to replace but no `repeater` \
+                     and `id`: the definition has no impl to write them by",
+                )
+            })?;
+            let unit: Type = syn::parse_quote!(());
+            for (entry, _, context) in referrer.iter() {
+                projection.of(&unit, context, entry)?;
+            }
         }
-    }
-
-    /// Like [`apply`](Self::apply), returning the error.
-    ///
-    /// It fails if an error of type-leak remains ([`errors`](Self::errors): all of them, as one
-    /// error, so that one run lists everything the item cannot carry), if there are types to
-    /// replace but no [`projection`](Self::projection), or if the table is inconsistent.
-    pub fn try_apply(&self, item: &mut Item) -> Result<()> {
-        let (referrer, projection) = self.ready()?;
-        if let Some(projection) = projection {
+        if let Some(projection) = self.projection.as_ref() {
             referrer
                 .visitor(self.context, projection)
                 .visit_item_mut(item);
         }
-        Ok(())
-    }
-
-    /// Like [`try_apply`](Self::try_apply), for a copy at another use site, such as the `impl
-    /// Tr<u8> for X` of a trait: `args` are the arguments of the use site (`[u8]`). It completes
-    /// them with the defaults of the item's generics (`Referrer::complete_args`) and writes them
-    /// into the types and lifetimes of `item`, in the entries too, so the entries are written
-    /// as `<() as REPEATER<(u8,), KEY>>::Type`. The header, which declares the generics, is left.
-    ///
-    /// The scope of the copy must be the item's: pass the whole item (not a type cut out of it),
-    /// with the generics it declares as the definer wrote them (`Referrer::visitor` documents what
-    /// it matches). It fails like [`try_apply`](Self::try_apply), and where an argument is
-    /// missing, is too many, or cannot be encoded.
-    pub fn try_apply_at(&self, item: &mut Item, args: &[GenericArgument]) -> Result<()> {
-        let (referrer, projection) = self.ready()?;
-        // Without a projection there is no entry, and no path is written through it.
-        let none;
-        let projection = match projection {
-            Some(projection) => projection,
-            None => {
-                none = Self::projection_of(syn::parse_quote!(Repeater), 0);
-                &none
-            }
-        };
-        referrer
-            .visitor(self.context, projection)
-            .visit_item_mut(item);
-        let mut substitute = referrer.complete_args(self.context, args, projection)?;
-        substitute.visit_item_mut(item);
         Ok(())
     }
 
@@ -261,6 +171,21 @@ impl TypeLeak {
             type_leak(#projection context = #context, result = [#result])
         }
     }
+}
+
+/// The `Referrer` of `result` whatever errors remain: they are ignored in a copy
+/// (`LeakerResult::ignore_if`), so that the part of each is whole and the entries are those that
+/// the impls of `repeater_impls` are written for. Ignoring removes only an entry that has an error
+/// of its own (`Reason::NestedSelfInBounds`), which needs an item nested in the analyzed syntax,
+/// and announce analyzes none. This is the view of the definer and of the check that the META reads
+/// back; a consumer that rewrites an item needs no errors left (`Entry::item_resolved` reports
+/// them).
+pub(crate) fn ignored_view(result: &LeakerResult) -> Referrer {
+    result
+        .clone()
+        .ignore_if(|_| true)
+        .finish()
+        .expect("no error remains once every one is ignored")
 }
 
 impl Parse for TypeLeak {
@@ -294,6 +219,17 @@ impl Parse for TypeLeak {
         };
         let result = result.ok_or_else(old)?;
         let context = context.ok_or_else(old)?;
+        // `Referrer::visitor` and `complete_args` panic for a context that is not one of its own.
+        if !ignored_view(&result).has_context(context) {
+            return Err(Error::new(
+                name.span(),
+                format!(
+                    "announce: the `type_leak(..)` META names the context {}, which its \
+                     `result` does not have",
+                    context
+                ),
+            ));
+        }
         // The path names the trait without arguments (`Projection::new` panics otherwise).
         if let Some(repeater) = &repeater {
             let last = repeater.segments.last().map(|segment| &segment.arguments);
@@ -320,7 +256,8 @@ impl Parse for TypeLeak {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use type_leak::{Cause, Leaker, Place, Rules};
+    use syn::GenericArgument;
+    use type_leak::{Cause, EntryId, Leaker, Place, Rules};
 
     fn s(ts: impl template_quote::ToTokens) -> String {
         ts.to_token_stream()
@@ -360,9 +297,39 @@ mod tests {
         syn::parse2(tl.meta()).unwrap()
     }
 
+    /// `item` resolved by `tl` (`Entry::item_resolved` is this, for an entry).
+    fn resolved(tl: &TypeLeak, item: &Item) -> Item {
+        let mut item = item.clone();
+        tl.resolve_into(&mut item).unwrap();
+        item
+    }
+
+    /// `item` written for a use site with `args`, with type-leak's API on the fields of `tl`:
+    /// the visitor, then `Referrer::complete_args` (`Projection::unused()` when the table has
+    /// none, as the docs of `TypeLeak::projection` say).
+    fn resolved_at(tl: &TypeLeak, item: &mut Item, args: &[GenericArgument]) -> Result<()> {
+        let referrer = tl.result.clone().finish()?;
+        let placeholder = Projection::unused();
+        let projection = tl.projection.as_ref().unwrap_or(&placeholder);
+        referrer
+            .visitor(tl.context, projection)
+            .visit_item_mut(item);
+        let mut substitute = referrer.complete_args(tl.context, args, projection)?;
+        substitute.visit_item_mut(item);
+        Ok(())
+    }
+
+    /// The entries of `tl`, with its errors ignored in a copy (`ignored_view`).
+    fn entries(tl: &TypeLeak) -> Vec<(EntryId, Type)> {
+        ignored_view(&tl.result)
+            .iter()
+            .map(|(entry, ty, _)| (entry, ty.clone()))
+            .collect()
+    }
+
     /// The entry of `tl` whose type is `ty`.
     fn lookup(tl: &TypeLeak, ty: Type) -> Option<usize> {
-        tl.entries()
+        entries(tl)
             .into_iter()
             .find(|(_, t)| *t == ty)
             .map(|(ix, _)| ix.index())
@@ -379,16 +346,14 @@ mod tests {
         let tl = table_of(&item);
         let back = read(&tl);
         // The indices are the definer's: an impl and a projection agree.
-        assert_eq!(
-            back.result.clone().into_parts(),
-            tl.result.clone().into_parts()
-        );
+        assert_eq!(back.result.errors(), tl.result.errors());
+        assert_eq!(ignored_view(&back.result), ignored_view(&tl.result));
         assert_eq!(back.context, tl.context);
         let projection = back.projection.as_ref().unwrap();
         assert_eq!(s(&projection.path), "::my::R");
         assert_eq!(projection.id, 7);
-        assert!(back.entries().len() >= 3);
-        assert_eq!(back.entries(), tl.entries());
+        assert!(entries(&back).len() >= 3);
+        assert_eq!(entries(&back), entries(&tl));
         // The META has the repeater and the id, then the context and the result.
         let meta = s(tl.meta());
         assert!(
@@ -417,8 +382,8 @@ mod tests {
         );
         let back = read(&tl);
         assert!(back.projection.is_none());
-        assert_eq!(back.errors(), tl.errors());
-        assert_eq!(back.errors().len(), 1);
+        assert_eq!(back.result.errors(), tl.result.errors());
+        assert_eq!(back.result.errors().len(), 1);
     }
 
     #[test]
@@ -427,10 +392,10 @@ mod tests {
             struct S<T: Base> { a: Local, b: Wrap<'_>, t: T }
         };
         let tl = table_of(&item);
-        assert_eq!(tl.errors().len(), 2);
+        assert_eq!(tl.result.errors().len(), 2);
         let back = read(&tl);
-        assert_eq!(back.errors(), tl.errors());
-        assert_eq!(back.entries().len(), 1);
+        assert_eq!(back.result.errors(), tl.result.errors());
+        assert_eq!(entries(&back).len(), 1);
         // The result is `LeakerResult`'s own syntax: the Referrer, then `@ [ {error} .. ]`.
         let meta = s(tl.meta());
         assert!(meta.contains("@["), "{}", meta);
@@ -485,6 +450,12 @@ mod tests {
         // The repeater is a trait without arguments.
         let src = meta("repeater = ::my::R<u8>,", i, "");
         assert!(err(src).contains("without arguments"));
+        // The context is one of the result's: another is an error at reading, not a panic where
+        // the table is applied.
+        let src = meta(r, i, "").replace(&format!("context = {},", context), "context = 9,");
+        let message = err(src);
+        assert!(message.contains("names the context 9"), "{}", message);
+        assert!(message.contains("`result` does not have"), "{}", message);
     }
 
     #[test]
@@ -500,21 +471,19 @@ mod tests {
         assert_eq!(lookup(&tl, syn::parse_quote!(u8)), None);
         // The marker is `()`, the KEY has the id in its high half.
         let projection = tl.projection.as_ref().unwrap();
-        let entry = tl.entries()[wrap].0;
+        let entry = entries(&tl)[wrap].0;
         assert_eq!(projection.key(entry) >> 64, 7);
         assert_eq!(projection.key(entry) as u64 as usize, wrap);
         assert!(matches!(&projection.impl_self, ImplSelf::Marker(t) if s(t) == "()"));
     }
 
     #[test]
-    fn apply_rewrites_leaked_types_only() {
+    fn resolving_rewrites_leaked_types_only() {
         let item: Item = syn::parse_quote! {
             struct S<T> { a: Local, b: Wrap<T>, c: ::core::option::Option<Local>, d: u8, e: T }
         };
         let tl = table_of(&item);
-        let mut it = item;
-        tl.apply(&mut it);
-        let out = s(&it);
+        let out = s(resolved(&tl, &item));
         let (local, wrap) = (
             lookup(&tl, syn::parse_quote!(Local)),
             lookup(&tl, syn::parse_quote!(Wrap<T>)).unwrap(),
@@ -527,7 +496,7 @@ mod tests {
         let any_entry = |ix: usize| out.contains(&format!("a:<()as::my::R<(),{}>>::Type", key(ix)));
         assert!(
             out.contains(&format!("a:{}", local))
-                || tl.entries().iter().any(|(ix, _)| any_entry(ix.index())),
+                || entries(&tl).iter().any(|(ix, _)| any_entry(ix.index())),
             "{}",
             out
         );
@@ -540,7 +509,7 @@ mod tests {
     }
 
     #[test]
-    fn apply_tells_scopes_apart() {
+    fn resolving_tells_scopes_apart() {
         // The same text in two scopes with different
         // generics is two entries; a method generic named like a leaked type
         // does not make `Local` a generic elsewhere.
@@ -553,16 +522,13 @@ mod tests {
             }
         };
         let tl = table_of(&item);
-        let gc: Vec<usize> = tl
-            .entries()
+        let gc: Vec<usize> = entries(&tl)
             .into_iter()
             .filter(|(_, t)| *t == syn::parse_quote!(Gc<X>))
             .map(|(ix, _)| ix.index())
             .collect();
         assert_eq!(gc.len(), 2, "one entry per context");
-        let mut it = item;
-        tl.apply(&mut it);
-        let out = s(&it);
+        let out = s(resolved(&tl, &item));
         assert!(out.contains("fnf<Local>(&self,x:Local);"), "{}", out);
         let local = lookup(&tl, syn::parse_quote!(Local)).unwrap();
         let g = format!("fng(&self)-><()as::my::R<(),{}>>", key(local));
@@ -577,14 +543,13 @@ mod tests {
     }
 
     #[test]
-    fn apply_at_a_use_site_writes_the_arguments() {
+    fn a_use_site_writes_the_arguments() {
         let item: Item = syn::parse_quote! {
             trait Tr<K, const N: usize> { fn get(&self, key: K, n: [u8; N]) -> Wrap<K>; }
         };
         let tl = table_of(&item);
         // At the item's own scope: the parameters by name.
-        let mut here = item.clone();
-        tl.try_apply(&mut here).unwrap();
+        let here = resolved(&tl, &item);
         let wrap = lookup(&tl, syn::parse_quote!(Wrap<K>)).unwrap();
         assert!(
             s(&here)
@@ -596,7 +561,7 @@ mod tests {
         // const as a block, which an array length takes as well).
         let given: Vec<GenericArgument> = vec![syn::parse_quote!(u8), syn::parse_quote!(3)];
         let mut at = item.clone();
-        tl.try_apply_at(&mut at, &given).unwrap();
+        resolved_at(&tl, &mut at, &given).unwrap();
         let out = s(&at);
         assert!(
             out.contains(&format!(
@@ -607,15 +572,16 @@ mod tests {
             out
         );
         // A missing argument is an error.
-        let err = tl
-            .try_apply_at(&mut item.clone(), &given[..1])
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("missing generic argument"), "{}", err);
+        let err = resolved_at(&tl, &mut item.clone(), &given[..1]).unwrap_err();
+        assert!(
+            err.to_string().contains("missing generic argument"),
+            "{}",
+            err
+        );
     }
 
     #[test]
-    fn apply_encodes_const_generics_of_every_primitive_type() {
+    fn const_generics_of_every_primitive_type_are_encoded() {
         let item: Item = syn::parse_quote! {
             struct C<const A: u8, const B: bool, const D: usize, const E: u64, const K: u128> {
                 x: inner::W<A, B, D, E, K>,
@@ -623,8 +589,7 @@ mod tests {
         };
         let tl = table_of(&item);
         // At the item's own scope: the parameters by name.
-        let mut here = item.clone();
-        tl.try_apply(&mut here).unwrap();
+        let here = resolved(&tl, &item);
         let args = "(*constdyn::my::R<(),0,false,'\\0',A,Type=()>,\
              *constdyn::my::R<(),0,B,Type=()>,[();D],\
              *constdyn::my::R<(),0,false,'\\0',0,0,0,E,Type=()>,*constdyn::my::R<(),K,Type=()>)";
@@ -638,7 +603,7 @@ mod tests {
             syn::parse_quote!(10),
         ];
         let mut at = item;
-        tl.try_apply_at(&mut at, &given).unwrap();
+        resolved_at(&tl, &mut at, &given).unwrap();
         let args = "(*constdyn::my::R<(),0,false,'\\0',1,Type=()>,\
              *constdyn::my::R<(),0,true,Type=()>,[();{3}],\
              *constdyn::my::R<(),0,false,'\\0',0,0,0,9,Type=()>,*constdyn::my::R<(),10,Type=()>)";
@@ -646,14 +611,14 @@ mod tests {
     }
 
     #[test]
-    fn a_remaining_error_is_an_error_of_apply_with_all_of_them() {
+    fn every_remaining_error_is_reported_at_once() {
         let item: Item = syn::parse_quote! {
             struct S<T: Base> { a: Local, b: Wrap<'_>, c: [u8; two!()], t: T }
         };
         let tl = table_of(&item);
-        assert_eq!(tl.errors().len(), 3);
+        assert_eq!(tl.result.errors().len(), 3);
         let mut it = item.clone();
-        let err = tl.try_apply(&mut it).unwrap_err();
+        let err = tl.resolve_into(&mut it).unwrap_err();
         // The item is as it was.
         assert_eq!(s(&it), s(&item));
         let all: Vec<String> = err.into_iter().map(|e| e.to_string()).collect();
@@ -661,10 +626,17 @@ mod tests {
         assert!(all[0].contains("use absolute path: 'Base'"), "{:?}", all);
         assert!(all.iter().any(|m| m.contains("'Wrap<'_>'")), "{:?}", all);
         assert!(all.iter().any(|m| m.contains("'two'")), "{:?}", all);
-        // `apply` panics with them, and `try_apply_at` fails the same way.
-        assert!(tl.try_apply_at(&mut item.clone(), &[]).is_err());
-        let panicked = std::panic::catch_unwind(|| tl.apply(&mut item.clone()));
-        assert!(panicked.is_err());
+        // The messages are type-leak's own.
+        let own: Vec<String> = tl
+            .result
+            .errors()
+            .iter()
+            .map(|e| Error::from(e.clone()).to_string())
+            .collect();
+        assert_eq!(all, own);
+        // The direct path, with `finish()` on the result, fails with the same errors.
+        assert_eq!(tl.result.clone().finish().unwrap_err().len(), 3);
+        assert!(resolved_at(&tl, &mut item.clone(), &[]).is_err());
     }
 
     #[test]
@@ -673,20 +645,21 @@ mod tests {
             struct S<T: Base> { a: Local, b: Wrap<'_>, t: T }
         };
         let tl = table_of(&item);
-        assert_eq!(tl.errors().len(), 2);
+        assert_eq!(tl.result.errors().len(), 2);
         // Allow by rule: the part is copied as written.
         let rule = |cause: &Cause, _: Place| cause.starts_with(&syn::parse_quote!(Base));
-        let one = tl.clone().allow(rule);
-        assert_eq!(one.errors().len(), 1);
-        assert_eq!(s(&one.errors()[0].cause), "Wrap<'_>");
+        let mut one = tl.clone();
+        one.result = one.result.allow(rule);
+        assert_eq!(one.result.errors().len(), 1);
+        assert_eq!(s(&one.result.errors()[0].cause), "Wrap<'_>");
+        assert!(one.resolve_into(&mut item.clone()).is_err());
         // Ignore one error: the whole part is copied as written.
-        let error = one.errors()[0].clone();
-        let none = one.ignore(&error);
-        assert!(none.errors().is_empty());
-        let mut it = item;
-        none.try_apply(&mut it).unwrap();
+        let error = one.result.errors()[0].clone();
+        let mut none = one;
+        none.result = none.result.ignore(&error);
+        assert!(none.result.errors().is_empty());
         let local = lookup(&none, syn::parse_quote!(Local)).unwrap();
-        let out = s(&it);
+        let out = s(resolved(&none, &item));
         assert!(
             out.contains(&format!("a:<()as::my::R<(),{}>>::Type", key(local))),
             "{}",
@@ -700,19 +673,44 @@ mod tests {
     }
 
     #[test]
+    fn ignore_if_picks_the_errors_that_a_closure_says() {
+        let item: Item = syn::parse_quote! {
+            struct S<T: Base> { a: Local, b: Wrap<'_>, t: T }
+        };
+        let tl = table_of(&item);
+        assert_eq!(tl.result.errors().len(), 2);
+        // The closure is asked about each error; the ones it picks are ignored.
+        let mut picked = tl.clone();
+        picked.result = picked.result.ignore_if(|e| s(&e.cause).starts_with("Wrap"));
+        assert_eq!(picked.result.errors().len(), 1);
+        assert_eq!(s(&picked.result.errors()[0].cause), "Base");
+        assert!(picked.resolve_into(&mut item.clone()).is_err());
+        // Once none remains, the table resolves, and the parts are written as they were.
+        let mut all = tl;
+        all.result = all.result.ignore_if(|_| true);
+        let out = s(resolved(&all, &item));
+        assert!(
+            out.contains("b:Wrap<'_>") && out.contains("T:Base"),
+            "{}",
+            out
+        );
+    }
+
+    #[test]
     fn types_to_replace_need_a_projection() {
         let item: Item = syn::parse_quote! { struct S { a: Local } };
         let mut tl = table_of(&item);
         tl.projection = None;
-        let err = tl.try_apply(&mut item.clone()).unwrap_err().to_string();
+        let err = tl.resolve_into(&mut item.clone()).unwrap_err().to_string();
         assert!(err.contains("no `repeater` and `id`"), "{}", err);
-        // Nothing to replace: nothing to write.
+        // Nothing to replace: nothing to write, and `Projection::unused()` is enough for a use
+        // site.
         let item: Item = syn::parse_quote! { struct S { a: u8 } };
         let mut tl = table_of(&item);
         tl.projection = None;
+        assert_eq!(s(resolved(&tl, &item)), s(&item));
         let mut it = item.clone();
-        tl.try_apply(&mut it).unwrap();
-        tl.try_apply_at(&mut it, &[]).unwrap();
+        resolved_at(&tl, &mut it, &[]).unwrap();
         assert_eq!(s(&it), s(&item));
     }
 
@@ -721,8 +719,42 @@ mod tests {
         // An entry that names `Self` has no impl for the marker: a META of another definer.
         let item: Item = syn::parse_quote! { struct S { a: inner::G<Self> } };
         let tl = table_of(&item);
-        assert_eq!(tl.entries().len(), 1);
-        let err = tl.try_apply(&mut item.clone()).unwrap_err().to_string();
+        assert_eq!(entries(&tl).len(), 1);
+        let err = tl.resolve_into(&mut item.clone()).unwrap_err().to_string();
         assert!(err.contains("needs `Self`"), "{}", err);
+    }
+
+    #[test]
+    fn item_resolved_is_the_table_applied_to_the_payload() {
+        use crate::helper::{Entry, Input};
+        let krate: Path = syn::parse_quote!(::announce);
+        let entry = |tl: &TypeLeak, item: &Item| -> Entry {
+            let meta = tl.meta();
+            let input: Input = syn::parse_quote! { [cb!] a::S! => [#meta] { #item } };
+            input.entries[0].clone()
+        };
+        let item: Item = syn::parse_quote! { struct S<T> { a: Local, b: Wrap<T>, c: u8 } };
+        let tl = table_of(&item);
+        let (out, check) = entry(&tl, &item).item_resolved(&krate).unwrap();
+        assert_eq!(s(&out), s(resolved(&tl, &item)));
+        assert!(!s(&out).contains("a:Local"), "{}", s(&out));
+        assert!(check.is_empty());
+        // The errors that remain are all reported at once, as one error each.
+        let item: Item = syn::parse_quote! { struct S<T: Base> { a: Local, b: Wrap<'_>, t: T } };
+        let tl = table_of(&item);
+        let err = entry(&tl, &item).item_resolved(&krate).unwrap_err();
+        assert_eq!(err.into_iter().count(), 2);
+        // An empty table, with no projection or with one, leaves the item as it is.
+        let item: Item = syn::parse_quote! { struct S { a: u8 } };
+        let mut tl = table_of(&item);
+        assert_eq!(
+            s(&entry(&tl, &item).item_resolved(&krate).unwrap().0),
+            s(&item)
+        );
+        tl.projection = None;
+        assert_eq!(
+            s(&entry(&tl, &item).item_resolved(&krate).unwrap().0),
+            s(&item)
+        );
     }
 }

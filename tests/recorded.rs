@@ -76,7 +76,8 @@ fn the_meta_records_every_cause_of_an_item() {
     assert_eq!(rows::ROWS_ERR, [true, true, false, true, false, false]);
 }
 
-// A table rewrites the item (`TypeLeak::try_apply`) and needs no check: the copy resolves anywhere.
+// A table rewrites the item (`Entry::item_resolved`) and needs no check: the copy resolves
+// anywhere.
 mod table {
     announce_tests::defs::leaky::Leaky! {
         [announce_tests::defs::leaky::Leaky!, announce_tests::derive::resolved_copy!] LeakyCopy

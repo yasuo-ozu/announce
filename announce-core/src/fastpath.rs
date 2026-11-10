@@ -81,14 +81,14 @@
 
 use crate::leak::PRELUDE;
 use crate::options::Options;
-use proc_macro2::{Span, TokenStream};
+use proc_macro2::TokenStream;
 use syn::visit::Visit;
 use syn::{
     Attribute, Expr, GenericArgument, GenericParam, Generics, Ident, Item, Lit, Macro, Pat, Path,
     PathArguments, Signature, TraitBound, TraitBoundModifier, TraitItem, Type, TypeParamBound,
     Visibility, WherePredicate,
 };
-use template_quote::{quote, ToTokens};
+use template_quote::{quote, quote_spanned, ToTokens};
 
 /// What the scan finds in an item that it accepts.
 pub(crate) struct Scan {
@@ -133,20 +133,25 @@ pub(crate) fn scan(item: &Item, opts: &Options) -> Option<Scan> {
 }
 
 /// `Leaker::assertions()` for `names`: the check that they are the primitives in the module
-/// where it is emitted. The same tokens as type-leak writes. Empty for no name.
+/// where it is emitted. The same tokens as type-leak writes, each check at the span of its name,
+/// so rustc reports a shadowed one there. Empty for no name.
 pub(crate) fn assertions(names: &[Ident]) -> TokenStream {
     if names.is_empty() {
         return TokenStream::new();
     }
+    let checks = names.iter().map(|ident| {
+        let name = Ident::new(
+            &format!("__type_leak_assert_{}_is_primitive", ident),
+            ident.span(),
+        );
+        quote_spanned! {ident.span() =>
+            fn #name(x: &#ident) -> &::core::primitive::#ident { x }
+        }
+    });
     quote! {
         #[allow(dead_code, non_snake_case)]
         const _: () = {
-            #(for ident in names) {
-                fn #{Ident::new(
-                    &format!("__type_leak_assert_{}_is_primitive", ident),
-                    Span::call_site(),
-                )}(x: &#ident) -> &::core::primitive::#ident { x }
-            }
+            #(#checks)*
         };
     }
 }

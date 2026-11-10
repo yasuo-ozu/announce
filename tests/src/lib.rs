@@ -576,20 +576,21 @@ pub mod derive {
     }
 
     /// Re-emits every entry's item, rewritten with its type-leak information
-    /// (`TypeLeak::try_apply`) when the definition has a repeater, and records the
+    /// (`Entry::item_resolved`) when the definition has a repeater, and records the
     /// META as `pub const <REST>: &[&str]`.
     #[proc_macro]
     pub fn apply_leak(input: TokenStream) -> TokenStream {
         announce::helper::callback(input.into(), |input| {
             let name: syn::Ident = input.rest_as()?;
+            let krate: syn::Path = syn::parse_quote!(::announce);
             let mut out = proc_macro2::TokenStream::new();
             let mut metas = Vec::new();
             for e in input.entries_in_order() {
-                let mut item = e.item()?;
-                if let Some(tl) = e.type_leak()? {
-                    // The errors of type-leak are reported here, at the consumer.
-                    tl.try_apply(&mut item)?;
-                }
+                // A record of `strict = false` is an error here (`item_resolved` would take the
+                // item as written).
+                e.type_leak()?;
+                // The errors of type-leak are reported here, at the consumer.
+                let (item, _) = e.item_resolved(&krate)?;
                 metas.push(
                     e.meta
                         .iter()
@@ -622,7 +623,9 @@ pub mod derive {
                     Some(tl) => {
                         let mut pairs = Vec::new();
                         let unit: syn::Type = syn::parse_quote!(());
-                        for (ix, ty, context) in tl.referrer().iter() {
+                        // The errors of type-leak are ignored in a copy, to list the entries.
+                        let referrer = tl.result.clone().ignore_if(|_| true).finish()?;
+                        for (ix, ty, context) in referrer.iter() {
                             let projection = tl.projection.as_ref().ok_or_else(|| {
                                 syn::Error::new(proc_macro2::Span::call_site(), "no repeater")
                             })?;
@@ -659,12 +662,13 @@ pub mod derive {
     /// `table_errors! { [..] NAME }`: `pub const NAME: &[&str]` has a row for every entry: `"-"`
     /// without a `type_leak(..)` table, else `"CAUSES/APPLY/ALLOWED"`: the causes of the errors of
     /// type-leak that remain in it (`|` between them, spaces left out), then `ok` or `error` for
-    /// `TypeLeak::try_apply` on the item as written, and for the same after `allow` of every
-    /// error (the consumer promises that the parts compile as written).
+    /// `Entry::item_resolved` on the item as written, and for `finish()` of the result after
+    /// `allow` of every error (the consumer promises that the parts compile as written).
     #[proc_macro]
     pub fn table_errors(input: TokenStream) -> TokenStream {
         announce::helper::callback(input.into(), |input| {
             let name: syn::Ident = input.rest_as()?;
+            let krate: syn::Path = syn::parse_quote!(::announce);
             let squash = |t: TokenStream2| t.to_string().split_whitespace().collect::<String>();
             let mut rows = Vec::new();
             for e in input.entries_in_order() {
@@ -672,19 +676,22 @@ pub mod derive {
                     None => "-".to_string(),
                     Some(tl) => {
                         let causes: Vec<String> = tl
+                            .result
                             .errors()
                             .iter()
                             .map(|x| squash(x.cause.to_token_stream()))
                             .collect();
-                        let verdict = |r: syn::Result<()>| if r.is_ok() { "ok" } else { "error" };
-                        let applied = verdict(tl.try_apply(&mut e.item()?));
-                        let all = tl.clone().allow(
+                        let verdict = |ok: bool| if ok { "ok" } else { "error" };
+                        // An item that does not parse fails the macro, not the verdict.
+                        e.item()?;
+                        let applied = verdict(e.item_resolved(&krate).is_ok());
+                        let all = tl.result.clone().allow(
                             |_: &announce::helper::type_leak::Cause,
                              _: announce::helper::type_leak::Place| {
                                 true
                             },
                         );
-                        let allowed = verdict(all.try_apply(&mut e.item()?));
+                        let allowed = verdict(all.finish().is_ok());
                         format!("{}/{}/{}", causes.join("|"), applied, allowed)
                     }
                 });

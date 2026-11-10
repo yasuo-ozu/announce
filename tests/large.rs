@@ -690,7 +690,7 @@ macro_rules! impl_methods {
 #[test]
 fn type_leak_with_a_large_item() {
     use announce_tests::defs::large_leak::inner::Local;
-    // `Local` is not in scope in `leaked::s`; `TypeLeak::try_apply` resolves it.
+    // `Local` is not in scope in `leaked::s`; `Entry::item_resolved` resolves it.
     fn local_of(b: &leaked::s::BigLeaky<u8>) -> &Local {
         &b.a
     }

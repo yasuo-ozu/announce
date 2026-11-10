@@ -266,17 +266,20 @@ pub mod leak_not_carried {
 // A callback copies a primitive name as written (`u8`: `allow_primitive`, or the type of a const
 // parameter), so it means the primitive wherever the callback writes it. The definition checks
 // that its module has not shadowed the name (type-leak's `Leaker::assertions()`, which the fast
-// path writes too): `struct u8;` there is an error at the definition, at the `#[announce]` of each
-// item that copies it (rustc says that the primitive `u8` is not `shadows::u8`). Where nothing
-// shadows it, the same items compile.
+// path writes too): `struct u8;` there is an error at the definition, at the name in each item
+// that copies it (rustc says that the primitive `u8` is not `shadows::u8`). Each case has its own
+// primitive, so that `should_spanned` pins the position of each. Where nothing shadows them, the
+// same items compile.
 #[subcrate(
     ::announce,
     should_error = "mismatched types",
     should_error = "one `u8` is a primitive defined by the language",
+    should_error = "one `u16` is a primitive defined by the language",
+    should_error = "one `u32` is a primitive defined by the language",
     // The fast path, the analysis with a repeater, and a record.
-    should_spanned = "#[announce :: announce ]",
-    should_spanned = "#[announce :: announce (repeater = crate :: Repeater ) ]",
-    should_spanned = "#[announce :: announce (strict = false ) ]",
+    should_spanned = "u8",
+    should_spanned = "u16",
+    should_spanned = "u32",
     should_error = "aborting due to 3 previous errors\n"
 )]
 pub mod shadowed_primitive {
@@ -285,11 +288,13 @@ pub mod shadowed_primitive {
         pub struct Local;
     }
 
+    #[allow(non_camel_case_types)]
     mod shadows {
         use super::inner::Local;
 
-        #[allow(non_camel_case_types)]
         pub struct u8;
+        pub struct u16;
+        pub struct u32;
 
         // The fast path: nothing but primitives and absolute paths.
         #[announce::announce]
@@ -300,7 +305,7 @@ pub mod shadowed_primitive {
         // The analysis: a repeater carries `Local`, and the primitive stays as written.
         #[announce::announce(repeater = crate::Repeater)]
         pub struct Full {
-            pub a: u8,
+            pub a: u16,
             pub b: Local,
         }
 
@@ -308,7 +313,7 @@ pub mod shadowed_primitive {
         #[announce::announce(strict = false)]
         pub struct Recorded {
             pub a: Local,
-            pub b: u8,
+            pub b: u32,
         }
 
         // Without a primitive there is nothing to check.
@@ -328,21 +333,21 @@ pub mod shadowed_primitive {
 
         #[announce::announce(repeater = crate::Repeater)]
         pub struct Full {
-            pub a: u8,
+            pub a: u16,
             pub b: Local,
         }
 
         #[announce::announce(strict = false)]
         pub struct Recorded {
             pub a: Local,
-            pub b: u8,
+            pub b: u32,
         }
     }
 }
 
 // The errors of type-leak are the consumer's. Each definition compiles (the part that type-leak
 // cannot leak is copied as written, and travels in the table as an error); a callback that applies
-// the table (`apply_leak!` calls `TypeLeak::try_apply`) reports each at its tokens in the
+// the table (`apply_leak!` calls `Entry::item_resolved`) reports each at its tokens in the
 // definition, in type-leak's own words. With a `repeater` the table also has the impls, and
 // without one it has the errors only.
 #[subcrate(

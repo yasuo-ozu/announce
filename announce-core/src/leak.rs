@@ -20,8 +20,8 @@
 //! the part is copied as written and the analysis goes on. The errors are not
 //! announce's business. The definition never reports, rewords or records them: they
 //! travel in the META inside the `LeakerResult`, and the consumer decides, by
-//! reporting them ([`TypeLeak::try_apply`], `Entry::item_resolved`) or by allowing
-//! them (`TypeLeak::allow`, `TypeLeak::ignore`).
+//! reporting them (`Entry::item_resolved`) or by allowing them (type-leak's `allow`, `ignore`
+//! and `ignore_if` on `TypeLeak::result`).
 //!
 //! The analysis also gives the check of the primitive names (`Leaker::assertions()`): a
 //! primitive name that a callback copies as written (`u8`, with `Rules::primitive()` and as the
@@ -64,10 +64,11 @@
 //! errors that remain. `repeater` and `id` are there for a definition with `repeater = ..`.
 //! Without one, and with no entry but some errors, the META is
 //! `type_leak(context = .., result = [..])`, so that the consumer sees the errors. A
-//! callback rewrites the payload with it (`announce::helper::TypeLeak::try_apply`).
+//! callback rewrites the payload with it (`announce::helper::Entry::item_resolved`).
 //! An item that the analysis found nothing in has no META, unless it has a `repeater`
 //! (then the table is empty).
 
+use crate::helper::ignored_view;
 use crate::helper::{LeakError, LeakFailure, TypeLeak, ALIAS, NOT_PRIMITIVE, WITHOUT_REPEATER};
 use crate::options::Options;
 use proc_macro2::{Ident, Span, TokenStream};
@@ -110,7 +111,8 @@ pub enum Table {
 pub struct Analysis {
     /// What type-leak found: the entries and the errors.
     pub result: LeakerResult,
-    /// The `Referrer` of [`result`](Self::result), which has no accessor for it.
+    /// The `Referrer` of [`result`](Self::result), with its errors ignored (see
+    /// [`ignored_view`]): the entries that the impls are written for.
     pub referrer: Referrer,
     /// The top-level context of the item in `referrer`.
     pub context: ContextId,
@@ -308,7 +310,12 @@ fn intern(item: &Item, opts: &Options) -> Analysis {
     // generic named like a type): each has its own impl and its own arguments. The Referrer is of
     // what type-leak could intern, whatever it refused.
     let result = leaker.result();
-    let referrer = result.clone().into_referrer();
+    // The Referrer is needed while errors of type-leak remain, and `finish()` is the only way to
+    // it: look at it with every error ignored. That makes the parts whole, and removes only an
+    // entry that has an error of its own (`NestedSelfInBounds`, which needs a nested item that
+    // these `intern_*` calls never see), so the entries are those the impls are written for
+    // (`result.repeater_impls()`, on the result itself).
+    let referrer = ignored_view(&result);
     Analysis {
         result,
         referrer,
@@ -501,9 +508,10 @@ fn check_round_trip(meta: &TokenStream, table: &TypeLeak) -> Result<()> {
         (None, None) => true,
         _ => false,
     };
-    // The referrer and the errors, which the result does not compare as a whole.
-    let (a, b) = (read.result.into_parts(), table.result.clone().into_parts());
-    if projection && read.context == table.context && a == b {
+    // The result does not compare as a whole: its errors, and its Referrer the same way for both.
+    let same_result = read.result.errors() == table.result.errors()
+        && ignored_view(&read.result) == ignored_view(&table.result);
+    if projection && read.context == table.context && same_result {
         Ok(())
     } else {
         Err(syn::Error::new(
@@ -661,6 +669,14 @@ mod tests {
         let projection = TypeLeak::projection_of(syn::parse_quote!(crate::R), 42);
         let entry: type_leak::EntryId = syn::parse_str(&nth.to_string()).unwrap();
         format!("{}u128", projection.key(entry))
+    }
+
+    /// The entries of `table`, with its errors ignored in a copy.
+    fn entries(table: &TypeLeak) -> Vec<(type_leak::EntryId, Type)> {
+        ignored_view(&table.result)
+            .iter()
+            .map(|(entry, ty, _)| (entry, ty.clone()))
+            .collect()
     }
 
     /// The META of `it` that has no repeater, read back; `None` where it has no META.
@@ -864,7 +880,7 @@ mod tests {
         // The callback's copy has the projection in the value.
         let table: TypeLeak = syn::parse2(leaked(it.clone()).meta).unwrap();
         let mut copy = item(it);
-        table.apply(&mut copy);
+        table.resolve_into(&mut copy).unwrap();
         let key: TokenStream = key(0).parse().unwrap();
         assert_eq!(
             squash(&copy),
@@ -1528,8 +1544,8 @@ mod tests {
         );
         // The consumer reads it back, with nothing to replace.
         let read: TypeLeak = syn::parse2(leaked.meta).unwrap();
-        assert_eq!(read.entries().len(), 0);
-        assert!(read.errors().is_empty());
+        assert_eq!(entries(&read).len(), 0);
+        assert!(read.result.errors().is_empty());
     }
 
     #[test]
@@ -1540,8 +1556,8 @@ mod tests {
         let read: TypeLeak = syn::parse2(leaked.meta).unwrap();
         let impls = squash(&leaked.impls);
         // The impls are for the entries; `::other::X<u8>` is no entry.
-        assert_eq!(read.entries().len(), 2);
-        for (ix, ty) in read.entries() {
+        assert_eq!(entries(&read).len(), 2);
+        for (ix, ty) in entries(&read) {
             let nth = format!("{}>for()", key(ix.index()));
             assert!(impls.contains(&nth), "{}: {}", nth, impls);
             assert!(
@@ -1578,7 +1594,7 @@ mod tests {
                 );
             }
             let read = meta_of(it.clone(), &opts()).unwrap_or_else(|| panic!("a META: {}", it));
-            assert!(!read.errors().is_empty(), "{}", it);
+            assert!(!read.result.errors().is_empty(), "{}", it);
         }
     }
 
@@ -1600,11 +1616,11 @@ mod tests {
         assert!(meta.contains("@["), "{}", meta);
         let read: TypeLeak = syn::parse2(l.meta).unwrap();
         assert!(read.projection.is_none());
-        assert_eq!(read.errors().len(), 1);
-        assert_eq!(squash(&read.errors()[0].cause), "Base");
+        assert_eq!(read.result.errors().len(), 1);
+        assert_eq!(squash(&read.result.errors()[0].cause), "Base");
         // The consumer reports it, at the cause.
         let e = read
-            .try_apply(&mut item(quote! { struct S<T: Base>(T); }))
+            .resolve_into(&mut item(quote! { struct S<T: Base>(T); }))
             .unwrap_err();
         assert!(e.to_string().contains("use absolute path: 'Base'"), "{}", e);
     }
@@ -1614,7 +1630,7 @@ mod tests {
         for it in [quote! { type A = Self; }, quote! { type A = Wrap<'_>; }] {
             let read = meta_of(it.clone(), &opts()).unwrap();
             assert!(read.projection.is_none(), "{}", it);
-            assert_eq!(read.errors().len(), 1, "{}", it);
+            assert_eq!(read.result.errors().len(), 1, "{}", it);
         }
         // An alias with a relative type has the record, and no META.
         assert_eq!(causes(quote! { type A = Local; }), ["Local: alias"]);
@@ -1630,23 +1646,24 @@ mod tests {
         assert!(impls.contains("typeType=Local;"), "{}", impls);
         let read: TypeLeak = syn::parse2(l.meta).unwrap();
         assert!(read.projection.is_some());
-        assert_eq!(read.entries().len(), 1);
-        assert_eq!(read.errors().len(), 1);
-        assert_eq!(squash(&read.errors()[0].cause), "Wrap<'_>");
+        assert_eq!(entries(&read).len(), 1);
+        assert_eq!(read.result.errors().len(), 1);
+        assert_eq!(squash(&read.result.errors()[0].cause), "Wrap<'_>");
         // The consumer allows the part (it promises that it compiles as written), then the table
         // is ready.
-        let allowed = read
-            .clone()
+        let mut allowed = read.clone();
+        allowed.result = allowed
+            .result
             .allow(|cause: &Cause, _: Place| cause.starts_with(&syn::parse_quote!(Wrap)));
-        assert!(allowed.errors().is_empty());
+        assert!(allowed.result.errors().is_empty());
         let mut copy = item(it);
-        allowed.try_apply(&mut copy).unwrap();
+        allowed.resolve_into(&mut copy).unwrap();
         let key: TokenStream = key(0).parse().unwrap();
         assert_eq!(
             squash(&copy),
             squash(quote! { struct S { a: <() as crate::R<(), #key>>::Type, b: Wrap<'_> } })
         );
-        assert!(read.try_apply(&mut copy.clone()).is_err());
+        assert!(read.resolve_into(&mut copy.clone()).is_err());
     }
 
     #[test]
@@ -1663,7 +1680,7 @@ mod tests {
         assert_eq!(causes(it.clone()), ["Local: relative"]);
         let l = leaked(it.clone());
         let read: TypeLeak = syn::parse2(l.meta).unwrap();
-        let e = read.try_apply(&mut item(it)).unwrap_err();
+        let e = read.resolve_into(&mut item(it)).unwrap_err();
         // One error each, combined.
         let all: Vec<String> = e.into_iter().map(|e| e.to_string()).collect();
         assert_eq!(all.len(), 3, "{:?}", all);

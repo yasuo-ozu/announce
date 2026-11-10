@@ -1,5 +1,5 @@
 //! Repeater tables as a consumer sees them: the META, and the items re-emitted
-//! through `TypeLeak::try_apply` in modules where the relative types are not in scope.
+//! through `Entry::item_resolved` in modules where the relative types are not in scope.
 
 fn norm(s: &str) -> String {
     s.split_whitespace().collect()
@@ -277,9 +277,9 @@ mod errors {
 #[test]
 fn the_errors_of_type_leak_are_in_the_table_for_the_consumer() {
     // Newest first in the chain, oldest first in the rows: `OnlyErrors`, `Mixed`, `Clean`,
-    // `Nothing`. The errors are the causes in the definitions, as type-leak found them; `try_apply`
-    // fails with them, and works after the consumer allowed them. A table without errors applies
-    // as it is, and `Nothing` has no table.
+    // `Nothing`. The errors are the causes in the definitions, as type-leak found them;
+    // `item_resolved` fails with them, and works after the consumer allowed them. A table
+    // without errors applies as it is, and `Nothing` has no table.
     assert_eq!(
         errors::rows::ROWS,
         ["Base/error/ok", "Wrap<'_>/error/ok", "/ok/ok", "-"]

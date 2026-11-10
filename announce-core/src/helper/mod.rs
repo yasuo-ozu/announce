@@ -17,9 +17,9 @@
 //!   attributes.
 //! - Resolve relative types:
 //!   [`Entry::type_leak`] reads the [`TypeLeak`] table of a definition announced with
-//!   `repeater = ..`, which has the errors of type-leak too. [`TypeLeak::try_apply`] rewrites an
-//!   item so that its types resolve in any crate, and reports those errors
-//!   ([`TypeLeak::allow`] and [`TypeLeak::ignore`] accept them first).
+//!   `repeater = ..`, which has the errors of type-leak too. [`Entry::item_resolved`] rewrites an
+//!   item so that its types resolve in any crate, and reports those errors. To accept some
+//!   first, use type-leak's API on the table's [`result`](TypeLeak::result).
 //! - Use relative types as written: [`Entry::item_resolved`] gives the item, and with a
 //!   `strict = false` record ([`Entry::leak_failure`], [`LeakFailure`]) the check that fails
 //!   outside its module (`announce::same_context!`, [`same_context()`]).
@@ -47,6 +47,7 @@ pub use transformer::{signature_only, transformer};
 /// The version of `type-leak` that [`TypeLeak`] uses. Name it through this crate,
 /// so there is never a second, incompatible copy.
 pub use type_leak;
+pub(crate) use typeleak::ignored_view;
 pub use typeleak::TypeLeak;
 
 // The macros `callback!` and `transformer!` (kept for compatibility; the functions of
@@ -478,9 +479,10 @@ impl Entry {
 
     /// The `type_leak(..)` META of an entry announced with `repeater = ..`, or of an item without
     /// one that has errors of type-leak (and no relative type). Unknown keys are ignored.
-    /// The errors of type-leak that the table has are not reported here: [`TypeLeak::try_apply`]
-    /// reports them. A recorded failure ([`leak_failure`](Self::leak_failure)) is an error
-    /// ([`LeakFailure::to_error`]); [`item_resolved`](Self::item_resolved) uses the item as written.
+    /// The errors of type-leak that the table has are not reported here:
+    /// [`item_resolved`](Self::item_resolved) reports them. A recorded failure
+    /// ([`leak_failure`](Self::leak_failure)) is an error ([`LeakFailure::to_error`]);
+    /// [`item_resolved`](Self::item_resolved) uses the item as written.
     pub fn type_leak(&self) -> Result<Option<TypeLeak>> {
         if let Some(failure) = self.leak_failure()? {
             return Err(failure.to_error());
@@ -505,10 +507,11 @@ impl Entry {
     }
 
     /// The item as a callback emits it, and what goes next to it: with a table
-    /// ([`type_leak`](Self::type_leak)) the item rewritten by [`TypeLeak::try_apply`], or an
-    /// error if the table has errors of type-leak that remain (the item cannot be copied as it
-    /// is; to use it anyway, read the table with [`type_leak`](Self::type_leak) and
-    /// [`allow`](TypeLeak::allow) them); with a
+    /// ([`type_leak`](Self::type_leak)) the item with its entries written through the repeater, or
+    /// an error if the table has errors of type-leak that remain (all of them, each over its whole
+    /// cause; the item cannot be copied as it is. To use it anyway, read the table with
+    /// [`type_leak`](Self::type_leak) and use type-leak's API on its [`result`](TypeLeak::result):
+    /// `allow`, `ignore` or `ignore_if` them, then `finish` and `Referrer::visitor`); with a
     /// recorded failure ([`leak_failure`](Self::leak_failure)) the item as written and
     /// [`LeakFailure::assume_success`]; otherwise the item and no tokens. `krate` is the path of
     /// the `announce` crate where the tokens are emitted (`::announce`). The check is a
@@ -535,7 +538,7 @@ impl Entry {
             return Ok((item, failure.assume_success(krate)));
         }
         if let Some(table) = self.type_leak()? {
-            table.try_apply(&mut item)?;
+            table.resolve_into(&mut item)?;
         }
         Ok((item, TokenStream::new()))
     }
@@ -802,7 +805,7 @@ impl ToTokens for Entry {
 /// - `Length`: `type_leak(..)` is the table of the `repeater` ([`Entry::type_leak`]).
 ///   The item still says `Meters`, which only the defining crate can resolve;
 ///   the table is what a callback uses to write the type from anywhere
-///   ([`TypeLeak::try_apply`]).
+///   ([`Entry::item_resolved`]).
 /// - `Point`: `announce_test_derive::lib_check` is the check, `$crate::info(1)` is
 ///   `meta = crate::info(1)` (`crate` became `$crate`, so that the path resolves where
 ///   the callback runs), and `attrs(my_lib)` lists the attribute names that the
@@ -2077,12 +2080,10 @@ mod options_tests {
             fetch
         );
         let read = input.entries[0].type_leak().unwrap().unwrap();
-        assert_eq!(read.entries().len(), 2);
+        let referrer = |tl: &TypeLeak| tl.result.clone().finish().unwrap();
+        assert_eq!(referrer(&read).iter().count(), 2);
         assert_eq!(read.projection.as_ref().map(|p| p.id), Some(7));
-        assert_eq!(
-            read.result.clone().into_referrer(),
-            tl.result.clone().into_referrer()
-        );
+        assert_eq!(referrer(&read), referrer(&tl));
         let plain: Input = syn::parse_quote! { [me!] a::F! => [] { struct F; } };
         assert!(!plain.has_option("type_leak"));
         assert!(plain.entries[0].type_leak().unwrap().is_none());

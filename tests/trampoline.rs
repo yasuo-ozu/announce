@@ -358,7 +358,7 @@ fn type_leak_info_lets_callbacks_resolve_local_types() {
         "{}",
         raw
     );
-    // `Local` is not in scope in `leaked::s`; `TypeLeak::try_apply` resolves it.
+    // `Local` is not in scope in `leaked::s`; `Entry::item_resolved` resolves it.
     let v = leaked::s::Leaky::<u32> {
         a: Local(1),
         b: vec![2],
