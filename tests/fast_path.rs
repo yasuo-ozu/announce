@@ -1,5 +1,7 @@
 //! The fast path of the type-context analysis (`announce-core`'s `fastpath`) must never
-//! accept an item that the full analysis would reject or need an entry for. The tests ask it
+//! accept an item that the full analysis would reject or need an entry for, and it must check
+//! the same primitive names as the analysis does (type-leak's `Leaker::assertions()`, which the
+//! definition emits; the order may differ). The tests ask it
 //! about the items of the repository's own sources, a list of shapes, and random items;
 //! `announce_core::check_fast_path` runs the full analysis on each and says when they disagree.
 //!
@@ -304,6 +306,61 @@ fn the_analysis_agrees_on_the_listed_items() {
     }
 }
 
+/// Items that name primitives in ways that may make the fast path and type-leak differ on the
+/// check of the primitive names (`Leaker::assertions()`), which `check_fast_path` compares
+/// (the same names, in any order) for every item that the fast path accepts.
+const PRIMITIVE_FORMS: &[&str] = &[
+    "struct S { a: u8 }",
+    "struct S { a: u8, b: u8, c: ::std::vec::Vec<u8>, d: [u16; 3] }",
+    "struct S(*const bool, &'static str, (char, f32), fn(i8) -> u128);",
+    "enum E { A(u8) = 1, B { b: isize } = 2, C }",
+    "union U { a: u8, b: f64 }",
+    "type A = ::core::option::Option<u8>;",
+    "type A<const N: u8> = [bool; 3];",
+    // A name that is a generic, or that the item has.
+    "struct S<u8> { a: u8 }",
+    "struct S<T, u8> { a: (T, u8) }",
+    "struct S<const N: u8> { a: [u8; N] }",
+    "struct S<const u8: usize> { a: u8, b: [u8; u8] }",
+    "struct S<const Vec: usize>(Vec<u8>);",
+    "struct u8 { a: u8 }",
+    "struct S<const N: u8 = 3, const M: bool = true>;",
+    // Const parameters: `str`, `f32` and `f64` are no const generic types, and `char` is.
+    "struct S<const N: char>;",
+    "struct S<const N: f32>;",
+    "struct S<const N: f64, const M: str>;",
+    "struct S<const N: ::core::primitive::u8>;",
+    // Traits: methods, associated items and bounds.
+    "trait Tr { fn f(&self, a: u8) -> bool; fn g(&self) -> &str; }",
+    "trait Tr { fn f<const N: u8>(&self) -> [u8; N]; }",
+    "trait Tr { fn f<const N: f32>(&self); }",
+    "trait Tr { const C: u8; const D: u16 = 3; }",
+    "trait Tr { type A: ::core::convert::Into<u8> = u8; }",
+    "trait Tr { type G<const N: u8>; }",
+    "trait Tr { const C<const N: u8>: u8; }",
+    "trait Tr<T = u8> { fn f(&self, t: T); }",
+    "trait Tr<const N: i64 = 3> { fn f(&self) -> [i64; N]; }",
+    "trait Tr { fn f<F: ::core::ops::Fn(u8) -> u16>(&self, f: F) -> u32 where F: ::core::marker::Sized; }",
+    "trait Tr { fn f<I: ::core::iter::Iterator<Item = i32>>(&self, i: I); }",
+    "trait Tr { fn f(&self, g: fn(u8, bool) -> char); }",
+    "struct S<T: ::core::convert::From<u8>> where T: ::core::ops::Add<u16, Output = u32> { a: T }",
+    "struct S<'a>(&'a u8, &'a mut str);",
+    "trait Tr { fn f(&self) -> u8 { helper::<u16>() } }",
+    "struct S { a: Local, b: u8 }",
+];
+
+#[test]
+fn the_names_of_the_primitive_check_agree_on_these_forms() {
+    let items: Vec<Item> = PRIMITIVE_FORMS.iter().map(|s| item(s)).collect();
+    let (accepted, seen) = agree_on(items);
+    assert!(
+        accepted > seen / 3 && accepted < seen,
+        "{} of {}",
+        accepted,
+        seen
+    );
+}
+
 #[test]
 fn a_module_is_not_analysed() {
     // Accepted, and the analysis agrees: it has no entry and no error for a module.
@@ -349,7 +406,9 @@ struct Ctx {
     good: usize,
 }
 
-const PRIMS: &[&str] = &["u8", "u32", "bool", "char", "str", "f64", "usize", "i128"];
+const PRIMS: &[&str] = &[
+    "u8", "u32", "bool", "char", "str", "f32", "f64", "usize", "i8", "i128",
+];
 const GOOD_PATHS: &[&str] = &[
     "::std::string::String",
     "::core::marker::PhantomData<u8>",
@@ -528,7 +587,20 @@ fn gen_generics(r: &mut Rng, c: &mut Ctx, allow_lifetime: bool) -> String {
         params.push(p);
     }
     if r.chance(25) {
-        let ty = r.pick(&["usize", "u8", "bool", "Idx", "crate::Idx"]);
+        // `f32` and `str` are no type of a const generic, and type-leak does not copy them as one
+        // (the fast path must not either). `::core::primitive::u8` is no name that can be shadowed.
+        let ty = r.pick(&[
+            "usize",
+            "u8",
+            "bool",
+            "char",
+            "i16",
+            "f32",
+            "str",
+            "::core::primitive::u8",
+            "Idx",
+            "crate::Idx",
+        ]);
         let default = if r.chance(30) { " = 3" } else { "" };
         params.push(format!("const N: {}{}", ty, default));
         c.consts.push("N");

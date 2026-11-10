@@ -92,7 +92,8 @@
 /// - `repeater = crate::Repeater`: lets the item use types that do not resolve in
 ///   other crates. See [Type context](#type-context).
 /// - `allow_primitive = bool`: primitive types (`u8`, `bool`, `str`, ...) need no
-///   repeater. Default: `true`.
+///   repeater. Default: `true`. They are copied as written, so the definition checks
+///   that its module has not shadowed them: see [Type context](#type-context).
 /// - `allow_std_prelude = bool`: bare std prelude names (`String`, `Vec<u8>`,
 ///   `Option<T>`, `Clone`, ...) need no repeater. Default: `false`.
 /// - `emit_item = bool`: with `false`, emit only the trampoline, not the item.
@@ -410,6 +411,17 @@
 ///
 /// A type built only from these is fine too: `(u8, bool)`, `&'static str`,
 /// `[u8; 4]`, `fn(u8) -> bool`, `::std::boxed::Box<T>`.
+///
+/// A primitive name is copied as written, and means the primitive in the module of the
+/// callback. It is not the primitive in a module that defines its own `u8`
+/// (`struct u8;`). So `#[announce]` emits type-leak's check
+/// (`Leaker::assertions()`) that the primitive names the item copies as written are the
+/// primitives in the module of the definition, and a `struct u8;` there is an error at the
+/// definition (`mismatched types`, at the `#[announce]`). The names are the primitive types
+/// that `allow_primitive` lets pass, and the type of a const parameter (`const N: u8`)
+/// whatever `allow_primitive` says. The check is a `const _` item with one small function
+/// for each name, and there is none for an item without such a name. An item that the fast
+/// path accepts gets the same check.
 ///
 /// Everything else is *relative*: a `Local` imported by a `use`, `super::X`, and
 /// `std::vec::Vec<u8>` without the leading `::`. A bare `Vec<u8>` is relative unless

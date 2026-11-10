@@ -31,6 +31,9 @@
   everywhere, which works in the module of the item.
 - `announce::helper::try_same_context`, `same_context` with the error returned as a `syn::Error`.
 - `announce::machinery::Options::strict` (default `true`), the field that `strict = false` sets.
+- `#[announce]` emits type-leak's check (`Leaker::assertions()`) that the primitive names a
+  callback copies as written (`u8`) are the primitives in the definition's module: a
+  `struct u8;` there is an error at the definition. The fast path writes the same check.
 
 ### Changed
 

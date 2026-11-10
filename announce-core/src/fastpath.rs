@@ -3,7 +3,7 @@
 //! `leak::analyze` runs type-leak over the whole item, which is by far the most
 //! expensive step of the `Capture` derive for an item with many methods. Most items
 //! need none of it: every path in them is one that resolves everywhere, so
-//! type-leak finds nothing to carry and nothing to report. [`accepts`] reads
+//! type-leak finds nothing to carry and nothing to report. [`scan`] reads
 //! the item once, with a visitor that knows only the forms below, and says
 //! whether that is certainly so. When it is not sure it says no, and the full
 //! analysis runs as before: the scan never decides an error, and it must never
@@ -11,6 +11,24 @@
 //! (`tests/fast_path.rs` checks this, through `check_fast_path`, on the items of the
 //! test suites and on random items, and the analysis checks it again on every item it
 //! sees in a test build of this crate).
+//!
+//! # The check of the primitive names
+//!
+//! A primitive name that a callback copies as written (`u8`, with `allow_primitive`, and as the
+//! type of a const parameter `const N: u8`) means the primitive there, and the module of the
+//! definition may shadow it (`struct u8;`). type-leak's `Leaker::assertions()` is the check for
+//! that, which `#[announce]` emits at the definition. An item that the scan accepts is not given
+//! to type-leak, so the scan collects the same names ([`Scan::primitives`]) as it reads: each
+//! once by text, in the order seen, with the span of its first occurrence. [`assertions`] writes
+//! the same tokens as type-leak. `compare` checks that they are the analysis's, name for name
+//! (the order may differ). Two details come from type-leak:
+//!
+//! - A const parameter of `str`, `f32` or `f64` adds no name: type-leak copies the type of a
+//!   const parameter as written only if it can be a const generic, which these cannot on
+//!   stable Rust.
+//! - A const parameter that is named like a type is no primitive type (type-leak reads
+//!   `u8` as that parameter), so the scan declines a type path with the name of a const
+//!   parameter in scope.
 //!
 //! # What is accepted
 //!
@@ -35,9 +53,12 @@
 //!     that declares the scope, alone or with one associated type (`T::Output`);
 //!   - a primitive type, with `allow_primitive` (as type-leak's `Rules::primitive()`
 //!     lists them: `bool`, `char`, `str`, `u8`..`u128`, `usize`, `i8`..`i128`,
-//!     `isize`, `f32`, `f64`);
+//!     `isize`, `f32`, `f64`), unless a const parameter in scope has its name
+//!     (`const u8: usize`: type-leak reads it as that parameter);
 //!   - a name of the std prelude ([`crate::leak::PRELUDE`]), with
-//!     `allow_std_prelude`, with arguments that are accepted types.
+//!     `allow_std_prelude`, with arguments that are accepted types, unless a const
+//!     parameter in scope has its name (`const Vec: usize`: type-leak reads it as that
+//!     parameter and carries the type).
 //! - A lifetime is `'static` or declared by the item, the method or the associated
 //!   type that it is in; it is not `'_`.
 //! - A trait bound has no `for<..>` and is a path of `std`, `core` or `alloc`
@@ -60,18 +81,28 @@
 
 use crate::leak::PRELUDE;
 use crate::options::Options;
+use proc_macro2::{Span, TokenStream};
 use syn::visit::Visit;
 use syn::{
     Attribute, Expr, GenericArgument, GenericParam, Generics, Ident, Item, Lit, Macro, Pat, Path,
     PathArguments, Signature, TraitBound, TraitBoundModifier, TraitItem, Type, TypeParamBound,
     Visibility, WherePredicate,
 };
-use template_quote::ToTokens;
+use template_quote::{quote, ToTokens};
+
+/// What the scan finds in an item that it accepts.
+pub(crate) struct Scan {
+    /// The primitive names that a callback copies as written, as type-leak's
+    /// `Leaker::assertions()` has them: each once by text, in the order first seen, with the
+    /// span of its first occurrence.
+    pub primitives: Vec<Ident>,
+}
 
 /// Whether every path in `item` certainly resolves everywhere, so that
-/// type-leak would find no entry and no error. Independent of
-/// `repeater`: with one, the caller still needs the table, and runs the full analysis.
-pub(crate) fn accepts(item: &Item, opts: &Options) -> bool {
+/// type-leak would find no entry and no error, and the names that it would copy as written.
+/// Independent of `repeater`: with one, the caller still needs the table, and runs the full
+/// analysis.
+pub(crate) fn scan(item: &Item, opts: &Options) -> Option<Scan> {
     let mut v = Fast {
         ok: true,
         allow_primitive: opts.allow_primitive,
@@ -81,16 +112,43 @@ pub(crate) fn accepts(item: &Item, opts: &Options) -> bool {
         in_bound: 0,
         in_type: 0,
         scopes: Vec::new(),
+        seen: 0,
+        primitives: Vec::new(),
     };
     match item {
         // Not analysed.
-        Item::Mod(_) => return true,
+        Item::Mod(_) => {
+            return Some(Scan {
+                primitives: v.primitives,
+            })
+        }
         Item::Struct(_) | Item::Enum(_) | Item::Union(_) | Item::Trait(_) | Item::Type(_) => {
             v.visit_item(item)
         }
-        _ => return false,
+        _ => return None,
     }
-    v.ok
+    v.ok.then(|| Scan {
+        primitives: v.primitives,
+    })
+}
+
+/// `Leaker::assertions()` for `names`: the check that they are the primitives in the module
+/// where it is emitted. The same tokens as type-leak writes. Empty for no name.
+pub(crate) fn assertions(names: &[Ident]) -> TokenStream {
+    if names.is_empty() {
+        return TokenStream::new();
+    }
+    quote! {
+        #[allow(dead_code, non_snake_case)]
+        const _: () = {
+            #(for ident in names) {
+                fn #{Ident::new(
+                    &format!("__type_leak_assert_{}_is_primitive", ident),
+                    Span::call_site(),
+                )}(x: &#ident) -> &::core::primitive::#ident { x }
+            }
+        };
+    }
 }
 
 /// The names a scope declares: type parameters, const parameters and lifetimes.
@@ -112,6 +170,11 @@ struct Fast {
     /// Inside a type (not in a bound alone, nor in the value of a discriminant).
     in_type: usize,
     scopes: Vec<Scope>,
+    /// The names in `primitives`, as bits (the index in [`PRIMITIVES`]), so that none is
+    /// compared as text.
+    seen: u32,
+    /// The primitive names that are copied as written, see [`Scan::primitives`].
+    primitives: Vec<Ident>,
 }
 
 pub(crate) const PRIMITIVES: &[&str] = &[
@@ -229,13 +292,28 @@ impl Fast {
     }
 
     /// Whether `ty` is a path to a primitive type that `allow_primitive` admits,
-    /// the only type of a const parameter that is accepted.
-    fn is_primitive(&self, p: &Path) -> bool {
-        self.allow_primitive
+    /// the only type of a const parameter that is accepted. `Some` with its index in
+    /// [`PRIMITIVES`].
+    fn primitive(&self, p: &Path) -> Option<usize> {
+        if self.allow_primitive
             && p.leading_colon.is_none()
             && p.segments.len() == 1
             && p.segments[0].arguments.is_empty()
-            && is_one_of(&p.segments[0].ident, PRIMITIVES)
+        {
+            let name = p.segments[0].ident.to_string();
+            PRIMITIVES.iter().position(|n| *n == name)
+        } else {
+            None
+        }
+    }
+
+    /// Notes that the primitive name `index` of [`PRIMITIVES`], written as `ident`, is copied as
+    /// written.
+    fn note(&mut self, index: usize, ident: &Ident) {
+        if self.seen & (1 << index) == 0 {
+            self.seen |= 1 << index;
+            self.primitives.push(ident.clone());
+        }
     }
 
     fn type_path(&mut self, p: &Path) {
@@ -274,8 +352,14 @@ impl Fast {
         if n != 1 {
             return self.reject();
         }
-        if self.is_primitive(p) {
-            return;
+        // A const parameter that is named like a type (`const u8: usize`, `const Vec: usize`):
+        // type-leak reads the name as a generic and not as the type it is in the type
+        // namespace (it is no primitive to check, and no prelude name), so the analysis decides.
+        if self.is_const_param(&first.ident) {
+            return self.reject();
+        }
+        if let Some(index) = self.primitive(p) {
+            return self.note(index, &first.ident);
         }
         if self.allow_prelude && is_one_of(&first.ident, PRELUDE) {
             return self.visit_arguments(p);
@@ -475,7 +559,16 @@ impl<'ast> Visit<'ast> for Fast {
                 }
                 GenericParam::Const(c) => {
                     match &c.ty {
-                        Type::Path(t) if t.qself.is_none() && self.is_primitive(&t.path) => {}
+                        Type::Path(t) if t.qself.is_none() => match self.primitive(&t.path) {
+                            // type-leak copies the type of a const parameter as written if it
+                            // can be one on stable Rust, and `str`, `f32` and `f64` cannot.
+                            Some(index) => {
+                                if !matches!(PRIMITIVES[index], "str" | "f32" | "f64") {
+                                    self.note(index, &t.path.segments[0].ident);
+                                }
+                            }
+                            None => self.reject(),
+                        },
                         _ => self.reject(),
                     }
                     if let Some(e) = &c.default {
@@ -615,18 +708,54 @@ impl<'ast> Visit<'ast> for Fast {
     }
 }
 
-/// What [`accepts`] says of `item`, checked against `result`, the full analysis of
-/// the same item: an item that is accepted must have no entry and no error.
+/// A check (`Leaker::assertions()`, or [`assertions`]) as what its order does not change: the
+/// head of the `const`, and each function as text, sorted.
+fn check_parts(check: &TokenStream) -> Result<Vec<String>, String> {
+    if check.is_empty() {
+        return Ok(Vec::new());
+    }
+    let c: syn::ItemConst =
+        syn::parse2(check.clone()).map_err(|e| format!("not a check ({}): {}", e, check))?;
+    let stmts = match &*c.expr {
+        Expr::Block(b) => &b.block.stmts,
+        _ => return Err(format!("not a check: {}", check)),
+    };
+    let mut parts: Vec<String> = stmts
+        .iter()
+        .map(|s| s.to_token_stream().to_string())
+        .collect();
+    parts.sort();
+    let attrs: Vec<String> = c
+        .attrs
+        .iter()
+        .map(|a| a.to_token_stream().to_string())
+        .collect();
+    parts.insert(
+        0,
+        format!(
+            "{} const {} : {}",
+            attrs.join(" "),
+            c.ident,
+            c.ty.to_token_stream()
+        ),
+    );
+    Ok(parts)
+}
+
+/// What [`scan`] says of `item`, checked against `result`, the full analysis of
+/// the same item: an item that is accepted must have no entry and no error, and the check of
+/// the primitive names is the analysis's (the same names; the order may differ).
 /// `Ok(accepted)` when they agree; `Err` with a message when the fast path accepted an
-/// item that the analysis needs an entry for or rejects.
+/// item that the analysis needs an entry for or rejects, or whose check differs.
 pub(crate) fn compare(
     item: &Item,
     opts: &Options,
     result: &Option<crate::leak::Analysis>,
 ) -> Result<bool, String> {
-    if !accepts(item, opts) {
-        return Ok(false);
-    }
+    let scan = match scan(item, opts) {
+        Some(scan) => scan,
+        None => return Ok(false),
+    };
     if let Some(analysis) = result {
         if let Some((ix, ty, _)) = analysis.entries().next() {
             return Err(format!(
@@ -644,10 +773,23 @@ pub(crate) fn compare(
             ));
         }
     }
+    // An item that is not analysed (a module) has no check.
+    let wanted = result
+        .as_ref()
+        .map_or_else(TokenStream::new, |a| a.assertions.clone());
+    let written = assertions(&scan.primitives);
+    if check_parts(&written)? != check_parts(&wanted)? {
+        return Err(format!(
+            "the fast path checks other primitive names than the analysis does:\n  fast: {}\n  full: {}\n{}",
+            written,
+            wanted,
+            item.to_token_stream()
+        ));
+    }
     Ok(true)
 }
 
-/// In a test build, the full analysis checks every answer of [`accepts`] that it
+/// In a test build, the full analysis checks every answer of [`scan`] that it
 /// is given the item for (`leak::analyze`), with [`compare`].
 #[cfg(test)]
 pub(crate) fn check_analysis(item: &Item, opts: &Options, result: &Option<crate::leak::Analysis>) {

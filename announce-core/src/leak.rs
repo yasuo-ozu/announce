@@ -23,6 +23,16 @@
 //! reporting them ([`TypeLeak::try_apply`], `Entry::item_resolved`) or by allowing
 //! them (`TypeLeak::allow`, `TypeLeak::ignore`).
 //!
+//! The analysis also gives the check of the primitive names (`Leaker::assertions()`): a
+//! primitive name that a callback copies as written (`u8`, with `Rules::primitive()` and as the
+//! type of a const parameter; also in a part that an error makes copied as written) means the
+//! primitive there, and the module of the definition may shadow it (`struct u8;`). The check is a
+//! `const _` item that does not compile in such a module. It is emitted at the definition
+//! whenever the item is analysed, with a table ([`Table::Leaked`]), without one, and with a
+//! record ([`Table::Failed`], `strict = false`): [`Outcome::assertions`]. An item that the fast
+//! path accepts is not analysed, and gets the same check from the names that the scan sees
+//! (`fastpath`).
+//!
 //! announce's own failures are these, and each is an error at the definition (or,
 //! with `strict = false`, a `type_leak_error(..)` record, see [`Table::Failed`]):
 //! - an entry without a `repeater = ..` ([`WITHOUT_REPEATER`]), or in a type alias
@@ -74,7 +84,19 @@ pub struct Leaked {
     pub meta: TokenStream,
 }
 
-/// What [`table`] makes of an item that is analysed.
+/// What [`table`] makes of an item: the table, and the check that goes with the definition.
+#[derive(Default)]
+pub struct Outcome {
+    /// The table, or the record of why there is none; `None` where the item has nothing for a
+    /// table to carry.
+    pub table: Option<Table>,
+    /// type-leak's check that the primitive names that a callback copies as written (`u8`) are
+    /// the primitives in the module of the definition (`Leaker::assertions()`). Empty where none
+    /// is copied. It belongs to the definition whatever `table` is, also a record.
+    pub assertions: TokenStream,
+}
+
+/// What an item that is analysed gets in the META: see [`Outcome::table`].
 pub enum Table {
     /// The impls and the `type_leak(..)` META of an item with a `repeater`, or the META alone
     /// of an item without one that has errors of type-leak and no entry.
@@ -92,6 +114,9 @@ pub struct Analysis {
     pub referrer: Referrer,
     /// The top-level context of the item in `referrer`.
     pub context: ContextId,
+    /// `Leaker::assertions()`: the check that the primitive names copied as written are not
+    /// shadowed in the module of the item, to emit there. Empty if none is.
+    pub assertions: TokenStream,
 }
 
 impl Analysis {
@@ -277,6 +302,8 @@ fn intern(item: &Item, opts: &Options) -> Analysis {
         }
         _ => unreachable!("`analyze_full` passes the analysed items only"),
     };
+    // `result()` consumes the Leaker, so the check of the primitive names is taken first.
+    let assertions = leaker.assertions();
     // The same type text is one entry per context (method generics with different bounds, a
     // generic named like a type): each has its own impl and its own arguments. The Referrer is of
     // what type-leak could intern, whatever it refused.
@@ -286,6 +313,7 @@ fn intern(item: &Item, opts: &Options) -> Analysis {
         result,
         referrer,
         context,
+        assertions,
     }
 }
 
@@ -372,7 +400,9 @@ fn failed(item: &Item, random: u64, errors: Vec<LeakError>) -> Result<Option<Tab
 }
 
 /// Enforces `repeater` when it is needed, and builds the table, or records why there is none.
-pub fn table(item: &Item, opts: &crate::options::Options, random: u64) -> Result<Option<Table>> {
+/// The check of type-leak that the primitive names are not shadowed (`Leaker::assertions()`) is
+/// of the analysis, so it is in the outcome for every item that is analysed.
+pub fn table(item: &Item, opts: &crate::options::Options, random: u64) -> Result<Outcome> {
     let repeater = opts.repeater.as_ref();
     // Type aliases are not a type-leak target: their right-hand side must be
     // written with paths that resolve everywhere.
@@ -382,7 +412,7 @@ pub fn table(item: &Item, opts: &crate::options::Options, random: u64) -> Result
             "`repeater` is not supported on type aliases; write the right-hand side with absolute paths",
         ));
     }
-    let analysis = match (analyze(item, opts), repeater) {
+    let mut analysis = match (analyze(item, opts), repeater) {
         (Some(analysis), _) => analysis,
         (None, Some(a)) => {
             return Err(syn::Error::new_spanned(
@@ -390,8 +420,20 @@ pub fn table(item: &Item, opts: &crate::options::Options, random: u64) -> Result
                 "`repeater` is supported on struct, enum, union and trait items",
             ))
         }
-        (None, None) => return Ok(None),
+        (None, None) => return Ok(Outcome::default()),
     };
+    let assertions = std::mem::take(&mut analysis.assertions);
+    let table = tabulate(item, repeater, random, analysis)?;
+    Ok(Outcome { table, assertions })
+}
+
+/// The table of `analysis`, the analysis of `item`.
+fn tabulate(
+    item: &Item,
+    repeater: Option<&Path>,
+    random: u64,
+    analysis: Analysis,
+) -> Result<Option<Table>> {
     let repeater = match repeater {
         Some(repeater) => repeater,
         None => {
@@ -568,7 +610,7 @@ mod tests {
     /// What `table` records for `it`, as `tokens: reason` for each cause; nothing if it
     /// builds a table or finds nothing.
     fn causes_with(it: TokenStream, o: &Options) -> Vec<String> {
-        match table(&item(it), o, 1).unwrap() {
+        match table(&item(it), o, 1).unwrap().table {
             Some(Table::Failed(f)) => f
                 .errors
                 .iter()
@@ -584,7 +626,7 @@ mod tests {
 
     /// The record of `it`, or a panic.
     fn record(it: TokenStream, o: &Options) -> LeakFailure {
-        match table(&item(it), o, 99).unwrap() {
+        match table(&item(it), o, 99).unwrap().table {
             Some(Table::Failed(f)) => f,
             _ => panic!("a record"),
         }
@@ -608,7 +650,7 @@ mod tests {
 
     /// The table of `it` with the repeater `crate::R` and the id 42.
     fn leaked(it: TokenStream) -> Leaked {
-        match table(&item(it), &with_repeater(), 42).unwrap() {
+        match table(&item(it), &with_repeater(), 42).unwrap().table {
             Some(Table::Leaked(l)) => l,
             _ => panic!("a table"),
         }
@@ -623,7 +665,7 @@ mod tests {
 
     /// The META of `it` that has no repeater, read back; `None` where it has no META.
     fn meta_of(it: TokenStream, o: &Options) -> Option<TypeLeak> {
-        match table(&item(it), o, 42).unwrap() {
+        match table(&item(it), o, 42).unwrap().table {
             Some(Table::Leaked(l)) => Some(syn::parse2(l.meta).unwrap()),
             Some(Table::Failed(_)) => panic!("a record"),
             None => None,
@@ -706,7 +748,7 @@ mod tests {
             quote! { type A = u8; },
             quote! { type A<T> = ::std::vec::Vec<T>; },
         ] {
-            assert!(table(&item(it), &opts(), 1).unwrap().is_none());
+            assert!(table(&item(it), &opts(), 1).unwrap().table.is_none());
         }
     }
 
@@ -737,7 +779,7 @@ mod tests {
     fn modules_and_functions_are_not_analysed() {
         let m = item(quote! { mod m { pub struct S { a: Local } } });
         assert!(analyze(&m, &opts()).is_none());
-        assert!(table(&m, &opts(), 1).unwrap().is_none());
+        assert!(table(&m, &opts(), 1).unwrap().table.is_none());
         let e = table(&m, &with_repeater(), 1).err().unwrap().to_string();
         assert!(
             e.contains("`repeater` is supported on struct, enum, union and trait items"),
@@ -1198,7 +1240,7 @@ mod tests {
     #[test]
     fn nothing_to_carry_gives_no_table_without_repeater() {
         let it = item(quote! { struct S { a: u8, b: crate::X, c: ::std::string::String } });
-        assert!(table(&it, &opts(), 1).unwrap().is_none());
+        assert!(table(&it, &opts(), 1).unwrap().table.is_none());
     }
 
     #[test]
@@ -1543,7 +1585,7 @@ mod tests {
     #[test]
     fn errors_without_entries_are_a_meta_without_a_repeater() {
         let it = quote! { struct S<T: Base>(T); };
-        let l = match table(&item(it), &opts(), 42).unwrap() {
+        let l = match table(&item(it), &opts(), 42).unwrap().table {
             Some(Table::Leaked(l)) => l,
             _ => panic!("a table"),
         };

@@ -263,6 +263,83 @@ pub mod leak_not_carried {
     pub struct ConstTy<const N: Idx>;
 }
 
+// A callback copies a primitive name as written (`u8`: `allow_primitive`, or the type of a const
+// parameter), so it means the primitive wherever the callback writes it. The definition checks
+// that its module has not shadowed the name (type-leak's `Leaker::assertions()`, which the fast
+// path writes too): `struct u8;` there is an error at the definition, at the `#[announce]` of each
+// item that copies it (rustc says that the primitive `u8` is not `shadows::u8`). Where nothing
+// shadows it, the same items compile.
+#[subcrate(
+    ::announce,
+    should_error = "mismatched types",
+    should_error = "one `u8` is a primitive defined by the language",
+    // The fast path, the analysis with a repeater, and a record.
+    should_spanned = "#[announce :: announce ]",
+    should_spanned = "#[announce :: announce (repeater = crate :: Repeater ) ]",
+    should_spanned = "#[announce :: announce (strict = false ) ]",
+    should_error = "aborting due to 3 previous errors\n"
+)]
+pub mod shadowed_primitive {
+    ::announce::define_repeater!(pub Repeater);
+    pub mod inner {
+        pub struct Local;
+    }
+
+    mod shadows {
+        use super::inner::Local;
+
+        #[allow(non_camel_case_types)]
+        pub struct u8;
+
+        // The fast path: nothing but primitives and absolute paths.
+        #[announce::announce]
+        pub struct Fast {
+            pub a: u8,
+        }
+
+        // The analysis: a repeater carries `Local`, and the primitive stays as written.
+        #[announce::announce(repeater = crate::Repeater)]
+        pub struct Full {
+            pub a: u8,
+            pub b: Local,
+        }
+
+        // The relative type, with `strict = false`: a record, and the check all the same.
+        #[announce::announce(strict = false)]
+        pub struct Recorded {
+            pub a: Local,
+            pub b: u8,
+        }
+
+        // Without a primitive there is nothing to check.
+        #[announce::announce]
+        pub struct Nothing {
+            pub a: ::std::string::String,
+        }
+    }
+
+    mod fine {
+        use super::inner::Local;
+
+        #[announce::announce]
+        pub struct Fast {
+            pub a: u8,
+        }
+
+        #[announce::announce(repeater = crate::Repeater)]
+        pub struct Full {
+            pub a: u8,
+            pub b: Local,
+        }
+
+        #[announce::announce(strict = false)]
+        pub struct Recorded {
+            pub a: Local,
+            pub b: u8,
+        }
+    }
+}
+
 // The errors of type-leak are the consumer's. Each definition compiles (the part that type-leak
 // cannot leak is copied as written, and travels in the table as an error); a callback that applies
 // the table (`apply_leak!` calls `TypeLeak::try_apply`) reports each at its tokens in the
