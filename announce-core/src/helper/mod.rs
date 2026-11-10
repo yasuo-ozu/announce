@@ -763,7 +763,7 @@ impl ToTokens for Entry {
 /// [show!]
 /// defs::Length! => [
 ///     type_leak(repeater = $crate::wire::Repeater, id = ID,
-///               context = 0, referrer = ["type-leak-format-14" (Meters)])
+///               context = 0, referrer = ["type-leak-format-16" (Meters)])
 /// ] {
 ///     pub struct Length(pub Meters);
 /// }
@@ -1960,9 +1960,9 @@ mod stable_referrer_tests {
         };
         let analyse = || {
             let mut l = type_leak::Leaker::new();
-            let context = l.intern_struct(&item, true).unwrap();
+            let context = l.intern_struct(&item, true);
             (
-                crate::helper::leak::StableReferrer::new(l.finish()),
+                crate::helper::leak::StableReferrer::new(l.result().finish().unwrap()),
                 context,
             )
         };
@@ -2007,8 +2007,8 @@ mod stable_referrer_tests {
             pub struct S { a: Foo, b: ::other::X, c: Bar, d: ::std::string::String }
         };
         let mut l = type_leak::Leaker::new();
-        let context = l.intern_struct(&item, true).unwrap();
-        let r = crate::helper::leak::StableReferrer::new(l.finish());
+        let context = l.intern_struct(&item, true);
+        let r = crate::helper::leak::StableReferrer::new(l.result().finish().unwrap());
         let types: Vec<String> = r
             .types()
             .iter()
@@ -2035,21 +2035,19 @@ mod options_tests {
     #[test]
     fn options_are_parsed_and_forwarded() {
         let mut leaker = type_leak::Leaker::new();
-        let context = leaker
-            .intern_struct(
-                &syn::parse_quote!(
-                    struct F<T> {
-                        a: Local,
-                        b: Vec<T>,
-                    }
-                ),
-                false,
-            )
-            .unwrap();
+        let context = leaker.intern_struct(
+            &syn::parse_quote!(
+                struct F<T> {
+                    a: Local,
+                    b: Vec<T>,
+                }
+            ),
+            false,
+        );
         let tl = TypeLeak::new(
             syn::parse_quote!(::my::A),
             syn::parse_quote!(7u64),
-            leaker.finish(),
+            leaker.result().finish().unwrap(),
             context,
         );
         let meta = tl.meta();
@@ -2083,7 +2081,10 @@ mod options_tests {
         let proj = read.projection(1, &syn::parse_quote!((u8,)));
         assert_eq!(
             proj.to_string().replace(' ', ""),
-            "<()as::my::A<(u8,),7u64,1usize>>::Type"
+            format!(
+                "<()as::my::A<(u8,),{}u128>>::Type",
+                type_leak::repeater_key(7, 1)
+            )
         );
         let plain: Input = syn::parse_quote! { [me!] a::F! => [] { struct F; } };
         assert!(!plain.has_option("type_leak"));

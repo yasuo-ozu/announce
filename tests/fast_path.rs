@@ -246,6 +246,7 @@ const NOT_ACCEPTED: &[&str] = &[
     "trait Tr { unsafe extern \"C\" fn f(&self, ...); }",
     "trait Tr { m!(); }",
     "trait Tr { const N: usize = size_of::<u8>(); }",
+    "trait Tr { const N: ::core::option::Option<u8> = None; }",
     "trait Tr { type Out: Local; }",
     "pub(in crate::m) struct S;",
     "fn f() {}",
@@ -276,6 +277,9 @@ fn other_shapes_are_left_to_the_analysis() {
         let it = item(src);
         assert!(!accepts(&it, &Options::default()), "accepted: {}", src);
     }
+    // A value of the prelude (`None`) is read by the analysis only, with the prelude as well.
+    let none = item("trait Tr { const N: ::core::option::Option<u8> = None; }");
+    assert!(!accepts(&none, &opts(true, true)));
 }
 
 #[test]

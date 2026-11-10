@@ -33,6 +33,42 @@
 
 ### Changed
 
+- Breaking: announce builds on the `api-reduction` branch of type-leak (a git dependency until
+  it is released), and `announce::type_leak` and `announce::helper::type_leak` are that crate.
+  Its errors are a `Vec<ErrorItem>` with a typed `Cause` and `Reason`
+  (`NotInternableError` is gone), `Leaker::intern_*` return the `ContextId` and
+  `Leaker::result().finish()` returns the `Referrer`, `LeakerConfig` is `Rules` and `Options`
+  (`Leaker::from_config(rules, options)`), `Referrer::entry_args_with` and `repeater_impl_with`
+  are `entry_args` and `repeater_impl` (`RepeaterSlots::const_fn()` is their `const_fn`), and
+  the `Referrer` of the `type_leak(..)` META is in format 16, so a callback must link the same
+  type-leak to read it.
+- Breaking: the repeater has one const parameter, `KEY: u128` (`type_leak::repeater_key(ID,
+  NTH)`), where it had `ID: u64` and `NTH: usize`. The impls of `#[announce]` and
+  `TypeLeak::projection` write it; a repeater from `define_repeater!` of 0.2 must be defined
+  again, and a callback that wrote `Repeater<ARGS, ID, NTH>` by hand must use
+  `TypeLeak::projection` or `RepeaterSlots::projection`.
+- The error for a `Self` in the default of a parameter (`T = ty!(Self)`) is at the whole type, as
+  type-leak reports it, not at the `Self` in it.
+- The analysis runs type-leak once. It recovers from what it refuses (the part is copied as
+  written and the analysis goes on) and hands over every cause with the `Referrer` of the rest,
+  where announce rewrote the item and ran type-leak again until it accepted it. The relative
+  trait paths and value paths and the const parameters in scope are type-leak's own findings now,
+  worded as before. All the causes of an item are still reported at once, at their tokens as
+  written, with the relative types and the other relative bounds that a relative trait path
+  holds (`Local` in `T: Base<Local>`). type-leak copies a part that it refuses as written and
+  analyses what is in it as well, so the relative and refused types inside are reported too
+  (`Local` in the type alias `type A = (Self, Local);` and in `[Local; m!()]`, `Foo<'_>` in
+  `Wrap<Foo<'_>>`). The relative name of a type that is refused whole stays hidden until the
+  cause is fixed: `inner::G<Self>` is one error, and `inner::G<..>` is a relative type once
+  `Self` is written out.
+- The default of an associated const of a trait is read, and the bodies of provided methods are
+  still not: `const N: usize = ::core::mem::size_of::<Local>();` carries `Local` with a
+  `repeater` (and is an error without one, like any relative type), and a relative macro in it
+  is an error. `None`, `Some`, `Ok`, `Err` and `drop` in it are names of the std prelude:
+  relative paths, unless `allow_std_prelude = true`.
+- A value path that starts with a primitive type (`u8::MAX`) is fine with `allow_primitive`, the
+  default. The value of an attribute (`#[name = Wrap]`), which type-leak reads, is reported as
+  a relative value path.
 - The definition error for a failure of the analysis is one error for each offending type or
   path, at its tokens in the item, saying what the definer can do (``add `repeater = ..` to
   the `#[announce]`, or write the path absolutely``). All the causes of an item are reported at

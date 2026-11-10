@@ -246,11 +246,12 @@ fn type_leak_and_transformers() {
     let _: announce::type_leak::Leaker = type_leak::Leaker::new();
 
     let item: syn::ItemStruct = syn::parse_quote! { pub struct S { a: Local, b: u8 } };
-    let mut config = type_leak::LeakerConfig::new();
-    config.allow_primitive();
-    let mut leaker = type_leak::Leaker::from_config(config);
-    let context = leaker.intern_struct(&item, true).unwrap();
-    let referrer = leaker.finish();
+    let mut leaker = type_leak::Leaker::from_config(
+        type_leak::Rules::new().primitive(),
+        type_leak::Options::new(),
+    );
+    let context = leaker.intern_struct(&item, true);
+    let referrer = leaker.result().finish().unwrap();
 
     // `StableReferrer`.
     let stable = leak::StableReferrer::new(referrer.clone());

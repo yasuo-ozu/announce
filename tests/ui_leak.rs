@@ -31,8 +31,9 @@ use subcrate::subcrate;
     should_spanned = "crate::inner::UiIdx",
     should_error = "`N` cannot be named outside its module",
     should_spanned = "N",
-    should_error = "`ty!(Self)` is in the default of a parameter, and names `Self`",
-    should_spanned = "Self",
+    // The headline and the help are joined with one colon, and the macro call is printed as written.
+    should_error = "`ty!(Self)` is in the default of a parameter, and names `Self`: name the type instead of `Self` in `ty!(Self)`",
+    should_spanned = "ty!(Self)",
     // 7 x `UiLocal`, 5 x `UiBase`, 2 x `LEN`, 3 x `UiWrap<'_>` and one each of the others.
     should_error = "aborting due to 24 previous errors\n"
 )]
@@ -181,7 +182,7 @@ pub mod leak_errors {
             };
         }
 
-        // The `Self` in the macro is underlined where it is written.
+        // The macro call with the `Self` in it is underlined where it is written.
         #[announce::announce(repeater = crate::Repeater)]
         pub struct InMacro<T = ty!(Self)>(pub T, pub UiLocal);
     }
@@ -519,6 +520,36 @@ pub mod trait_paths_relative {
     pub struct WithRepeater<T: Rel>(pub T, pub Local);
 }
 
+// The arguments of a relative trait path are read too: the relative types in them are errors
+// next to it, all at once. With a repeater they are carried, and only the trait path is left.
+#[subcrate(
+    ::announce,
+    should_error = "`UiBase<UiLocal>` cannot be named outside its module",
+    should_spanned = "UiBase<UiLocal>",
+    should_error = "`UiLocal` cannot be named outside its module",
+    should_spanned = "UiLocal",
+    // `Plain` has both, `WithRepeater` the trait path only, and `Carried` none.
+    should_error = "aborting due to 3 previous errors\n"
+)]
+pub mod trait_path_arguments {
+    ::announce::define_repeater!(pub Repeater);
+    pub mod inner {
+        pub trait UiBase<X> {}
+        pub struct UiLocal;
+    }
+    use inner::{UiBase, UiLocal};
+
+    #[announce::announce]
+    pub struct Plain<T: UiBase<UiLocal>>(pub T);
+
+    #[announce::announce(repeater = crate::Repeater)]
+    pub struct WithRepeater<T: UiBase<UiLocal>>(pub T);
+
+    // Fine: an absolute trait path, and a relative type that the repeater carries.
+    #[announce::announce(repeater = crate::Repeater)]
+    pub struct Carried<T: crate::inner::UiBase<UiLocal>>(pub T);
+}
+
 #[subcrate(
     ::announce,
     should_error = "`N` cannot be named outside its module",
@@ -569,6 +600,33 @@ pub mod value_paths {
         const A: usize;
         const B: usize = Self::A + 1;
         fn f<const K: usize>(&self) -> [u8; K];
+    }
+}
+
+// `None`, `Some`, `Ok` and `Err` are names of the std prelude: relative paths in a value, unless
+// `allow_std_prelude = true`.
+#[subcrate(
+    ::announce,
+    should_error = "`None` cannot be named outside its module",
+    should_spanned = "None",
+    // `Plain` only.
+    should_error = "aborting due to 1 previous error\n"
+)]
+pub mod prelude_value {
+    #[announce::announce]
+    pub trait Plain {
+        const X: ::core::option::Option<u8> = None;
+    }
+
+    // The ways out: accept prelude names, or write the absolute path.
+    #[announce::announce(allow_std_prelude = true)]
+    pub trait Allowed {
+        const X: ::core::option::Option<u8> = None;
+    }
+
+    #[announce::announce]
+    pub trait Absolute {
+        const X: ::core::option::Option<u8> = ::core::option::Option::None;
     }
 }
 

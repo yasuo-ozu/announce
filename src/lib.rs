@@ -437,11 +437,12 @@
 /// The item is announced as written. type-leak analyses it and numbers the relative
 /// types it finds: the *entries* `0, 1, ..`. For each entry, `#[announce]` emits an
 /// impl of the repeater for `()` next to the item. The generics that the type uses
-/// are encoded in the first argument, and `ID` is a number chosen for the item:
+/// are encoded in the first argument, and the second, `KEY`, is the entry `I` of the item
+/// `ID`, a number chosen for it (`type_leak::repeater_key(ID, I)`, a `u128`):
 ///
 /// ```text
-/// impl crate::Repeater<(), ID, 0> for () { type Type = Local; }
-/// impl<T> crate::Repeater<(T,), ID, 1> for () { type Type = Vec<T>; }
+/// impl crate::Repeater<(), KEY0> for () { type Type = Local; }
+/// impl<T> crate::Repeater<(T,), KEY1> for () { type Type = Vec<T>; }
 /// ```
 ///
 /// With a `repeater`, `META` always has one more element, `type_leak(..)`, with no
@@ -455,7 +456,7 @@
     not(feature = "proc-macro-api"),
     doc = "are in `announce::helper::TypeLeak`. `TypeLeak::apply` rewrites every entry in an"
 )]
-/// item to `<() as $crate::Repeater<ARGS, ID, I>>::Type`:
+/// item to `<() as $crate::Repeater<ARGS, KEY>>::Type`:
 ///
 #[cfg_attr(feature = "proc-macro-api", doc = "```")]
 #[cfg_attr(not(feature = "proc-macro-api"), doc = "```ignore")]
@@ -482,8 +483,8 @@
 ///
 /// ```text
 /// pub struct Holder<T> {
-///     pub a: <() as $crate::Repeater<(), ID, 0>>::Type,
-///     pub b: <() as $crate::Repeater<(T,), ID, 1>>::Type,
+///     pub a: <() as $crate::Repeater<(), KEY0>>::Type,
+///     pub b: <() as $crate::Repeater<(T,), KEY1>>::Type,
 ///     pub c: u8,
 /// }
 /// ```
@@ -504,10 +505,10 @@
 ///   traits (`Clone`, `Send`, ...) pass. A trait object (`::std::boxed::Box<dyn Base>`)
 ///   is a type, which the repeater carries whole.
 /// - **Value paths** in enum discriminants, const defaults and the const arguments of a
-///   bound (`T: crate::Tr<{ N }>`) must be absolute (`crate::N`), start with `Self::`, or
-///   be a const parameter in scope. An array length or a const argument inside a type
-///   (`[u8; N]`, `Wrap<{ N }>`) is carried with the type: with a relative constant `N`
-///   the type is relative, and needs a `repeater`.
+///   bound (`T: crate::Tr<{ N }>`) must be absolute (`crate::N`) or be a const parameter
+///   in scope (a trait's const default may name `Self::N` too). An array length or a const
+///   argument inside a type (`[u8; N]`, `Wrap<{ N }>`) is carried with the type: with a
+///   relative constant `N` the type is relative, and needs a `repeater`.
 /// - **Type aliases** must use absolute paths on the right-hand side, and take no
 ///   `repeater`. `type A = Option<Local>` is an error; write
 ///   `::core::option::Option<crate::Local>`.
@@ -594,10 +595,6 @@
 /// - Bodies of provided trait methods. `fn g(&self) -> u8 { helper() }` passes, but a
 ///   callback that re-emits the body needs `helper` to resolve.
 ///   [`signature_only!`](macro@signature_only) replaces such bodies.
-/// - Types named in the default of an associated const. `const N: usize =
-///   ::core::mem::size_of::<Local>();` passes the value-path check, but `Local` is not
-///   read, so it is not carried. (Array lengths, const arguments, discriminants and
-///   the defaults of const parameters are read.)
 /// - Attribute arguments, such as `#[serde(with = "m")]`. They are neither checked nor
 ///   rewritten.
 ///

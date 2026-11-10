@@ -33,8 +33,9 @@ announce-macros = { path = "announce-macros", version = "0.2.0" }
 # `announce::helper` (the helpers for callbacks and checks). Optional:
 # `announce-macros` depends on it anyway, but only for the host.
 announce-core = { path = "announce-core", version = "0.2.0", optional = true }
-# Re-exported as `announce::type_leak`. Optional, like announce-core.
-type-leak = { version = "0.8.2", optional = true }
+# Re-exported as `announce::type_leak`. Optional, like announce-core. The same git
+# source as announce-core's, so both are one crate in the graph.
+type-leak = { git = "file:///home/yasuo/ghq/github.com/yasuo-ozu/type-leak", branch = "api-reduction", optional = true }
 
 [dev-dependencies]
 # The `announce::machinery` doc test.

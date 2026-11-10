@@ -8,16 +8,16 @@
 //! entry of the scope where it is written, never by the entry of a same-named type
 //! of another scope.
 //!
-//! The arguments of a replacement are the ones that [`Referrer::entry_args_with`]
+//! The arguments of a replacement are the ones that [`Referrer::entry_args`]
 //! gives for a [`UseSite`]. The definer's impls come from
-//! [`Referrer::repeater_impl_with`], which encodes the same generics, so the two
+//! [`Referrer::repeater_impl`], which encodes the same generics, so the two
 //! sides cannot disagree.
 
 use crate::helper::keys::{need, read_element};
 use proc_macro2::TokenStream;
 use syn::parse::{Parse, ParseStream};
 use syn::{Error, Item, LitInt, Path, Result, Type};
-use template_quote::quote;
+use template_quote::{quote, ToTokens};
 use type_leak::{ContextId, Referrer, RepeaterSlots, UseSite};
 
 /// Type table of an entry announced with `#[announce(repeater = ..)]`, from
@@ -31,7 +31,8 @@ use type_leak::{ContextId, Referrer, RepeaterSlots, UseSite};
 /// belongs to the context of its type. `&Local`, also with an elided lifetime, is
 /// the entry `Local`.
 ///
-/// The `ix`-th entry resolves from any crate as `<() as REPEATER<ARGS, ID, ix>>::Type`.
+/// The `ix`-th entry resolves from any crate as `<() as REPEATER<ARGS, KEY>>::Type`, where `KEY`
+/// is `type_leak::repeater_key(ID, ix)`: `ID` in the high 64 bits and `ix` in the low ones.
 /// `ARGS` encodes the generics that the type uses (see
 /// [`entry_args`](Self::entry_args)): a type parameter as itself, a lifetime as
 /// `&'a ()`, a `usize` const as `[(); N]`, and a const of another primitive type
@@ -55,12 +56,12 @@ use type_leak::{ContextId, Referrer, RepeaterSlots, UseSite};
 pub struct TypeLeak {
     /// The repeater trait, e.g. `$crate::Repeater`.
     pub repeater: Path,
-    /// The definition's table id: the `ID` argument of the repeater.
+    /// The definition's table id: the `ID` of the repeater's `KEY`. A `u64` literal.
     pub id: LitInt,
     /// The top-level context of the item in [`referrer`](Self::referrer).
     pub context: ContextId,
-    /// The analysis of the item at the definition. Entry `ix` is the `NTH`
-    /// argument of the repeater. Only the required entries have an impl. This
+    /// The analysis of the item at the definition. Entry `ix` is the entry number
+    /// of the repeater's `KEY`. Only the required entries have an impl. This
     /// `Referrer` is not strict, so the optional ones (absolute paths of other
     /// crates) are left as written.
     pub referrer: Referrer,
@@ -100,27 +101,35 @@ impl TypeLeak {
 
     /// The first argument of the repeater for entry `ix`, as written at `site`.
     ///
-    /// It is `Referrer::entry_args_with` with the const slots of the repeater.
+    /// It is `Referrer::entry_args` with the const slots of the repeater.
     /// [`UseSite::identity()`] is the scope of the item itself (every generic by its
     /// own name): the arguments of the impl the definer wrote.
     /// [`UseSite::substituting`] gives the generics arguments, as in `impl Tr<u8>
     /// for ..`.
     pub fn entry_args(&self, ix: usize, site: &UseSite) -> Result<Type> {
-        let slots = self.slots();
         self.referrer
-            .entry_args_with(ix, site, |value, param| {
-                slots.encode_const(value, &param.ty)
-            })
+            .entry_args(ix, site, self.slots().const_fn())
             .map_err(syn::Error::from)
     }
 
-    /// `<() as REPEATER<args, ID, ix>>::Type`, as tokens to emit.
+    /// `<() as REPEATER<args, KEY>>::Type`, as tokens to emit.
     ///
     /// `args` comes from [`entry_args`](Self::entry_args). The tokens are not a
     /// `syn::Type` because the repeater is `$crate::..` in a callback.
+    ///
+    /// # Panics
+    ///
+    /// If [`id`](Self::id) is not a `u64`; reading the table checks it.
     pub fn projection(&self, ix: usize, args: &Type) -> TokenStream {
-        let (repeater, id) = (&self.repeater, &self.id);
-        quote! { <() as #repeater<#args, #id, #ix>>::Type }
+        // type-leak writes the `KEY` from the id and the entry.
+        let id = self
+            .id
+            .base10_parse::<u64>()
+            .expect("the id of a table is a `u64` literal");
+        let unit: Type = syn::parse_quote!(());
+        self.slots()
+            .projection(&unit, args, id, ix)
+            .to_token_stream()
     }
 
     /// Rewrites every leaked type in `item` (usually the entry's payload) to its
@@ -154,15 +163,15 @@ impl TypeLeak {
         use syn::visit_mut::VisitMut;
         let mut error: Option<syn::Error> = None;
         {
-            let mut visitor = self.referrer.clone().visitor(self.context, |ty, ix| {
-                match self.entry_args(ix, site) {
-                    Ok(args) => Type::Verbatim(self.projection(ix, &args)),
-                    Err(e) => {
-                        error.get_or_insert(e);
-                        ty
-                    }
-                }
-            });
+            let mut visitor =
+                self.referrer
+                    .visitor(self.context, |ty, ix| match self.entry_args(ix, site) {
+                        Ok(args) => Type::Verbatim(self.projection(ix, &args)),
+                        Err(e) => {
+                            error.get_or_insert(e);
+                            ty
+                        }
+                    });
             visitor.visit_item_mut(item);
         }
         error.map_or(Ok(()), Err)
@@ -201,6 +210,7 @@ impl Parse for TypeLeak {
         })?;
         let repeater = need(repeater, &name, "repeater")?;
         let id = need(id, &name, "id")?;
+        id.base10_parse::<u64>()?;
         let old = || {
             Error::new(
                 name.span(),
@@ -238,23 +248,25 @@ mod tests {
     }
 
     fn table_of(item: &Item) -> TypeLeak {
-        let mut config = type_leak::LeakerConfig::new();
-        config.allow_crate();
-        config.allow_primitive();
-        let mut leaker = Leaker::from_config(config);
+        let rules = type_leak::Rules::new().crate_paths().primitive();
+        let mut leaker = Leaker::from_config(rules, type_leak::Options::new());
         let context = match item {
             Item::Struct(i) => leaker.intern_struct(i, false),
             Item::Enum(i) => leaker.intern_enum(i, false),
             Item::Trait(i) => leaker.intern_trait(i, false),
             _ => panic!("struct, enum or trait"),
-        }
-        .unwrap();
+        };
         TypeLeak::new(
             syn::parse_quote!(::my::R),
             syn::parse_quote!(7u64),
-            leaker.finish(),
+            leaker.result().finish().unwrap(),
             context,
         )
+    }
+
+    /// The `KEY` argument of the repeater for the entry `ix` of the table of `table_of` (the id 7).
+    fn key(ix: usize) -> String {
+        format!("{}u128", type_leak::repeater_key(7, ix))
     }
 
     fn read(tl: &TypeLeak) -> TypeLeak {
@@ -320,6 +332,8 @@ mod tests {
         assert!(err(meta("", i, "")).contains("missing `repeater`"));
         assert!(err(meta(r, "", "")).contains("missing `id`"));
         assert!(err(meta(r, i, "extra")).contains("unexpected tokens after the Referrer"));
+        // The id is the high half of the `KEY`, a `u64`.
+        assert!(err(meta(r, "id = 18446744073709551616u64,", "")).contains("too large"));
         let msg = err(meta(r, i, "").replace("type_leak(", "type_leak_error("));
         assert!(msg.contains("expected `type_leak(..)`, found `type_leak_error`"));
     }
@@ -337,7 +351,7 @@ mod tests {
         assert_eq!(tl.lookup(&syn::parse_quote!(u8)), None);
         assert_eq!(
             s(tl.projection(wrap, &syn::parse_quote!((u8,)))),
-            format!("<()as::my::R<(u8,),7u64,{}usize>>::Type", wrap)
+            format!("<()as::my::R<(u8,),{}>>::Type", key(wrap))
         );
     }
 
@@ -354,13 +368,14 @@ mod tests {
             tl.lookup(&syn::parse_quote!(Local)),
             tl.lookup(&syn::parse_quote!(Wrap<T>)).unwrap(),
         );
-        let wrap = format!("<()as::my::R<(T,),7u64,{}usize>>::Type", wrap);
+        let wrap = format!("<()as::my::R<(T,),{}>>::Type", key(wrap));
         assert!(out.contains(&format!("b:{}", wrap)), "{}", out);
         // `Local` is an entry unless a larger absolute type that contains it is
         // (`Option<Local>`, the whole type of a field).
-        let local = format!("<()as::my::R<(),7u64,{}usize>>::Type", local.unwrap_or(99));
+        let local = format!("<()as::my::R<(),{}>>::Type", key(local.unwrap_or(99)));
+        let any_entry = |ix: usize| out.contains(&format!("a:<()as::my::R<(),{}>>::Type", key(ix)));
         assert!(
-            out.contains(&format!("a:{}", local)) || out.contains("a:<()as::my::R<(),7u64,"),
+            out.contains(&format!("a:{}", local)) || tl.types().any(|(ix, _)| any_entry(ix)),
             "{}",
             out
         );
@@ -396,10 +411,12 @@ mod tests {
         tl.apply(&mut it);
         let out = s(&it);
         assert!(out.contains("fnf<Local>(&self,x:Local);"), "{}", out);
-        assert!(out.contains("fng(&self)-><()as::my::R<(),7u64,"), "{}", out);
+        let local = tl.lookup(&syn::parse_quote!(Local)).unwrap();
+        let g = format!("fng(&self)-><()as::my::R<(),{}>>", key(local));
+        assert!(out.contains(&g), "{}", out);
         for ix in gc {
             assert!(
-                out.contains(&format!("::my::R<(X,),7u64,{}usize>>::Type", ix)),
+                out.contains(&format!("::my::R<(X,),{}>>::Type", key(ix))),
                 "{}",
                 out
             );
@@ -409,8 +426,8 @@ mod tests {
     #[test]
     fn apply_encodes_const_generics_of_every_primitive_type() {
         let item: Item = syn::parse_quote! {
-            struct C<const A: u8, const B: bool, const D: usize, const E: u64> {
-                x: inner::W<A, B, D, E>,
+            struct C<const A: u8, const B: bool, const D: usize, const E: u64, const K: u128> {
+                x: inner::W<A, B, D, E, K>,
             }
         };
         let tl = table_of(&item);
@@ -418,8 +435,9 @@ mod tests {
         let args = s(tl.entry_args(0, &UseSite::identity()).unwrap());
         assert_eq!(
             args,
-            "(*constdyn::my::R<(),0,0,false,'\\0',A,Type=()>,\
-             *constdyn::my::R<(),0,0,B,Type=()>,[();D],*constdyn::my::R<(),E,0,Type=()>)"
+            "(*constdyn::my::R<(),0,false,'\\0',A,Type=()>,\
+             *constdyn::my::R<(),0,B,Type=()>,[();D],\
+             *constdyn::my::R<(),0,false,'\\0',0,0,0,E,Type=()>,*constdyn::my::R<(),K,Type=()>)"
         );
         // A site that gives the generics values, as `impl Tr<..> for ..` does.
         let params = match &item {
@@ -431,14 +449,16 @@ mod tests {
             syn::parse_quote!(true),
             syn::parse_quote!(3),
             syn::parse_quote!(9),
+            syn::parse_quote!(10),
         ];
         let args = s(tl
             .entry_args(0, &UseSite::substituting(&params, &given))
             .unwrap());
         assert_eq!(
             args,
-            "(*constdyn::my::R<(),0,0,false,'\\0',1,Type=()>,\
-             *constdyn::my::R<(),0,0,true,Type=()>,[();3],*constdyn::my::R<(),9,0,Type=()>)"
+            "(*constdyn::my::R<(),0,false,'\\0',1,Type=()>,\
+             *constdyn::my::R<(),0,true,Type=()>,[();3],\
+             *constdyn::my::R<(),0,false,'\\0',0,0,0,9,Type=()>,*constdyn::my::R<(),10,Type=()>)"
         );
         // The same arguments are what `apply_at` writes into the item.
         let mut it = item;

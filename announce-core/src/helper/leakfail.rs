@@ -196,10 +196,17 @@ impl LeakError {
             );
         }
         self.help.get_or_insert_with(|| {
-            let write = format!("write `{}` with an absolute path", name);
+            // `None` and the like are named by their path: it is not under `crate::` either.
+            let value = crate::leak::PRELUDE_VALUES
+                .iter()
+                .find(|(n, _)| reason == VALUE_PATH && *n == name);
+            let write = match value {
+                Some((_, absolute)) => format!("write `{}` instead of `{}`", absolute, name),
+                None => format!("write `{}` with an absolute path", name),
+            };
             if !scope {
                 fix_for(reason, "")
-            } else if crate::leak::PRELUDE.contains(&name.as_str()) {
+            } else if value.is_some() || crate::leak::PRELUDE.contains(&name.as_str()) {
                 // A prelude name may be shadowed by a caller, and is not under `crate::`.
                 format!(
                     "{} (it is a name of the std prelude, which a caller may shadow), or add \
@@ -1089,6 +1096,25 @@ mod tests {
         }
         let e = LeakError::new(tokens("& inner :: Option"), ALIAS).described("Item");
         let help = "write `inner::Option` with an absolute path (e.g. `crate::inner::Option`)";
+        assert_eq!(e.help.as_deref(), Some(help));
+        // The values of the prelude are named by their path, which is not under `crate` either.
+        for (name, absolute) in crate::leak::PRELUDE_VALUES {
+            let help = LeakError::new(tokens(name), VALUE_PATH)
+                .described("Item")
+                .help
+                .unwrap();
+            assert_eq!(
+                help,
+                format!(
+                    "write `{}` instead of `{}` (it is a name of the std prelude, which a caller \
+                     may shadow), or add `allow_std_prelude = true` to the `#[announce]` of `Item`",
+                    absolute, name
+                )
+            );
+        }
+        // ... and only when they are written bare.
+        let e = LeakError::new(tokens("inner :: None"), VALUE_PATH).described("Item");
+        let help = "write `inner::None` with an absolute path (e.g. `crate::inner::None`)";
         assert_eq!(e.help.as_deref(), Some(help));
     }
 

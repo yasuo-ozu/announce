@@ -33,7 +33,7 @@
 //!     `A` and no arguments (not in a type alias; never `Self::A::B`);
 //!   - a type parameter of the item, of the method or of the associated type
 //!     that declares the scope, alone or with one associated type (`T::Output`);
-//!   - a primitive type, with `allow_primitive` (as type-leak's `allow_primitive()`
+//!   - a primitive type, with `allow_primitive` (as type-leak's `Rules::primitive()`
 //!     lists them: `bool`, `char`, `str`, `u8`..`u128`, `usize`, `i8`..`i128`,
 //!     `isize`, `f32`, `f64`);
 //!   - a name of the std prelude ([`crate::leak::PRELUDE`]), with
@@ -44,14 +44,15 @@
 //!   with a leading `::`, a path of `crate`, a prelude name with
 //!   `allow_std_prelude`, or `Sized` / `?Sized`, with arguments that are accepted
 //!   types (an `Fn(A) -> B` bound included). It may be a lifetime bound. These
-//!   are also the paths that `leak::check_trait_paths` accepts.
+//!   are also the paths that type-leak accepts as a trait.
 //! - The bounded type of a `where` predicate is a type parameter in scope or
 //!   `Self`, and has no `for<..>`.
 //! - A value (an array length, an enum discriminant, a const generic argument, the
 //!   default of a const parameter or of an associated const) is a literal, a
 //!   const parameter in scope, an absolute path of `std`, `core`, `alloc` or
 //!   `crate`, `Self::X`, or a unary or binary operation or parentheses around
-//!   those. These are also the paths that `leak::check_values` accepts.
+//!   those. These are also the paths that type-leak accepts in a value (`Self::X` only inside a
+//!   type: type-leak rejects it as a discriminant or a default).
 //!
 //! A const parameter must have a primitive type. An associated type may have bounds
 //! and a default; a method may have its own generics. Everything else is a

@@ -121,7 +121,6 @@ impl StableReferrer {
     ) {
         let mut v = self
             .inner
-            .clone()
             .visitor(context, Self::stable_fn(&self.stable, f));
         syn::visit_mut::VisitMut::visit_item_mut(&mut v, item);
     }
@@ -146,8 +145,8 @@ mod tests {
 
     fn analyse(item: &syn::ItemStruct) -> (StableReferrer, type_leak::ContextId) {
         let mut l = type_leak::Leaker::new();
-        let context = l.intern_struct(item, true).unwrap();
-        (StableReferrer::new(l.finish()), context)
+        let context = l.intern_struct(item, true);
+        (StableReferrer::new(l.result().finish().unwrap()), context)
     }
 
     fn t(i: usize) -> Type {
@@ -185,12 +184,10 @@ mod tests {
         let item: syn::ItemStruct =
             syn::parse_quote! { pub struct S { a: u8, b: ::std::string::String, c: crate::X } };
         // Primitives and `crate::` paths need allowing, as announce does.
-        let mut config = type_leak::LeakerConfig::new();
-        config.allow_primitive();
-        config.allow_crate();
-        let mut l = type_leak::Leaker::from_config(config);
-        let context = l.intern_struct(&item, true).unwrap();
-        let r = StableReferrer::new(l.finish());
+        let rules = type_leak::Rules::new().primitive().crate_paths();
+        let mut l = type_leak::Leaker::from_config(rules, type_leak::Options::new());
+        let context = l.intern_struct(&item, true);
+        let r = StableReferrer::new(l.result().finish().unwrap());
         assert!(r.is_empty());
         assert!(r.types().is_empty());
         assert_eq!(squash(r.to_tuple()), "()");

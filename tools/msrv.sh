@@ -29,15 +29,10 @@ echo "msrv: working in $work"
 cd "$work"
 
 CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS=fallback cargo +stable generate-lockfile
-cargo +stable vendor vendor >/dev/null
 mkdir -p .cargo
-cat >.cargo/config.toml <<'CONFIG'
-[source.crates-io]
-replace-with = "vendored-sources"
-
-[source.vendored-sources]
-directory = "vendor"
-CONFIG
+# What `cargo vendor` prints is the source replacement for crates.io and for the git source of
+# type-leak (its `api-reduction` branch).
+cargo +stable vendor vendor >.cargo/config.toml
 
 run() {
     echo "msrv: cargo +$*"
@@ -56,6 +51,8 @@ run 1.78.0 test -p announce -p announce-core
 # The doctests only see that a failing `same_context!` fails. On 1.78 it must also say why
 # (`on_unimplemented`) and must not trip over `do_not_recommend`, which 1.78 does not know.
 mkdir texts
+# The git source of type-leak needs a lock file to be used from the vendor directory.
+cp Cargo.lock texts/Cargo.lock
 cat >texts/Cargo.toml <<'MANIFEST'
 [package]
 name = "texts"
