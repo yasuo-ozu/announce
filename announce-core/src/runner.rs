@@ -317,7 +317,7 @@ impl Sentinel {
 }
 
 /// The tokens with this span, but for `$crate` (its span is what tells the crate it names).
-fn respan(ts: TokenStream, span: Span) -> TokenStream {
+pub(crate) fn respan(ts: TokenStream, span: Span) -> TokenStream {
     ts.into_iter()
         .map(|mut tt| {
             match &mut tt {

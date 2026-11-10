@@ -1,0 +1,18 @@
+# Its own workspace root: a callback built with announce 0.2 (from crates.io, in `callback`)
+# reads the items of this crate, which uses the announce of this checkout. This checkout is
+# 0.2.0 too, and cargo holds both in one graph (same name and version, two sources), but then
+# `-p announce` is ambiguous; the callback names the crates.io one `announce02` to tell them
+# apart. After the bump to 0.3.0 the versions differ and the rename is only for readability.
+# Run it with `cargo test` in this directory.
+[package]
+name = "announce-test-compat-02"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+members = ["callback"]
+
+[dependencies]
+announce = { path = "../.." }
+announce-test-compat-02-callback = { path = "callback" }

@@ -1,13 +1,12 @@
 //! Every public item of the former `announce-helper` crate is reachable as
-//! `announce::helper::*`, from a crate that depends on `announce` alone (this one:
-//! `announce-core`, which holds the code, is not a dependency here).
+//! `announce::helper::*`, from a crate that does not depend on `announce-core`, which
+//! holds the code.
 //!
 //! The functions `callback` and `transformer` take and return `proc_macro2` streams, so
 //! they are called here directly. The macros `callback!` and `transformer!` of the same
 //! names (kept for compatibility) define `#[proc_macro]` functions, so they can only be
-//! expanded in a proc-macro crate. `tests/derive` does that, also with `announce` as its
-//! only link to the code. Here their paths are resolved.
-#![cfg(feature = "proc-macro-api")]
+//! expanded in a proc-macro crate. The subcrate `derive` (src/lib.rs) does that, also
+//! with `announce` as its only link to the code. Here their paths are resolved.
 
 use announce::helper::{
     // Functions.
@@ -31,7 +30,8 @@ use announce::helper::{
     Entry,
     Gather,
     Input,
-    KvArgs,
+    LeakError,
+    LeakFailure,
     Meta,
     OwnedAttrs,
     Query,
@@ -45,9 +45,11 @@ use announce::helper::{attrs, leak, type_leak};
 // `#[macro_export]` in `announce-core`, re-exported by `helper`): a function and a macro
 // of one name are in different namespaces, so one `use` imports both. The macros are not
 // expanded here (they emit `#[proc_macro]`); `callback!` and `transformer!` are tested in
-// `tests/user` through `tests/derive`.
+// the test files through the subcrate `derive`.
 
 use proc_macro2::TokenStream;
+use syn::parse::ParseStream;
+use syn::visit_mut::VisitMut;
 use template_quote::ToTokens;
 
 fn squash(ts: impl ToTokens) -> String {
@@ -83,9 +85,10 @@ fn input_entries_and_conts() {
     assert!(entry.type_leak().unwrap().is_none());
     let meta: &Meta = entry.find_meta("info").unwrap();
     assert_eq!(meta.name_values().unwrap().len(), 1);
-    let mut kv: KvArgs = meta.kv().unwrap();
-    assert_eq!(squash(kv.tokens("k").unwrap()), "v");
-    kv.finish().unwrap();
+    let args: TokenStream = meta
+        .parse_args_with(|input: ParseStream| input.parse())
+        .unwrap();
+    assert_eq!(squash(args), "k=v");
     assert!(matches!(entry.item().unwrap(), syn::Item::Trait(_)));
     assert!(entry.item_without_owned_attrs().is_ok());
     assert_eq!(input.entries_in_order().count(), 1);
@@ -244,11 +247,10 @@ fn type_leak_and_transformers() {
     let _: announce::type_leak::Leaker = type_leak::Leaker::new();
 
     let item: syn::ItemStruct = syn::parse_quote! { pub struct S { a: Local, b: u8 } };
-    let mut config = type_leak::LeakerConfig::new();
-    config.allow_primitive();
-    let mut leaker = type_leak::Leaker::from_config(config);
-    let context = leaker.intern_struct(&item, true).unwrap();
-    let referrer = leaker.finish();
+    let mut leaker = type_leak::Leaker::with_rule(type_leak::Rules::new().primitive());
+    let context = leaker.intern_struct(&item);
+    let result = leaker.result();
+    let referrer = result.clone().finish().unwrap();
 
     // `StableReferrer`.
     let stable = leak::StableReferrer::new(referrer.clone());
@@ -256,6 +258,8 @@ fn type_leak_and_transformers() {
     assert_eq!(stable.types().len(), 1);
     assert_eq!(stable.index_of(&syn::parse_quote!(Local)), Some(0));
     assert_eq!(squash(stable.to_tuple()), "(Local,)");
+    let (entry, _, _) = referrer.iter().next().unwrap();
+    assert_eq!(stable.stable_index(entry), Some(0));
     let mut as_item = syn::Item::Struct(item.clone());
     stable.visit_item_mut(context, &mut as_item, |_, i| {
         syn::parse_str(&format!("T{}", i)).unwrap()
@@ -268,32 +272,179 @@ fn type_leak_and_transformers() {
     let mut crate_item: syn::Item = syn::parse_quote! { struct S(crate::A); };
     leak::normalize_crate(&mut crate_item);
 
-    // `TypeLeak`: build, write as META, read back, apply.
-    let tl = TypeLeak::new(
-        syn::parse_quote!(::my::R),
-        syn::parse_quote!(7u64),
-        referrer,
-        context,
-    );
-    assert_eq!(tl.types().count(), 1);
-    assert_eq!(tl.lookup(&syn::parse_quote!(Local)), Some(0));
-    let _: type_leak::RepeaterSlots = tl.slots();
-    let site = type_leak::UseSite::identity();
-    let args = tl.entry_args(0, &site).unwrap();
-    assert!(squash(tl.projection(0, &args)).contains("::my::R"));
-    let meta: Meta = syn::parse2(tl.meta()).unwrap();
-    let back = TypeLeak::from_kv(&mut meta.kv().unwrap()).unwrap();
+    // `TypeLeak`: build, write as META, read back, and use type-leak's API on its fields.
+    let projection = TypeLeak::projection_of(syn::parse_quote!(::my::R), 7);
+    let tl = TypeLeak::new(Some(projection), context, result);
+    let referrer = tl.result.clone().finish().unwrap();
+    assert_eq!(referrer.iter().count(), 1);
+    assert_eq!(squash(referrer.iter().next().unwrap().1), "Local");
+    assert!(tl.result.errors().is_empty());
+    let back: TypeLeak = syn::parse2(tl.meta()).unwrap();
+    assert_eq!(back.projection.as_ref().map(|p| p.id), Some(7));
+    // The visitor of the `Referrer` writes the entries, `complete_args` the use site's arguments.
+    let projection = back.projection.as_ref().unwrap();
+    let referrer = back.result.clone().finish().unwrap();
     let mut applied = syn::Item::Struct(item.clone());
-    back.apply(&mut applied);
+    referrer
+        .visitor(back.context, projection)
+        .visit_item_mut(&mut applied);
     assert!(squash(&applied).contains("::my::R"), "{}", squash(&applied));
-    let mut applied = syn::Item::Struct(item);
-    tl.try_apply(&mut applied).unwrap();
-    tl.try_apply_at(&mut applied, &site).unwrap();
+    let mut at = applied.clone();
+    let mut substitute = referrer
+        .complete_args(back.context, &[], projection)
+        .unwrap();
+    substitute.visit_item_mut(&mut at);
+    assert_eq!(squash(&at), squash(&applied));
+    // `Entry::item_resolved` is the one-line path, and writes the same.
+    let meta = tl.meta();
+    let input: Input = syn::parse_quote! { [cb!] a::S! => [#meta] { #item } };
+    let krate: syn::Path = syn::parse_quote!(::announce);
+    let (resolved, check) = input.entries[0].item_resolved(&krate).unwrap();
+    assert_eq!(squash(&resolved), squash(&applied));
+    assert!(check.is_empty());
 
     // `signature_only`, the function behind `announce::signature_only!`.
     let mut f: syn::Item = syn::parse_quote! { fn f() -> u8 { 1 } };
     signature_only(&mut f);
     assert!(!squash(&f).contains('1'));
+}
+
+#[test]
+fn recorded_leak_failure() {
+    // An entry whose definition recorded that its types do not resolve outside its module.
+    let input: Input = syn::parse_quote! {
+        [cb!]
+        deflib::lm::Leaky! => [
+            type_leak_error(id = 42u64,
+                            item = Leaky,
+                            errors = [(Local) "without `repeater`" {
+                                message = "use absolute path: 'Local'",
+                                notes = ["a note"],
+                                help = "write `Local` with an absolute path"
+                            }])
+        ] { pub struct Leaky { pub a: Local } }
+        deflib::Plain! => [] { pub struct Plain; }
+    };
+    let (leaky, plain) = (&input.entries[0], &input.entries[1]);
+    assert!(plain.leak_failure().unwrap().is_none());
+    let failure: LeakFailure = leaky.leak_failure().unwrap().unwrap();
+    assert_eq!(failure.id.base10_digits(), "42");
+    assert_eq!(failure.ident, "Leaky");
+    assert_eq!(squash(&failure.path), "deflib::lm::Leaky");
+    let errors: &[LeakError] = &failure.errors;
+    assert_eq!(errors.len(), 1);
+    assert_eq!(squash(&errors[0].tokens), "Local");
+    assert_eq!(errors[0].reason, "without `repeater`");
+    // What the record carries for the cause, and nothing where it has none.
+    assert_eq!(
+        errors[0].message.as_deref(),
+        Some("use absolute path: 'Local'")
+    );
+    assert_eq!(errors[0].notes, ["a note"]);
+    assert_eq!(
+        errors[0].help.as_deref(),
+        Some("write `Local` with an absolute path")
+    );
+
+    // `type_leak()` fails with a line for each cause, ending with what the definer can do.
+    let e = leaky.type_leak().err().unwrap();
+    assert_eq!(
+        e.to_string(),
+        "this macro cannot use `deflib::lm::Leaky`: `Local` cannot be named outside its module; \
+         add `repeater = ..` to its `#[announce]`, or write the path absolutely"
+    );
+    assert_eq!(failure.to_error().to_string(), e.to_string());
+
+    // `item_resolved`: the item as written, and the check.
+    let krate: syn::Path = syn::parse_quote!(::announce);
+    let (item, check) = leaky.item_resolved(&krate).unwrap();
+    assert_eq!(squash(&item), "pubstructLeaky{puba:Local}");
+    let check = squash(&check);
+    // A block of its own: the trait of the item, its impl and the call of the probe, with the
+    // texts of the record where the compiler knows `on_unimplemented`.
+    assert!(
+        check.starts_with("const_:()={") && check.contains("traitInModuleOf_Leaky{}"),
+        "{}",
+        check
+    );
+    assert!(
+        check.ends_with(
+            "fn__check(){announce_check::Check::used_outside_its_module(__AnnounceProbe::<42u64>.__announce_ctx());}};"
+        ),
+        "{}",
+        check
+    );
+    if check.contains("on_unimplemented") {
+        for part in [
+            "message=\"useabsolutepath:'Local'\",",
+            "label=\"relativetype,notinscopewhere`deflib::lm::Leaky!`iscalled\",",
+            "note=\"`deflib::lm::Leaky`isusedoutsideitsmodule`deflib::lm`\",",
+            "note=\"anote\",note=\"write`Local`withanabsolutepath\"",
+        ] {
+            assert!(check.contains(part), "{}: {}", part, check);
+        }
+    }
+    assert_eq!(squash(failure.assume_success(&krate)), check);
+    // Nothing for an item without a failure or a table.
+    let (item, check) = plain.item_resolved(&krate).unwrap();
+    assert_eq!(squash(&item), "pubstructPlain;");
+    assert!(check.is_empty());
+
+    // The META that the definer writes is the one that is read.
+    let written = LeakFailure::new(
+        syn::parse_quote!(S),
+        syn::parse_quote!(7u64),
+        vec![LeakError::new(
+            "super::Other<u8>".parse::<TokenStream>().unwrap(),
+            "with a relative trait path in a bound",
+        )],
+    );
+    let read: LeakFailure = syn::parse2(written.meta()).unwrap();
+    assert_eq!(read.ident, "S");
+    assert_eq!(squash(&read.errors[0].tokens), "super::Other<u8>");
+    assert_eq!(read.krate, None);
+
+    // With the crate of the definer, which is read back and written again.
+    let written = written.with_krate("deflib");
+    let read: LeakFailure = syn::parse2(written.meta()).unwrap();
+    assert_eq!(read.krate.as_deref(), Some("deflib"));
+    assert!(squash(read.meta()).ends_with(",krate=\"deflib\")"));
+}
+
+#[test]
+fn recorded_leak_failure_is_read_with_what_a_later_version_adds() {
+    // Keys that a later version adds, of any shape, are ignored.
+    let input: Input = syn::parse_quote! {
+        [cb!]
+        deflib::lm::Leaky! => [
+            type_leak_error(id = 42u64,
+                            item = Leaky,
+                            future = Vec<u8, A>,
+                            errors = [(Local) "without `repeater`" {
+                                message = "m",
+                                span = a::b,
+                                level = -1,
+                                ty = Vec<u8, A>,
+                                internal,
+                                help = "h"
+                            } later = [1, 2] { x = 1 },
+                            (Other) "without `repeater`" flag],
+                            krate = "deflib")
+        ] { pub struct Leaky { pub a: Local, pub b: Other } }
+    };
+    let failure = input.entries[0].leak_failure().unwrap().unwrap();
+    assert_eq!(failure.krate.as_deref(), Some("deflib"));
+    assert_eq!(failure.errors.len(), 2);
+    assert_eq!(failure.errors[0].message.as_deref(), Some("m"));
+    assert_eq!(failure.errors[0].help.as_deref(), Some("h"));
+    assert_eq!(squash(&failure.errors[1].tokens), "Other");
+    // The error that a callback gets is for each cause, as before.
+    let err = input.entries[0].type_leak().unwrap_err().to_string();
+    assert!(
+        err.contains("`Local` cannot be named outside its module"),
+        "{}",
+        err
+    );
 }
 
 #[test]

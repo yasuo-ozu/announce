@@ -1,5 +1,0 @@
-error: this macro does not support tuple structs (needs named fields)
- --> tests/ui/check_fails_with_derive.rs:5:16
-  |
-5 | pub struct Pair(u8, u8);
-  |                ^^^^^^^^
