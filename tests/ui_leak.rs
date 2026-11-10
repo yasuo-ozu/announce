@@ -1,23 +1,20 @@
 //! UI tests: names that do not resolve outside the module of the item, with `strict = true`
-//! (the default), and what a `repeater` cannot carry.
+//! (the default), and what a `repeater` cannot carry. The errors of type-leak are not the
+//! definition's: it compiles, and the consumer that applies the table reports them
+//! (`leak_at_the_consumer`).
 
 use subcrate::subcrate;
 
-// With `strict = true` (the default) every cause that keeps a name from resolving outside its
-// module is an error at its tokens, all of an item at once, and the item is still emitted.
-// `strict = false` records the causes instead (ui_same_context.rs).
+// With `strict = true` (the default) every relative type, and every type that has no impl, is an
+// error at its tokens, all of an item at once, and the item is still emitted. `strict = false`
+// records the causes instead (ui_same_context.rs). A trait path, a value path and a type that type-leak
+// cannot leak are no cause here: they are errors of type-leak, in the table (`leak_at_the_consumer`).
 #[subcrate(
     ::announce,
     announce_test_derive = derive,
     announce_test_ui_lib = ui_lib,
     should_error = "`UiLocal` cannot be named outside its module",
     should_spanned = "UiLocal",
-    should_error = "`UiBase` cannot be named outside its module",
-    should_spanned = "UiBase",
-    should_error = "`LEN` cannot be named outside its module",
-    should_spanned = "LEN",
-    should_error = "`UiWrap<'_>` cannot be carried",
-    should_spanned = "UiWrap<'_>",
     should_error = "`[u8; LEN]` cannot be named outside its module",
     should_spanned = "[u8; LEN]",
     should_error = "`Option<(UiArr<{ LEN }>, T)>` cannot be named outside its module",
@@ -25,17 +22,10 @@ use subcrate::subcrate;
     should_error = "`UiIdx` cannot be carried",
     should_spanned = "UiIdx",
     // The causes of `mod e`.
-    should_error = "`UiWrap<'a>` leaves the lifetime `'a` of the method unconstrained in the copy",
-    should_spanned = "UiWrap<'a>",
     should_error = "`crate::inner::UiIdx` cannot be carried",
     should_spanned = "crate::inner::UiIdx",
-    should_error = "`N` cannot be named outside its module",
-    should_spanned = "N",
-    // The headline and the help are joined with one colon, and the macro call is printed as written.
-    should_error = "`ty!(Self)` is in the default of a parameter, and names `Self`: name the type instead of `Self` in `ty!(Self)`",
-    should_spanned = "ty!(Self)",
-    // 7 x `UiLocal`, 5 x `UiBase`, 2 x `LEN`, 3 x `UiWrap<'_>` and one each of the others.
-    should_error = "aborting due to 24 previous errors\n"
+    // 7 x `UiLocal` and one each of the others.
+    should_error = "aborting due to 11 previous errors\n"
 )]
 pub mod leak_errors {
     #[macro_export]
@@ -88,8 +78,8 @@ pub mod leak_errors {
             pub a: UiLocal,
         }
 
-        // Trait path, value path, a type that cannot be carried, and relative types: an array length
-        // makes the type relative.
+        // The relative types: an array length makes the type relative. The trait path, the value path
+        // and `UiWrap<'_>` are errors of type-leak, which this definition does not report.
         #[announce::announce]
         pub trait Sub: UiBase {
             const M: usize = LEN;
@@ -100,7 +90,8 @@ pub mod leak_errors {
         #[announce::announce]
         pub type Alias<T: UiBase> = Option<(UiArr<{ LEN }>, T)>;
 
-        // A `repeater` carries relative types, but not trait paths or values.
+        // A `repeater` carries the relative types: fine here. The trait path and the value are
+        // errors of type-leak, which the consumer reports.
         #[announce::announce(repeater = crate::Repeater)]
         pub trait WithRepeater: UiBase {
             const M: usize = LEN;
@@ -137,8 +128,8 @@ pub mod leak_errors {
     }
 
     // Every cause is at its own place: not at the first node that says the same, and not one error
-    // for a type written in two places. A const generic that cannot be encoded is a cause too, and
-    // a value path names a const parameter only where the parameter is in scope.
+    // for a type written in two places. A const generic that cannot be encoded is a cause too. The
+    // errors of type-leak are no cause: the definitions compile.
     mod e {
         use super::inner::{UiArr, UiBase, UiLocal, UiWrap};
 
@@ -165,7 +156,7 @@ pub mod leak_errors {
             fn b(&self, y: UiWrap<'_>);
         }
 
-        // The trait path, and the const generic that no table carries.
+        // The const generic that no table carries (and the trait path, which is type-leak's).
         #[announce::announce(repeater = crate::Repeater)]
         pub struct Encoded<T: UiBase, const N: crate::inner::UiIdx>(pub UiArr<N>, pub T);
 
@@ -188,71 +179,24 @@ pub mod leak_errors {
     }
 }
 
-// Types that a repeater cannot carry. The errors are type-leak's, re-worded by
-// announce: no mention of its API, `crate::..` for a path of this crate, types
-// printed as written, one error for every offending type.
+// Types that a repeater cannot carry: a relative type that names `Self`. The impls are for `()`,
+// which `Self` is not. Everything else that type-leak cannot leak is its own error, in the table,
+// which the consumer reports (`leak_at_the_consumer`): these definitions compile.
 #[subcrate(
     ::announce,
-    should_error = "`Wrap<'_>` cannot be carried",
-    should_spanned = "Wrap<'_>",
-    should_error = "`Other<'_>` cannot be carried",
-    should_spanned = "Other<'_>",
-    should_error = "`Vec<&'_ u8>` cannot be carried",
-    should_spanned = "Vec<&'_ u8>",
     should_error = "`G<Self>` cannot be carried",
     should_spanned = "G<Self>",
     should_error = "`G<Self::A>` cannot be carried",
     should_spanned = "G<Self::A>",
-    should_error = "`Self` has no meaning here",
-    should_spanned = "Self",
-    should_error = "`G<T>` is in a bound or where predicate, and a bound of its generics names a leaked type",
-    should_spanned = "G<T>",
-    should_error = "`two` cannot be carried",
-    should_spanned = "two",
-    should_error = "`Idx` cannot be carried",
-    should_spanned = "Idx",
-    // 2 x `Wrap<'_>` and one each of the others.
-    should_error = "aborting due to 10 previous errors\n"
+    should_error = "aborting due to 2 previous errors\n"
 )]
 pub mod leak_not_carried {
     ::announce::define_repeater!(pub Repeater);
     pub mod inner {
         pub struct G<T>(pub T);
         pub struct Wrap<'a>(pub &'a u8);
-        pub struct Other<'a>(pub &'a u8);
-        pub struct Ty;
     }
-    use inner::{Other, Wrap, G};
-
-    macro_rules! two {
-        () => {
-            2
-        };
-    }
-
-    // An elided lifetime keeps a relative type from being carried: write it absolutely.
-    #[announce::announce(repeater = crate::Repeater)]
-    pub trait Elided {
-        fn f(&self, a: Wrap<'_>);
-    }
-
-    // Every offending type is its own error, at its own span.
-    #[announce::announce(repeater = crate::Repeater)]
-    pub trait Two {
-        fn f(&self, a: Wrap<'_>, b: Other<'_>);
-    }
-
-    // A prelude name is another option.
-    #[announce::announce(repeater = crate::Repeater)]
-    pub trait Prelude {
-        fn f(&self, a: Vec<&'_ u8>);
-    }
-
-    // ... which then works.
-    #[announce::announce(repeater = crate::Repeater, allow_std_prelude = true)]
-    pub trait PreludeAllowed {
-        fn f(&self, a: Vec<&'_ u8>);
-    }
+    use inner::{Wrap, G};
 
     // A relative type cannot name `Self` or `Self::A` (a struct's `Self::A` has no valid
     // form to show here: see the unit tests of announce-macros).
@@ -273,22 +217,167 @@ pub mod leak_not_carried {
         fn g(&self) -> ::std::boxed::Box<Self::Out>;
     }
 
-    // `Self` means nothing in a type alias.
+    // What type-leak cannot leak is no error here: the part is copied as written, and the
+    // definition compiles. `Self` means nothing in a type alias, an elided lifetime keeps a
+    // relative type from being leaked, a prelude name is another option, a bound cannot name a
+    // relative type that mentions the bounded parameter, a relative macro in an array length, and
+    // the type of a const parameter.
+    pub type Idx = usize;
+    macro_rules! two {
+        () => {
+            2
+        };
+    }
+
+    #[announce::announce(repeater = crate::Repeater)]
+    pub trait Elided {
+        fn f(&self, a: Wrap<'_>);
+    }
+
+    #[announce::announce(repeater = crate::Repeater)]
+    pub trait Two {
+        fn f(&self, a: Wrap<'_>, b: inner::Wrap<'_>);
+    }
+
+    #[announce::announce(repeater = crate::Repeater)]
+    pub trait Prelude {
+        fn f(&self, a: Vec<&'_ u8>);
+    }
+
+    // ... which then works.
+    #[announce::announce(repeater = crate::Repeater, allow_std_prelude = true)]
+    pub trait PreludeAllowed {
+        fn f(&self, a: Vec<&'_ u8>);
+    }
+
     #[announce::announce]
     pub type SelfAlias = Self;
 
-    // A bound cannot name a relative type that mentions the bounded parameter.
     #[announce::announce(repeater = crate::Repeater)]
     pub struct Cycle<T: ::core::convert::From<G<T>>>(pub T);
 
-    // A relative macro in an array length.
     #[announce::announce(repeater = crate::Repeater)]
     pub struct MacroLen(pub [u8; two!()]);
 
-    // The type of a const parameter.
-    pub type Idx = usize;
     #[announce::announce(repeater = crate::Repeater)]
     pub struct ConstTy<const N: Idx>;
+}
+
+// The errors of type-leak are the consumer's. Each definition compiles (the part that type-leak
+// cannot leak is copied as written, and travels in the table as an error); a callback that applies
+// the table (`apply_leak!` calls `TypeLeak::try_apply`) reports each at its tokens in the
+// definition, in type-leak's own words. With a `repeater` the table also has the impls, and
+// without one it has the errors only.
+#[subcrate(
+    ::announce,
+    announce_test_derive = derive,
+    // A relative trait bound, a relative value path, a relative lifetime `'_`, a prelude name
+    // (a trait in a bound, a value) without `allow_std_prelude`, and a method lifetime that
+    // only a relative type mentions.
+    should_error = "use absolute path: 'UiBase'",
+    should_spanned = "UiBase",
+    should_error = "use absolute path: 'UiWrap<'_>'",
+    should_spanned = "UiWrap<'_>",
+    should_error = "use absolute path: 'LEN'",
+    should_spanned = "LEN",
+    should_error = "use absolute path: 'Clone'",
+    should_spanned = "Clone",
+    should_error = "use absolute path: 'None'",
+    should_spanned = "None",
+    should_error = "`UiWrap<'a>` leaves the lifetime `'a` of the method unconstrained in the copy",
+    should_spanned = "UiWrap<'a>",
+    should_error = "aborting due to 6 previous errors\n"
+)]
+pub mod leak_at_the_consumer {
+    ::announce::define_repeater!(pub Repeater);
+    pub mod inner {
+        pub trait UiBase {}
+        pub struct UiWrap<'a>(pub &'a u8);
+        pub struct UiOther;
+    }
+
+    pub mod d {
+        use super::inner::{UiBase, UiOther, UiWrap};
+
+        const LEN: usize = 4;
+
+        // Without a repeater: the table has the error only.
+        #[announce::announce]
+        pub trait RelativeTrait: UiBase {
+            fn f(&self) -> u8;
+        }
+
+        #[announce::announce]
+        pub trait RelativeValue {
+            const M: usize = LEN;
+        }
+
+        #[announce::announce]
+        pub struct PreludeBound<T: Clone>(pub T);
+
+        #[announce::announce]
+        pub trait PreludeValue {
+            const X: ::core::option::Option<u8> = None;
+        }
+
+        // With a repeater: the table has the impls of `UiOther`, and the error.
+        #[announce::announce(repeater = crate::Repeater)]
+        pub trait Elided {
+            fn f(&self, a: UiWrap<'_>, b: UiOther);
+        }
+
+        #[announce::announce(repeater = crate::Repeater)]
+        pub trait Unconstrained {
+            fn i<'a>(&self, a: UiWrap<'a>) -> &'a u8;
+        }
+
+        // Fine: another argument keeps `'a` as written ...
+        #[announce::announce(repeater = crate::Repeater)]
+        pub trait SelfKeepsIt {
+            fn i<'a>(&'a self, a: UiWrap<'a>) -> &'a u8;
+        }
+
+        // ... also a plain reference, and the ways out of a prelude name.
+        #[announce::announce(repeater = crate::Repeater)]
+        pub trait ArgKeepsIt {
+            fn i<'a>(&self, a: UiWrap<'a>, b: &'a u8) -> &'a u8;
+        }
+
+        #[announce::announce(allow_std_prelude = true)]
+        pub struct PreludeAllowed<T: Clone>(pub T);
+
+        #[announce::announce]
+        pub trait PreludeAbsolute {
+            const X: ::core::option::Option<u8> = ::core::option::Option::None;
+        }
+    }
+
+    // Each consumer is in a module of its own, where the relative names are not in scope. The ones
+    // that are fine emit their items (`apply_leak!` applies the table to them).
+    mod a {
+        super::d::RelativeTrait! { [super::d::RelativeTrait!, announce_test_derive::apply_leak!] Rows }
+    }
+    mod b {
+        super::d::RelativeValue! { [super::d::RelativeValue!, announce_test_derive::apply_leak!] Rows }
+    }
+    mod c {
+        super::d::PreludeBound! { [super::d::PreludeBound!, announce_test_derive::apply_leak!] Rows }
+    }
+    mod e {
+        super::d::PreludeValue! { [super::d::PreludeValue!, announce_test_derive::apply_leak!] Rows }
+    }
+    mod f {
+        super::d::Elided! { [super::d::Elided!, announce_test_derive::apply_leak!] Rows }
+    }
+    mod g {
+        super::d::Unconstrained! { [super::d::Unconstrained!, announce_test_derive::apply_leak!] Rows }
+    }
+    mod fine {
+        super::d::SelfKeepsIt! { [super::d::SelfKeepsIt!, announce_test_derive::apply_leak!] A }
+        super::d::ArgKeepsIt! { [super::d::ArgKeepsIt!, announce_test_derive::apply_leak!] B }
+        super::d::PreludeAllowed! { [super::d::PreludeAllowed!, announce_test_derive::apply_leak!] C }
+        super::d::PreludeAbsolute! { [super::d::PreludeAbsolute!, announce_test_derive::apply_leak!] D }
+    }
 }
 
 #[subcrate(
@@ -363,42 +452,6 @@ pub mod repeater_required {
     pub type Prelude = Vec<u8>;
 }
 
-// A method lifetime that only a relative type mentions: the copy would have `'a`
-// in a projection only, and an implementation `fn i<'a>(&self, a: Wrap<'a>)` is
-// rejected with E0195 (early- vs late-bound). type-leak 0.8 reports this at the
-// definition; type-leak 0.7 accepted the definition, and the received item
-// could not be implemented that way.
-#[subcrate(
-    ::announce,
-    should_error = "`Wrap<'a>` leaves the lifetime `'a` of the method unconstrained in the copy",
-    should_spanned = "Wrap<'a>",
-    should_error = "aborting due to 1 previous error\n"
-)]
-pub mod repeater_lifetime_unconstrained {
-    ::announce::define_repeater!(pub Repeater);
-    pub mod inner {
-        pub struct Wrap<'a>(pub &'a u8);
-    }
-    use inner::Wrap;
-
-    #[announce::announce(repeater = crate::Repeater)]
-    pub trait Unconstrained {
-        fn i<'a>(&self, a: Wrap<'a>) -> &'a u8;
-    }
-
-    // Fine: another argument keeps `'a` as written ...
-    #[announce::announce(repeater = crate::Repeater)]
-    pub trait SelfKeepsIt {
-        fn i<'a>(&'a self, a: Wrap<'a>) -> &'a u8;
-    }
-
-    // ... also a plain reference.
-    #[announce::announce(repeater = crate::Repeater)]
-    pub trait ArgKeepsIt {
-        fn i<'a>(&self, a: Wrap<'a>, b: &'a u8) -> &'a u8;
-    }
-}
-
 #[subcrate(
     ::announce,
     should_error = "`repeater` must be a trait of this crate",
@@ -427,214 +480,13 @@ pub mod audit3_errors {
     pub struct RelLen(pub [u8; N]);
 }
 
-#[subcrate(
-    ::announce,
-    should_error = "`Base` cannot be named outside its module",
-    should_spanned = "Base",
-    should_error = "`std::fmt::Display` cannot be named outside its module",
-    should_spanned = "std::fmt::Display",
-    should_error = "`Clone` cannot be named outside its module",
-    should_spanned = "Clone",
-    should_error = "`marker::Sized` cannot be named outside its module",
-    should_spanned = "marker::Sized",
-    should_error = "aborting due to 4 previous errors\n"
-)]
-pub mod trait_paths {
-    pub trait Base {}
-
-    // Relative trait paths cannot be covered by a repeater: they must be absolute.
-    #[announce::announce]
-    pub trait Sub: Base {}
-
-    // `std::` without the leading `::` is relative.
-    #[announce::announce]
-    pub trait Show {
-        fn show<T: std::fmt::Display>(&self, t: T);
-    }
-
-    // `Sized` and `?Sized` may be written bare (no error for this one)...
-    #[announce::announce]
-    pub struct Unsized<T: ?Sized>(pub ::std::boxed::Box<T>);
-
-    #[announce::announce]
-    pub trait SizedBounds: Sized {
-        fn f(&self) -> u8
-        where
-            Self: Sized;
-        fn g<U: ?Sized + Sized>(&self, u: &U);
-    }
-
-    // ... but every other prelude trait needs `allow_std_prelude = true`.
-    #[announce::announce]
-    pub struct Cloned<T: Clone>(pub T);
-
-    // A path that only ends in `Sized` is not the prelude's.
-    #[announce::announce]
-    pub struct Qualified<T: marker::Sized>(pub T);
-}
-
-#[subcrate(
-    ::announce,
-    should_error = "`Rel` cannot be named outside its module",
-    should_spanned = "Rel",
-    should_error = "`dyn Rel` cannot be named outside its module",
-    should_spanned = "dyn Rel",
-    // 4 x `Rel` (the `where` clause, `impl Rel` in argument and return position, the bound
-    // next to a repeater) and `dyn Rel`.
-    should_error = "aborting due to 5 previous errors\n"
-)]
-pub mod trait_paths_relative {
-    pub trait Rel {}
-    pub struct Local;
-
-    // A relative trait path in a `where` clause: a repeater only carries types.
-    #[announce::announce]
-    pub struct WhereRel<T>
-    where
-        T: Rel,
-    {
-        pub t: T,
-    }
-
-    // ... in `impl Trait` argument position ...
-    #[announce::announce]
-    pub trait ImplArg {
-        fn f(&self, x: impl Rel);
-    }
-
-    // ... in `impl Trait` return position ...
-    #[announce::announce]
-    pub trait ImplRet {
-        fn f(&self) -> impl Rel;
-    }
-
-    // ... and in `dyn`, a relative type (a `repeater` carries it: `defs::carried` in src/lib.rs).
-    #[announce::announce]
-    pub trait DynRel {
-        fn g(&self) -> ::std::boxed::Box<dyn Rel>;
-    }
-
-    // ... and a repeater does not help, whatever else it carries.
-    ::announce::define_repeater!(pub Repeater);
-    #[announce::announce(repeater = crate::Repeater)]
-    pub struct WithRepeater<T: Rel>(pub T, pub Local);
-}
-
-// The arguments of a relative trait path are read too: the relative types in them are errors
-// next to it, all at once. With a repeater they are carried, and only the trait path is left.
-#[subcrate(
-    ::announce,
-    should_error = "`UiBase<UiLocal>` cannot be named outside its module",
-    should_spanned = "UiBase<UiLocal>",
-    should_error = "`UiLocal` cannot be named outside its module",
-    should_spanned = "UiLocal",
-    // `Plain` has both, `WithRepeater` the trait path only, and `Carried` none.
-    should_error = "aborting due to 3 previous errors\n"
-)]
-pub mod trait_path_arguments {
-    ::announce::define_repeater!(pub Repeater);
-    pub mod inner {
-        pub trait UiBase<X> {}
-        pub struct UiLocal;
-    }
-    use inner::{UiBase, UiLocal};
-
-    #[announce::announce]
-    pub struct Plain<T: UiBase<UiLocal>>(pub T);
-
-    #[announce::announce(repeater = crate::Repeater)]
-    pub struct WithRepeater<T: UiBase<UiLocal>>(pub T);
-
-    // Fine: an absolute trait path, and a relative type that the repeater carries.
-    #[announce::announce(repeater = crate::Repeater)]
-    pub struct Carried<T: crate::inner::UiBase<UiLocal>>(pub T);
-}
-
-#[subcrate(
-    ::announce,
-    should_error = "`N` cannot be named outside its module",
-    should_spanned = "N",
-    should_error = "`crate::Buf<{ N }>` cannot be named outside its module",
-    should_spanned = "crate::Buf<{ N }>",
-    // 4 x `N` (the discriminant, the default of the associated const, the default of the
-    // const parameter, the const argument in a bound) and `crate::Buf<{ N }>`.
-    should_error = "aborting due to 5 previous errors\n"
-)]
-pub mod value_paths {
-    pub const N: usize = 3;
-    pub struct Buf<const M: usize>;
-
-    // A relative constant in an enum discriminant.
-    #[announce::announce]
-    pub enum Discr {
-        A = N as isize,
-    }
-
-    // ... in the default of an associated const of a trait ...
-    #[announce::announce]
-    pub trait ConstDefault {
-        const M: usize = N;
-    }
-
-    // ... in a const generic argument ...
-    #[announce::announce]
-    pub struct ConstArg(pub crate::Buf<{ N }>);
-
-    // ... and in the default of a const parameter.
-    #[announce::announce]
-    pub struct ConstParamDefault<const K: usize = N>;
-
-    // In a bound a repeater does not help (in a type it carries the constant with it).
-    pub trait Tr<const M: usize> {}
-    ::announce::define_repeater!(pub Repeater);
-    #[announce::announce(repeater = crate::Repeater)]
-    pub struct ConstArgInBound<T: crate::Tr<{ N }>>(pub T);
-
-    // Absolute paths, `Self::..` and const parameters are fine.
-    #[announce::announce]
-    pub enum Fine {
-        A = crate::N as isize,
-    }
-    #[announce::announce]
-    pub trait FineTrait {
-        const A: usize;
-        const B: usize = Self::A + 1;
-        fn f<const K: usize>(&self) -> [u8; K];
-    }
-}
-
-// `None`, `Some`, `Ok` and `Err` are names of the std prelude: relative paths in a value, unless
-// `allow_std_prelude = true`.
-#[subcrate(
-    ::announce,
-    should_error = "`None` cannot be named outside its module",
-    should_spanned = "None",
-    // `Plain` only.
-    should_error = "aborting due to 1 previous error\n"
-)]
-pub mod prelude_value {
-    #[announce::announce]
-    pub trait Plain {
-        const X: ::core::option::Option<u8> = None;
-    }
-
-    // The ways out: accept prelude names, or write the absolute path.
-    #[announce::announce(allow_std_prelude = true)]
-    pub trait Allowed {
-        const X: ::core::option::Option<u8> = None;
-    }
-
-    #[announce::announce]
-    pub trait Absolute {
-        const X: ::core::option::Option<u8> = ::core::option::Option::None;
-    }
-}
-
 // A std prelude name around `Self::Out`. The names of the prelude are relative
-// paths here, and a relative type cannot hold `Self::Out`. The error says that
-// the name is the problem, and gives the two ways out. With and without a repeater.
+// paths here, so `Option<Self::Out>` is a relative type that names `Self`: without a repeater
+// it is relative, with one it cannot be carried. The ways out are to accept prelude names, or
+// to write the absolute path.
 #[subcrate(
     ::announce,
+    should_error = "`Option<Self::Out>` cannot be named outside its module",
     should_error = "`Option<Self::Out>` cannot be carried",
     should_spanned = "Option<Self::Out>",
     // `Plain` and `WithRepeater`.

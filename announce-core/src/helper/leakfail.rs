@@ -14,19 +14,17 @@ use syn::parse::{Parse, ParseStream, Parser};
 use syn::{LitInt, LitStr, Path, Result, Token};
 use template_quote::{quote, ToTokens};
 
-// The reasons of a cause (`LeakError::reason`, which documents them): the first four are names that
-// resolve in the item's module only, `REFUSED` a type that type-leak refuses (`Wrap<'_>`,
-// `Local<Self>`), `NOT_PRIMITIVE` a const generic of another type than a primitive.
+// The reasons of a cause (`LeakError::reason`, which documents them) that announce itself records:
+// the first two are names that resolve in the item's module only, `NOT_PRIMITIVE` a const generic
+// of another type than a primitive. (The errors of type-leak are no cause of a record: they are in
+// the `type_leak(..)` META, and the consumer reports them.)
 pub(crate) const WITHOUT_REPEATER: &str = "without `repeater`";
-pub(crate) const TRAIT_PATH: &str = "with a relative trait path in a bound";
-pub(crate) const VALUE_PATH: &str = "with a relative value path";
 pub(crate) const ALIAS: &str = "with a relative path in a type alias";
-pub(crate) const REFUSED: &str = "with a type that cannot be carried";
 pub(crate) const NOT_PRIMITIVE: &str = "with a const generic that is not of a primitive type";
 
 /// Whether a reason is about a name that resolves in the item's module only.
 fn is_scope(reason: &str) -> bool {
-    matches!(reason, WITHOUT_REPEATER | TRAIT_PATH | VALUE_PATH | ALIAS)
+    matches!(reason, WITHOUT_REPEATER | ALIAS)
 }
 
 fn why_text(reason: &str) -> &str {
@@ -43,11 +41,7 @@ fn why(reason: &str) -> String {
 
 /// "TYPE cannot be carried (WHY)", for a cause that no table can carry.
 fn cannot_be_carried(e: &LeakError) -> String {
-    match e.reason.as_str() {
-        // The headline already says it.
-        REFUSED => format!("{} cannot be carried", what(e)),
-        reason => format!("{} cannot be carried{}", what(e), why(reason)),
-    }
+    format!("{} cannot be carried{}", what(e), why(&e.reason))
 }
 
 /// What the definer can do about a cause; `attr` names the item's attribute for the message.
@@ -108,21 +102,19 @@ pub struct LeakError {
     /// The phrases below are recognised, matched exactly. They set the wording of the errors and
     /// the texts that the record leaves out (the headline, the note and the help):
     ///
-    /// - `` without `repeater` ``, `with a relative trait path in a bound`, `with a relative value
-    ///   path` and `with a relative path in a type alias`: a name that resolves in the item's
-    ///   module only. The errors say that it "cannot be named outside its module"; the headline
-    ///   is `use absolute path: 'PATH'`, the label says that the path is relative and not in scope
-    ///   where the trampoline is called, and the help says to write it absolutely
+    /// - `` without `repeater` `` and `with a relative path in a type alias`: a name that resolves
+    ///   in the item's module only. The errors say that it "cannot be named outside its module";
+    ///   the headline is `use absolute path: 'PATH'`, the label says that the path is relative and
+    ///   not in scope where the trampoline is called, and the help says to write it absolutely
     ///   (`` without `repeater` `` also offers `repeater = ..`).
-    /// - `with a type that cannot be carried`: a type that type-leak refuses, with type-leak's
-    ///   texts. The errors say that it "cannot be carried", and the label that the trampoline
-    ///   works only in the item's module.
-    /// - `with a const generic that is not of a primitive type`: "cannot be carried" too, with a
+    /// - `with a const generic that is not of a primitive type`: "cannot be carried", with a
     ///   headline, a note and a help of its own (use a primitive type).
     ///
     /// Any other phrase is a cause that cannot be carried as well: the headline is `cannot be
     /// carried: 'TYPE'`, the phrase without its leading `with ` is the note and the reason in
-    /// the errors, and the help says to write the path absolutely.
+    /// the errors, and the help says to write the path absolutely. (An older announce also wrote
+    /// `with a relative trait path in a bound`, `with a relative value path` and `with a type that
+    /// cannot be carried`: they are read as such a phrase now.)
     pub reason: String,
     /// The headline, for example `use absolute path: 'Local'`.
     pub message: Option<String>,
@@ -188,7 +180,6 @@ impl LeakError {
                     NOT_PRIMITIVE => {
                         Some("a const parameter of a type that is not primitive cannot be carried")
                     }
-                    REFUSED => None,
                     r if !scope => Some(why_text(r)),
                     _ => None,
                 }
@@ -196,17 +187,10 @@ impl LeakError {
             );
         }
         self.help.get_or_insert_with(|| {
-            // `None` and the like are named by their path: it is not under `crate::` either.
-            let value = crate::leak::PRELUDE_VALUES
-                .iter()
-                .find(|(n, _)| reason == VALUE_PATH && *n == name);
-            let write = match value {
-                Some((_, absolute)) => format!("write `{}` instead of `{}`", absolute, name),
-                None => format!("write `{}` with an absolute path", name),
-            };
+            let write = format!("write `{}` with an absolute path", name);
             if !scope {
                 fix_for(reason, "")
-            } else if value.is_some() || crate::leak::PRELUDE.contains(&name.as_str()) {
+            } else if crate::leak::PRELUDE.contains(&name.as_str()) {
                 // A prelude name may be shadowed by a caller, and is not under `crate::`.
                 format!(
                     "{} (it is a name of the std prelude, which a caller may shadow), or add \
@@ -448,8 +432,6 @@ impl LeakFailure {
         };
         let label = if is_scope(&e.reason) {
             let kind = match e.reason.as_str() {
-                TRAIT_PATH => "relative trait path",
-                VALUE_PATH => "relative value path",
                 ALIAS => "relative path in a type alias",
                 _ => "relative type",
             };
@@ -657,8 +639,6 @@ pub(crate) struct CausePath {
     pub path: String,
     /// The path with its generic arguments as written: `Wrap<'a, Local>`.
     pub written: String,
-    /// Whether generic arguments follow the path.
-    pub generic: bool,
 }
 
 /// The path that a cause names, without what surrounds it: `Local` for `&'static Local`,
@@ -706,7 +686,6 @@ pub(crate) fn cause_path(ts: &TokenStream) -> Option<CausePath> {
     Some(CausePath {
         path: text(&level[start..segments]).replace("$crate", "crate"),
         written: type_text(&level[start..end].iter().cloned().collect()),
-        generic: end > segments,
     })
 }
 
@@ -774,6 +753,11 @@ impl Parse for LeakFailure {
 mod tests {
     use super::*;
 
+    /// A reason that announce does not write any more (type-leak's errors are no cause of a
+    /// record), but may read from the META of another definer: it is any phrase that cannot be
+    /// carried.
+    const FOREIGN: &str = "with a type that cannot be carried";
+
     fn tokens(s: &str) -> TokenStream {
         s.parse().unwrap()
     }
@@ -815,7 +799,7 @@ mod tests {
 
     #[test]
     fn the_meta_is_read_back_as_it_was_written() {
-        let mut f = failure(&[("Wrap < '_ >", REFUSED), ("Local", WITHOUT_REPEATER)]);
+        let mut f = failure(&[("Wrap < '_ >", FOREIGN), ("Local", WITHOUT_REPEATER)]);
         f.errors[0] = f.errors[0]
             .clone()
             .with_message("use absolute path: 'Wrap < '_ >'")
@@ -1002,8 +986,12 @@ mod tests {
     fn the_path_of_a_cause_and_the_default_texts_that_name_it() {
         let check = |ts: &str, path: &str, written: &str| {
             let c = cause_path(&tokens(ts)).unwrap_or_else(|| panic!("{}", ts));
-            let got = (c.path.as_str(), c.written.as_str(), c.generic);
-            assert_eq!(got, (path, written, written != path), "{}", ts);
+            assert_eq!(
+                (c.path.as_str(), c.written.as_str()),
+                (path, written),
+                "{}",
+                ts
+            );
             // A prelude name has its own help.
             if !crate::leak::PRELUDE.contains(&path) {
                 let e = LeakError::new(tokens(ts), WITHOUT_REPEATER).described("Item");
@@ -1078,7 +1066,7 @@ mod tests {
             ("Option < Local >", ALIAS),
             ("& Option < Local >", ALIAS),
             ("* const Option < Local >", ALIAS),
-            ("Clone", TRAIT_PATH),
+            ("Clone", WITHOUT_REPEATER),
         ] {
             let name = if ts.contains("Option") { "Option" } else { ts };
             let help = LeakError::new(tokens(ts), reason)
@@ -1097,25 +1085,6 @@ mod tests {
         let e = LeakError::new(tokens("& inner :: Option"), ALIAS).described("Item");
         let help = "write `inner::Option` with an absolute path (e.g. `crate::inner::Option`)";
         assert_eq!(e.help.as_deref(), Some(help));
-        // The values of the prelude are named by their path, which is not under `crate` either.
-        for (name, absolute) in crate::leak::PRELUDE_VALUES {
-            let help = LeakError::new(tokens(name), VALUE_PATH)
-                .described("Item")
-                .help
-                .unwrap();
-            assert_eq!(
-                help,
-                format!(
-                    "write `{}` instead of `{}` (it is a name of the std prelude, which a caller \
-                     may shadow), or add `allow_std_prelude = true` to the `#[announce]` of `Item`",
-                    absolute, name
-                )
-            );
-        }
-        // ... and only when they are written bare.
-        let e = LeakError::new(tokens("inner :: None"), VALUE_PATH).described("Item");
-        let help = "write `inner::None` with an absolute path (e.g. `crate::inner::None`)";
-        assert_eq!(e.help.as_deref(), Some(help));
     }
 
     #[test]
@@ -1124,8 +1093,6 @@ mod tests {
         // Names that resolve in the module only: (tokens, reason, the kind in the label).
         for (ts, reason, kind) in [
             ("Local", WITHOUT_REPEATER, "relative type"),
-            ("Base", TRAIT_PATH, "relative trait path"),
-            ("N", VALUE_PATH, "relative value path"),
             ("W < L >", ALIAS, "relative path in a type alias"),
         ] {
             let (message, label, notes) = cause_texts(&failure(&[(ts, reason)])).remove(0);
@@ -1189,7 +1156,7 @@ mod tests {
         );
         assert_eq!(notes[0], "`Leaky` is used outside its module");
         // What the record carries is used as it is: the notes come before the help.
-        let mut f = failure(&[("Vec < &'_ u8 >", REFUSED)]);
+        let mut f = failure(&[("Vec < &'_ u8 >", FOREIGN)]);
         f.errors[0] = f.errors[0]
             .clone()
             .with_message("use absolute path: 'Vec < &'_ u8 >'")
@@ -1249,7 +1216,7 @@ mod tests {
             ("Wrap < u16 >", WITHOUT_REPEATER),
             ("Wrap < u8 >", WITHOUT_REPEATER),
             // The same path with another reason is another cause.
-            ("Local", TRAIT_PATH),
+            ("Local", ALIAS),
             // Without a path the whole tokens are shown.
             ("* const", WITHOUT_REPEATER),
             ("* const", WITHOUT_REPEATER),
@@ -1329,13 +1296,13 @@ mod tests {
     fn the_definition_error_says_what_the_definer_can_do() {
         let mut f = failure(&[
             ("A", WITHOUT_REPEATER),
-            ("B < T >", TRAIT_PATH),
+            ("B < T >", ALIAS),
             ("", "with a type that cannot be encoded (x)"),
             ("crate :: Idx", NOT_PRIMITIVE),
-            ("Wrap < '_ >", REFUSED),
+            ("Wrap < '_ >", FOREIGN),
             ("Vec < &'_ u8 >", "with the relative prelude name `Vec`"),
             ("Self", "with `Self` in a type alias"),
-            ("m ! (Self)", REFUSED),
+            ("m ! (Self)", FOREIGN),
         ]);
         // What the record carries: a plain headline is not shown, a sentence of its own is.
         for (i, message, help) in [
@@ -1377,13 +1344,14 @@ mod tests {
             [
                 "`A` cannot be named outside its module: add `repeater = ..` to the `#[announce]`, \
                  or write the path absolutely",
-                "`B<T>` cannot be named outside its module (a relative trait path in a bound): \
+                "`B<T>` cannot be named outside its module (a relative path in a type alias): \
                  write the path absolutely",
                 "a type of the item cannot be carried (a type that cannot be encoded (x)): \
                  write the path absolutely",
                 "`crate::Idx` cannot be carried (a const generic that is not of a primitive type): \
                  use a primitive type",
-                "`Wrap<'_>` cannot be carried: write `Wrap` with an absolute path",
+                "`Wrap<'_>` cannot be carried (a type that cannot be carried): \
+                 write `Wrap` with an absolute path",
                 "`Vec<&'_ u8>` cannot be carried (the relative prelude name `Vec`): \
                  write `::std::vec::Vec<..>`",
                 "`Self` has no meaning here: write the type instead of `Self`",
@@ -1400,9 +1368,9 @@ mod tests {
             ("Local", WITHOUT_REPEATER, "`Local` cannot be named outside its module; {R}"),
             ("& 'static UiShared", WITHOUT_REPEATER, "`&'static UiShared` cannot be named outside its module; {R}"),
             ("", WITHOUT_REPEATER, "a type of the item cannot be named outside its module; {R}"),
-            ("Base", TRAIT_PATH, "`Base` cannot be named outside its module (a relative trait path in a bound); {A}"),
+            ("Base", ALIAS, "`Base` cannot be named outside its module (a relative path in a type alias); {A}"),
             ("crate :: UiIdx", NOT_PRIMITIVE, "`crate::UiIdx` cannot be carried (a const generic that is not of a primitive type); {P}"),
-            ("Wrap < '_ >", REFUSED, "`Wrap<'_>` cannot be carried; {A}"),
+            ("Wrap < '_ >", FOREIGN, "`Wrap<'_>` cannot be carried (a type that cannot be carried); {A}"),
             ("Odd", "because of something new", "`Odd` cannot be carried (because of something new); {A}"),
             ("", "with a type that cannot be encoded (x)", "a type of the item cannot be carried (a type that cannot be encoded (x)); {A}"),
         ] {

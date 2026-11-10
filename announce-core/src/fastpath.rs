@@ -3,7 +3,7 @@
 //! `leak::analyze` runs type-leak over the whole item, which is by far the most
 //! expensive step of the `Capture` derive for an item with many methods. Most items
 //! need none of it: every path in them is one that resolves everywhere, so
-//! type-leak finds nothing to carry and nothing to reject. [`accepts`] reads
+//! type-leak finds nothing to carry and nothing to report. [`accepts`] reads
 //! the item once, with a visitor that knows only the forms below, and says
 //! whether that is certainly so. When it is not sure it says no, and the full
 //! analysis runs as before: the scan never decides an error, and it must never
@@ -69,7 +69,7 @@ use syn::{
 use template_quote::ToTokens;
 
 /// Whether every path in `item` certainly resolves everywhere, so that
-/// type-leak would find no required entry and report no error. Independent of
+/// type-leak would find no entry and no error. Independent of
 /// `repeater`: with one, the caller still needs the table, and runs the full analysis.
 pub(crate) fn accepts(item: &Item, opts: &Options) -> bool {
     let mut v = Fast {
@@ -616,35 +616,32 @@ impl<'ast> Visit<'ast> for Fast {
 }
 
 /// What [`accepts`] says of `item`, checked against `result`, the full analysis of
-/// the same item: an item that is accepted must have no required entry and no error.
+/// the same item: an item that is accepted must have no entry and no error.
 /// `Ok(accepted)` when they agree; `Err` with a message when the fast path accepted an
 /// item that the analysis needs an entry for or rejects.
 pub(crate) fn compare(
     item: &Item,
     opts: &Options,
-    result: &crate::leak::Analysed,
+    result: &Option<crate::leak::Analysis>,
 ) -> Result<bool, String> {
     if !accepts(item, opts) {
         return Ok(false);
     }
-    match result {
-        Ok(None) => {}
-        Ok(Some(a)) => {
-            if let Some((ix, ty)) = a.required().next() {
-                return Err(format!(
-                    "the fast path accepted an item whose analysis needs entry {}: {}\n{}",
-                    ix,
-                    ty.to_token_stream(),
-                    item.to_token_stream()
-                ));
-            }
-        }
-        Err(e) => {
+    if let Some(analysis) = result {
+        if let Some((ix, ty, _)) = analysis.entries().next() {
             return Err(format!(
-                "the fast path accepted an item that the analysis rejects: {:?}\n{}",
+                "the fast path accepted an item whose analysis needs entry {}: {}\n{}",
+                ix,
+                ty.to_token_stream(),
+                item.to_token_stream()
+            ));
+        }
+        if let Some(e) = analysis.result.errors().first() {
+            return Err(format!(
+                "the fast path accepted an item that the analysis rejects: {}\n{}",
                 e,
                 item.to_token_stream()
-            ))
+            ));
         }
     }
     Ok(true)
@@ -653,7 +650,7 @@ pub(crate) fn compare(
 /// In a test build, the full analysis checks every answer of [`accepts`] that it
 /// is given the item for (`leak::analyze`), with [`compare`].
 #[cfg(test)]
-pub(crate) fn check_analysis(item: &Item, opts: &Options, result: &crate::leak::Analysed) {
+pub(crate) fn check_analysis(item: &Item, opts: &Options, result: &Option<crate::leak::Analysis>) {
     if let Err(message) = compare(item, opts, result) {
         panic!("{}", message);
     }

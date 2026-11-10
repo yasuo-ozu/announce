@@ -17,8 +17,9 @@
 //!   attributes.
 //! - Resolve relative types:
 //!   [`Entry::type_leak`] reads the [`TypeLeak`] table of a definition announced with
-//!   `repeater = ..`. [`TypeLeak::apply`] rewrites an item so that its types resolve
-//!   in any crate.
+//!   `repeater = ..`, which has the errors of type-leak too. [`TypeLeak::try_apply`] rewrites an
+//!   item so that its types resolve in any crate, and reports those errors
+//!   ([`TypeLeak::allow`] and [`TypeLeak::ignore`] accept them first).
 //! - Use relative types as written: [`Entry::item_resolved`] gives the item, and with a
 //!   `strict = false` record ([`Entry::leak_failure`], [`LeakFailure`]) the check that fails
 //!   outside its module (`announce::same_context!`, [`same_context()`]).
@@ -40,10 +41,8 @@ mod transformer;
 mod typeleak;
 
 pub use attrs::{remove_attributes, CheckCall, OwnedAttrs, Query};
-pub(crate) use leakfail::{
-    cause_path, ALIAS, NOT_PRIMITIVE, REFUSED, TRAIT_PATH, VALUE_PATH, WITHOUT_REPEATER,
-};
 pub use leakfail::{same_context, try_same_context, LeakError, LeakFailure};
+pub(crate) use leakfail::{ALIAS, NOT_PRIMITIVE, WITHOUT_REPEATER};
 pub use transformer::{signature_only, transformer};
 /// The version of `type-leak` that [`TypeLeak`] uses. Name it through this crate,
 /// so there is never a second, incompatible copy.
@@ -477,9 +476,10 @@ impl Entry {
         self.meta.iter().find(|m| m.path.is_ident(name))
     }
 
-    /// The `type_leak(..)` META of an entry announced with `repeater = ..`.
-    /// Unknown keys are ignored.
-    /// A recorded failure ([`leak_failure`](Self::leak_failure)) is an error
+    /// The `type_leak(..)` META of an entry announced with `repeater = ..`, or of an item without
+    /// one that has errors of type-leak (and no relative type). Unknown keys are ignored.
+    /// The errors of type-leak that the table has are not reported here: [`TypeLeak::try_apply`]
+    /// reports them. A recorded failure ([`leak_failure`](Self::leak_failure)) is an error
     /// ([`LeakFailure::to_error`]); [`item_resolved`](Self::item_resolved) uses the item as written.
     pub fn type_leak(&self) -> Result<Option<TypeLeak>> {
         if let Some(failure) = self.leak_failure()? {
@@ -505,7 +505,10 @@ impl Entry {
     }
 
     /// The item as a callback emits it, and what goes next to it: with a table
-    /// ([`type_leak`](Self::type_leak)) the item rewritten by [`TypeLeak::apply`]; with a
+    /// ([`type_leak`](Self::type_leak)) the item rewritten by [`TypeLeak::try_apply`], or an
+    /// error if the table has errors of type-leak that remain (the item cannot be copied as it
+    /// is; to use it anyway, read the table with [`type_leak`](Self::type_leak) and
+    /// [`allow`](TypeLeak::allow) them); with a
     /// recorded failure ([`leak_failure`](Self::leak_failure)) the item as written and
     /// [`LeakFailure::assume_success`]; otherwise the item and no tokens. `krate` is the path of
     /// the `announce` crate where the tokens are emitted (`::announce`). The check is a
@@ -655,7 +658,9 @@ impl ToTokens for Entry {
 /// - `path(args)`: a `meta = path(args)` entry, never called ([`Entry::find_meta`]);
 /// - `mock(path)`: the item stands in for the item at `path` ([`Entry::mock`]);
 /// - `attrs(a, b)`: the attribute names that checks own ([`Entry::owned_attrs`]);
-/// - `type_leak(..)`: the type table of a `repeater` ([`Entry::type_leak`]);
+/// - `type_leak(repeater = .., id = .., context = .., result = [..])`: the type table of a
+///   `repeater`, with the errors of type-leak ([`Entry::type_leak`]). Without a `repeater` it has
+///   no `repeater` and no `id`, and it is there only for errors;
 /// - `type_leak_error(id = R, item = Name, errors = [(TOKENS) "reason" { .. }, ..], krate = "..")`:
 ///   instead of a table, what a definer announced with `strict = false` could not carry
 ///   ([`Entry::leak_failure`]; [`LeakFailure`] has the syntax). `ANNOUNCE_FORMAT` is still `"1"`.
@@ -763,7 +768,7 @@ impl ToTokens for Entry {
 /// [show!]
 /// defs::Length! => [
 ///     type_leak(repeater = $crate::wire::Repeater, id = ID,
-///               context = 0, referrer = ["type-leak-format-16" (Meters)])
+///               context = 1, result = ["type-leak-format-16" 2 (Meters) declared<>; ()])
 /// ] {
 ///     pub struct Length(pub Meters);
 /// }
@@ -797,7 +802,7 @@ impl ToTokens for Entry {
 /// - `Length`: `type_leak(..)` is the table of the `repeater` ([`Entry::type_leak`]).
 ///   The item still says `Meters`, which only the defining crate can resolve;
 ///   the table is what a callback uses to write the type from anywhere
-///   ([`TypeLeak::apply`]).
+///   ([`TypeLeak::try_apply`]).
 /// - `Point`: `announce_test_derive::lib_check` is the check, `$crate::info(1)` is
 ///   `meta = crate::info(1)` (`crate` became `$crate`, so that the path resolves where
 ///   the callback runs), and `attrs(my_lib)` lists the attribute names that the
@@ -1960,7 +1965,7 @@ mod stable_referrer_tests {
         };
         let analyse = || {
             let mut l = type_leak::Leaker::new();
-            let context = l.intern_struct(&item, true);
+            let context = l.intern_struct(&item);
             (
                 crate::helper::leak::StableReferrer::new(l.result().finish().unwrap()),
                 context,
@@ -2001,13 +2006,14 @@ mod stable_referrer_tests {
     }
 
     #[test]
-    fn stable_referrer_numbers_required_entries_only() {
-        // `::other::X` names another crate: an optional entry, left as written.
+    fn stable_referrer_numbers_the_entries_only() {
+        // `::other::X` names another crate that the analysis takes for the same one on both
+        // sides (`external_crates()`): no entry, left as written.
         let item: syn::ItemStruct = syn::parse_quote! {
             pub struct S { a: Foo, b: ::other::X, c: Bar, d: ::std::string::String }
         };
-        let mut l = type_leak::Leaker::new();
-        let context = l.intern_struct(&item, true);
+        let mut l = type_leak::Leaker::with_rule(type_leak::Rules::new().external_crates());
+        let context = l.intern_struct(&item);
         let r = crate::helper::leak::StableReferrer::new(l.result().finish().unwrap());
         let types: Vec<String> = r
             .types()
@@ -2035,20 +2041,16 @@ mod options_tests {
     #[test]
     fn options_are_parsed_and_forwarded() {
         let mut leaker = type_leak::Leaker::new();
-        let context = leaker.intern_struct(
-            &syn::parse_quote!(
-                struct F<T> {
-                    a: Local,
-                    b: Vec<T>,
-                }
-            ),
-            false,
-        );
+        let context = leaker.intern_struct(&syn::parse_quote!(
+            struct F<T> {
+                a: Local,
+                b: Vec<T>,
+            }
+        ));
         let tl = TypeLeak::new(
-            syn::parse_quote!(::my::A),
-            syn::parse_quote!(7u64),
-            leaker.result().finish().unwrap(),
+            Some(TypeLeak::projection_of(syn::parse_quote!(::my::A), 7)),
             context,
+            leaker.result(),
         );
         let meta = tl.meta();
         let input: Input = syn::parse_quote! {
@@ -2075,16 +2077,11 @@ mod options_tests {
             fetch
         );
         let read = input.entries[0].type_leak().unwrap().unwrap();
-        assert_eq!(read.types().count(), 2);
-        assert_eq!(read.id.base10_digits(), "7");
-        assert_eq!(read.referrer, tl.referrer);
-        let proj = read.projection(1, &syn::parse_quote!((u8,)));
+        assert_eq!(read.entries().len(), 2);
+        assert_eq!(read.projection.as_ref().map(|p| p.id), Some(7));
         assert_eq!(
-            proj.to_string().replace(' ', ""),
-            format!(
-                "<()as::my::A<(u8,),{}u128>>::Type",
-                type_leak::repeater_key(7, 1)
-            )
+            read.result.clone().into_referrer(),
+            tl.result.clone().into_referrer()
         );
         let plain: Input = syn::parse_quote! { [me!] a::F! => [] { struct F; } };
         assert!(!plain.has_option("type_leak"));

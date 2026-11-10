@@ -23,8 +23,9 @@ pub fn announce(attr: TokenStream, item: TokenStream) -> TokenStream {
 ///
 /// The input is a visibility and a name (`pub Repeater`, `pub(crate) Rep`, `Rep`).
 /// The output is the trait that `type_leak::repeater_definition()` returns: a trait
-/// with a type parameter for the generics, one `u128` const parameter for the item's id
-/// and the entry's number, defaulted const parameters for the const generics of the other
+/// with a type parameter for the generics, one `u128` const parameter, `KEY` (the id of the
+/// announcement in its high half and the number of the entry in its low half,
+/// `type_leak::Projection::key`), defaulted const parameters for the const generics of the other
 /// primitive types, and the associated type `Type`. Do not write or implement it:
 /// `#[announce]` writes the impls, and callbacks in other crates write the paths through it.
 ///

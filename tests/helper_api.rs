@@ -246,12 +246,10 @@ fn type_leak_and_transformers() {
     let _: announce::type_leak::Leaker = type_leak::Leaker::new();
 
     let item: syn::ItemStruct = syn::parse_quote! { pub struct S { a: Local, b: u8 } };
-    let mut leaker = type_leak::Leaker::from_config(
-        type_leak::Rules::new().primitive(),
-        type_leak::Options::new(),
-    );
-    let context = leaker.intern_struct(&item, true);
-    let referrer = leaker.result().finish().unwrap();
+    let mut leaker = type_leak::Leaker::with_rule(type_leak::Rules::new().primitive());
+    let context = leaker.intern_struct(&item);
+    let result = leaker.result();
+    let referrer = result.clone().finish().unwrap();
 
     // `StableReferrer`.
     let stable = leak::StableReferrer::new(referrer.clone());
@@ -259,6 +257,8 @@ fn type_leak_and_transformers() {
     assert_eq!(stable.types().len(), 1);
     assert_eq!(stable.index_of(&syn::parse_quote!(Local)), Some(0));
     assert_eq!(squash(stable.to_tuple()), "(Local,)");
+    let (entry, _, _) = referrer.iter().next().unwrap();
+    assert_eq!(stable.stable_index(entry), Some(0));
     let mut as_item = syn::Item::Struct(item.clone());
     stable.visit_item_mut(context, &mut as_item, |_, i| {
         syn::parse_str(&format!("T{}", i)).unwrap()
@@ -272,25 +272,19 @@ fn type_leak_and_transformers() {
     leak::normalize_crate(&mut crate_item);
 
     // `TypeLeak`: build, write as META, read back, apply.
-    let tl = TypeLeak::new(
-        syn::parse_quote!(::my::R),
-        syn::parse_quote!(7u64),
-        referrer,
-        context,
-    );
-    assert_eq!(tl.types().count(), 1);
-    assert_eq!(tl.lookup(&syn::parse_quote!(Local)), Some(0));
-    let _: type_leak::RepeaterSlots = tl.slots();
-    let site = type_leak::UseSite::identity();
-    let args = tl.entry_args(0, &site).unwrap();
-    assert!(squash(tl.projection(0, &args)).contains("::my::R"));
+    let projection = TypeLeak::projection_of(syn::parse_quote!(::my::R), 7);
+    let tl = TypeLeak::new(Some(projection), context, result);
+    assert_eq!(tl.entries().len(), 1);
+    assert_eq!(squash(&tl.entries()[0].1), "Local");
+    assert!(tl.errors().is_empty());
     let back: TypeLeak = syn::parse2(tl.meta()).unwrap();
+    assert_eq!(back.projection.as_ref().map(|p| p.id), Some(7));
     let mut applied = syn::Item::Struct(item.clone());
     back.apply(&mut applied);
     assert!(squash(&applied).contains("::my::R"), "{}", squash(&applied));
     let mut applied = syn::Item::Struct(item);
     tl.try_apply(&mut applied).unwrap();
-    tl.try_apply_at(&mut applied, &site).unwrap();
+    tl.try_apply_at(&mut applied, &[]).unwrap();
 
     // `signature_only`, the function behind `announce::signature_only!`.
     let mut f: syn::Item = syn::parse_quote! { fn f() -> u8 { 1 } };

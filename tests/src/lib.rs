@@ -576,7 +576,7 @@ pub mod derive {
     }
 
     /// Re-emits every entry's item, rewritten with its type-leak information
-    /// (`TypeLeak::apply`) when the definition has an repeater, and records the
+    /// (`TypeLeak::try_apply`) when the definition has a repeater, and records the
     /// META as `pub const <REST>: &[&str]`.
     #[proc_macro]
     pub fn apply_leak(input: TokenStream) -> TokenStream {
@@ -587,7 +587,8 @@ pub mod derive {
             for e in input.entries_in_order() {
                 let mut item = e.item()?;
                 if let Some(tl) = e.type_leak()? {
-                    tl.apply(&mut item);
+                    // The errors of type-leak are reported here, at the consumer.
+                    tl.try_apply(&mut item)?;
                 }
                 metas.push(
                     e.meta
@@ -606,7 +607,7 @@ pub mod derive {
     /// Reads the `type_leak(..)` META through `Entry::type_leak` and records,
     /// for every entry in visiting order, `pub const <REST>: &[&str]` with
     /// `"-"` when the entry has no table, else `"[Type@Args,..]"`: each
-    /// replaced type (type-leak's required entries) and the first argument of
+    /// replaced type (type-leak's entries) and the first argument of
     /// its repeater at the scope of the item (types and arguments without
     /// spaces, sorted by text, so the order of the table does not matter).
     #[proc_macro]
@@ -620,11 +621,25 @@ pub mod derive {
                     None => "-".to_string(),
                     Some(tl) => {
                         let mut pairs = Vec::new();
-                        for (ix, ty) in tl.types() {
-                            let args = tl.entry_args(
-                                ix,
-                                &announce::helper::type_leak::UseSite::identity(),
-                            )?;
+                        let unit: syn::Type = syn::parse_quote!(());
+                        for (ix, ty, context) in tl.referrer().iter() {
+                            let projection = tl.projection.as_ref().ok_or_else(|| {
+                                syn::Error::new(proc_macro2::Span::call_site(), "no repeater")
+                            })?;
+                            // `<() as Repeater<ARGS, KEY>>::Type`: the arguments are the first
+                            // generic argument of the trait.
+                            let written = projection.of(&unit, context, ix)?;
+                            let args = match &written {
+                                syn::Type::Path(syn::TypePath {
+                                    qself: Some(qself),
+                                    path,
+                                }) => path.segments[qself.position - 1].arguments.clone(),
+                                _ => return Err(syn::Error::new_spanned(&written, "a projection")),
+                            };
+                            let args = match args {
+                                syn::PathArguments::AngleBracketed(a) => a.args[0].clone(),
+                                _ => return Err(syn::Error::new_spanned(&written, "arguments")),
+                            };
                             pairs.push(format!(
                                 "{}@{}",
                                 squash(ty.to_token_stream()),
@@ -633,6 +648,44 @@ pub mod derive {
                         }
                         pairs.sort();
                         format!("[{}]", pairs.join(","))
+                    }
+                });
+            }
+            Ok(quote! { pub const #name: &[&str] = &[ #(#rows),* ]; })
+        })
+        .into()
+    }
+
+    /// `table_errors! { [..] NAME }`: `pub const NAME: &[&str]` has a row for every entry: `"-"`
+    /// without a `type_leak(..)` table, else `"CAUSES/APPLY/ALLOWED"`: the causes of the errors of
+    /// type-leak that remain in it (`|` between them, spaces left out), then `ok` or `error` for
+    /// `TypeLeak::try_apply` on the item as written, and for the same after `allow` of every
+    /// error (the consumer promises that the parts compile as written).
+    #[proc_macro]
+    pub fn table_errors(input: TokenStream) -> TokenStream {
+        announce::helper::callback(input.into(), |input| {
+            let name: syn::Ident = input.rest_as()?;
+            let squash = |t: TokenStream2| t.to_string().split_whitespace().collect::<String>();
+            let mut rows = Vec::new();
+            for e in input.entries_in_order() {
+                rows.push(match e.type_leak()? {
+                    None => "-".to_string(),
+                    Some(tl) => {
+                        let causes: Vec<String> = tl
+                            .errors()
+                            .iter()
+                            .map(|x| squash(x.cause.to_token_stream()))
+                            .collect();
+                        let verdict = |r: syn::Result<()>| if r.is_ok() { "ok" } else { "error" };
+                        let applied = verdict(tl.try_apply(&mut e.item()?));
+                        let all = tl.clone().allow(
+                            |_: &announce::helper::type_leak::Cause,
+                             _: announce::helper::type_leak::Place| {
+                                true
+                            },
+                        );
+                        let allowed = verdict(all.try_apply(&mut e.item()?));
+                        format!("{}/{}/{}", causes.join("|"), applied, allowed)
                     }
                 });
             }
@@ -1006,7 +1059,7 @@ pub mod defs {
     pub mod carried {
         //! Types that name something of this module without being a path to it, carried by a `repeater`:
         //! a trait object, an array length and a const generic argument. Without a `repeater` the same
-        //! items fail (`value_paths` and `trait_paths_relative` in `tests/ui_leak.rs`).
+        //! items fail (`audit3_errors` and `repeater_required` in `tests/ui_leak.rs`).
 
         use announce::announce;
 
@@ -3181,12 +3234,16 @@ pub mod defs {
                 pub b: Other,
             }
 
+            /// A relative trait path is an error of type-leak, not a cause: nothing to record, and the
+            /// table has the error (a callback that applies it fails at its tokens, `recorded_trait_path`
+            /// in `tests/ui_same_context.rs`).
             #[announce(strict = false)]
             pub trait Sub: Base {
                 fn local(&self) -> u8;
             }
 
-            /// Every kind of cause in one item.
+            /// Every kind of cause in one item: the relative types (an array length makes one). The
+            /// value path and `Wrap<'_>` are type-leak's errors, and no cause.
             #[announce(strict = false)]
             pub trait Many: Base {
                 const M: usize = LEN;
@@ -3197,10 +3254,9 @@ pub mod defs {
             #[announce(strict = false)]
             pub struct Plain(pub u8);
 
-            // The copies name `Local` and `Base` as written.
+            // The copies name `Local` as written.
             Holder! { [Holder!, ::announce_test_derive::resolved_copy!] HolderCopy }
             Pair! { [Pair!, ::announce_test_derive::resolved_copy!] PairCopy }
-            Sub! { [Sub!, ::announce_test_derive::resolved_copy!] SubCopy }
             Plain! { [Plain!, ::announce_test_derive::resolved_copy!] PlainCopy }
 
             /// A macro of the module that builds the chain: its names are those of the module.
@@ -4164,6 +4220,46 @@ pub mod defs {
         pub struct NoLeaks2;
     }
 
+    /// The errors of type-leak are in the table, not at the definition: the items compile, the table
+    /// has the errors (and, with a `repeater`, the impls of the entries), and the consumer decides
+    /// (`tests/type_leak.rs`; the UI tests that report them are in `tests/ui_leak.rs`).
+    pub mod table_errors {
+        use super::announce;
+
+        ::announce::define_repeater!(pub Repeater);
+
+        pub mod inner {
+            pub trait Base {}
+            pub struct Local(pub u8);
+            pub struct Wrap<'a>(pub &'a u8);
+        }
+        use inner::{Base, Local, Wrap};
+
+        /// Without a `repeater`, and nothing relative but a trait path: the table has the error only.
+        #[announce]
+        pub trait OnlyErrors: Base {
+            fn f(&self) -> u8;
+        }
+
+        /// With a `repeater`: the impl of `Local`, and the error of `Wrap<'_>`.
+        #[announce(repeater = crate::table_errors::Repeater)]
+        pub trait Mixed {
+            fn f(&self, a: Wrap<'_>, b: Local);
+        }
+
+        /// No error: the table has the entry only.
+        #[announce(repeater = crate::table_errors::Repeater)]
+        pub trait Clean {
+            fn f(&self, b: Local);
+        }
+
+        /// Nothing at all: no table.
+        #[announce]
+        pub trait Nothing {
+            fn f(&self) -> u8;
+        }
+    }
+
     /// Repeater tables keep the bounds and const generics of the item.
     pub mod table_bounds {
         use super::announce;
@@ -4352,7 +4448,8 @@ pub mod defs {
 
         /// A method lifetime that a relative type mentions is fine when another
         /// argument keeps it as written (`&'a self`, a plain `&'a u8`). Without that,
-        /// type-leak 0.8 rejects the definition (`repeater_lifetime_unconstrained` in `tests/ui_leak.rs`).
+        /// the table has an error of type-leak, which a consumer reports (`leak_at_the_consumer` in
+        /// `tests/ui_leak.rs`).
         #[announce(repeater = crate::leak08::Repeater)]
         pub trait Constrained {
             fn by_self<'a>(&'a self, a: Wrap<'a>) -> &'a u8;

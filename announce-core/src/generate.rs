@@ -1081,7 +1081,8 @@ pub(crate) fn emit(
     // `repeater` is required when the item has types that do not resolve
     // outside this crate. When every path in the item certainly resolves
     // everywhere there is nothing to find, and type-leak is not run.
-    // What no table can carry is an error here, or with `strict = false` a record.
+    // A relative type without a `repeater`, and one that has no impl, is an error here, or with
+    // `strict = false` a record. The errors of type-leak are in the table, for the consumer.
     let fast = opts.repeater.is_none() && crate::fastpath::accepts(item, opts);
     let (leak_impls, leak_meta, here) = if fast {
         #[cfg(test)]

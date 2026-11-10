@@ -690,7 +690,7 @@ macro_rules! impl_methods {
 #[test]
 fn type_leak_with_a_large_item() {
     use announce_tests::defs::large_leak::inner::Local;
-    // `Local` is not in scope in `leaked::s`; `TypeLeak::apply` resolves it.
+    // `Local` is not in scope in `leaked::s`; `TypeLeak::try_apply` resolves it.
     fn local_of(b: &leaked::s::BigLeaky<u8>) -> &Local {
         &b.a
     }
@@ -709,9 +709,9 @@ fn type_leak_with_a_large_item() {
     }
     assert_eq!(leaked::t::BigLeakTrait::make(&X), Local(5));
     assert_eq!(leaked::t::BigLeakTrait::m29(&X, 3), 3);
-    // The META carries type-leak's `Referrer`.
+    // The META carries type-leak's result: the `Referrer`, and the errors that remain.
     let m = norm(leaked::s::M[0]);
-    assert!(m.contains("referrer=[\"type-leak-format-"), "{}", m);
+    assert!(m.contains("result=[\"type-leak-format-"), "{}", m);
     assert!(m.contains("(Local)") && m.contains("<T>;(Vec<T>)"), "{}", m);
     let raw = norm(leaked::raw::OUT);
     assert!(

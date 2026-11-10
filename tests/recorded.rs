@@ -19,15 +19,6 @@ fn copies_made_in_the_module_of_the_items_work() {
     };
     assert_eq!((p.a.0, p.b.0), (3, 4));
 
-    struct X;
-    impl m::inner::Base for X {}
-    impl m::SubCopy for X {
-        fn local(&self) -> u8 {
-            9
-        }
-    }
-    assert_eq!(m::SubCopy::local(&X), 9);
-
     // An item with nothing recorded is copied as it is, with no check.
     assert_eq!(m::PlainCopy(5).0, 5);
 }
@@ -45,7 +36,8 @@ fn copies_made_in_front_of_the_item_in_a_macro_a_function_body_and_a_submodule_w
 mod rows {
     use announce_tests::defs::recorded::m;
 
-    // What the callbacks read: a record for the items, a table for `Leaky`, neither for `Plain`.
+    // What the callbacks read: a record for the items that have a cause, a table for `Leaky` and for
+    // `Sub` (it has the error of type-leak, a relative trait path), neither for `Plain`.
     m::Holder! {
         [m::Holder!, m::Pair!, m::Sub!, m::Many!, m::Plain!, announce_tests::defs::leaky::Leaky!, announce_tests::derive::leak_failures!] ROWS
     }
@@ -65,17 +57,14 @@ fn the_meta_records_every_cause_of_an_item() {
         failure(rows[1]),
         ["Local@without `repeater`", "Other@without `repeater`"]
     );
-    assert_eq!(
-        failure(rows[2]),
-        ["Base@with a relative trait path in a bound"]
-    );
-    // Every kind of cause, not only the first that the analysis finds.
+    // The errors of type-leak are no cause: `Sub` has only a relative trait path, which is in its
+    // table for the consumer to report.
+    assert_eq!(rows[2], "table");
+    // Every relative type, not only the first that the analysis finds; the value path `LEN`, the
+    // trait path `Base` and `Wrap<'_>` are type-leak's errors, and no cause.
     assert_eq!(
         failure(rows[3]),
         [
-            "Base@with a relative trait path in a bound",
-            "LEN@with a relative value path",
-            "Wrap<'_>@with a type that cannot be carried",
             "Local@without `repeater`",
             "Other@without `repeater`",
             "[u8;LEN]@without `repeater`",
@@ -84,10 +73,10 @@ fn the_meta_records_every_cause_of_an_item() {
     // No record, and a table, for the others.
     assert_eq!((rows[4], rows[5]), ("-", "table"));
     // `Entry::type_leak()` is an error exactly for the records.
-    assert_eq!(rows::ROWS_ERR, [true, true, true, true, false, false]);
+    assert_eq!(rows::ROWS_ERR, [true, true, false, true, false, false]);
 }
 
-// A table rewrites the item (`TypeLeak::apply`) and needs no check: the copy resolves anywhere.
+// A table rewrites the item (`TypeLeak::try_apply`) and needs no check: the copy resolves anywhere.
 mod table {
     announce_tests::defs::leaky::Leaky! {
         [announce_tests::defs::leaky::Leaky!, announce_tests::derive::resolved_copy!] LeakyCopy

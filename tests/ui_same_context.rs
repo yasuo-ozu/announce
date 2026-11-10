@@ -27,8 +27,6 @@ use subcrate::subcrate;
     should_error = "`announce_test_ui_lib::m::Holder` is used outside its module `announce_test_ui_lib::m`",
     should_error = "the trait `sibling_fn::in_fn::_::announce_check::InModuleOf_Item` is not implemented",
     should_error = "`announce_test_ui_lib::m::Pair` is used outside its module `announce_test_ui_lib::m`",
-    should_error = "use absolute path: 'UiBase'",
-    should_error = "`announce_test_ui_lib::m::Sub` is used outside its module `announce_test_ui_lib::m`",
     should_error = "the trait `in_expr::_::announce_check::InModuleOf_Item` is not implemented",
     should_error = "`shadowed::Item` is used outside its module `shadowed`",
     // `check_holder!` calls `$crate::m::Holder!`: a subcrate is built without `CARGO_CRATE_NAME`,
@@ -45,8 +43,7 @@ use subcrate::subcrate;
     should_spanned = "Holder",
     should_spanned = "announce_test_ui_lib::check_holder!()",
     should_spanned = "Pair",
-    should_spanned = "Sub",
-    should_error = "aborting due to 20 previous errors\n",
+    should_error = "aborting due to 19 previous errors\n",
 )]
 pub mod same_context {
     #[macro_use]
@@ -170,7 +167,7 @@ pub mod same_context {
     through_the_check!();
 
     // An item of another crate with two causes and a callback after the check, and one with a relative
-    // trait path.
+    // trait path, which is an error of type-leak, not a cause: the check passes.
     announce_test_ui_lib::m::Pair! { [announce_test_ui_lib::m::Pair!, announce::same_context!, announce_test_derive::leak_failures!] PAIR_ROWS }
     announce_test_ui_lib::m::Sub! { [announce_test_ui_lib::m::Sub!, announce::same_context!] }
 
@@ -211,20 +208,17 @@ pub mod same_context {
 }
 
 // One error for each cause that `announce::same_context!` finds in a call outside the module, at
-// the whole type or path in the definition, with the way to fix it.
+// the whole type or path in the definition, with the way to fix it. The causes are announce's:
+// the relative types, and the types that have no impl. The errors of type-leak (a trait path, a
+// value path, `'_`) are no cause: the items that have only those pass the check (`InBound`,
+// `InWhere`, `InMethod`, `Elided`, `Lifetimes` and `Scoped` are in the calls, and give no error).
 #[subcrate(
     ::announce,
-    should_error = "use absolute path: 'UiBase'",
     should_error = "`m::Many` is used outside its module `m`",
     should_error = "use absolute path: 'LEN'",
-    should_error = "use absolute path: 'UiWrap<'_>'",
-    should_error = "`m::InBound` is used outside its module `m`",
-    should_error = "use absolute path: 'UiAssoc'",
+    should_error = "cannot be carried: '<Self as UiAssoc>::X'",
     should_error = "`m::Objects` is used outside its module `m`",
-    should_error = "use absolute path: 'UiAssoc::X'",
-    should_error = "use absolute path: 'Vec<&'_ u8>'",
-    should_error = "`m::Prelude` is used outside its module `m`",
-    should_error = "use absolute path: 'UiIdx'",
+    should_error = "const parameter of a non-primitive type: 'UiIdx'",
     should_error = "`m::ConstTy` is used outside its module `m`",
     should_error = "use absolute path: 'Option<u8>'",
     should_error = "`m::Alias` is used outside its module `m`",
@@ -238,29 +232,15 @@ pub mod same_context {
     should_error = "use absolute path: 'UiTwice'",
     should_error = "`m::Twice` is used outside its module `m`",
     should_error = "`m2::InSignature` is used outside its module `m2`",
-    should_error = "`m2::InWhere` is used outside its module `m2`",
-    should_error = "`m2::InMethod` is used outside its module `m2`",
-    should_error = "`m2::Elided` is used outside its module `m2`",
-    should_error = "use absolute path: 'UiG<Self::A>'",
+    should_error = "cannot be carried: 'UiG<Self::A>'",
     should_error = "`m2::SelfInside` is used outside its module `m2`",
-    should_error = "`UiWrap<'a>` leaves the lifetime `'a` of the method unconstrained in the copy",
-    should_error = "`m3::Lifetimes` is used outside its module `m3`",
     should_error = "`m3::Shadow` is used outside its module `m3`",
     should_error = "`m3::Encoded` is used outside its module `m3`",
     should_error = "const parameter of a non-primitive type: 'crate::inner::UiIdx'",
-    should_error = "use absolute path: 'N'",
-    should_error = "`m3::Scoped` is used outside its module `m3`",
-    should_spanned = "UiBase",
     should_spanned = "Many",
-    should_spanned = "LEN",
-    should_spanned = "UiWrap<'_>",
     should_spanned = "[u8; LEN]",
-    should_spanned = "InBound",
-    should_spanned = "UiAssoc",
     should_spanned = "Objects",
-    should_spanned = "UiAssoc>::X",
-    should_spanned = "Vec<&'_ u8>",
-    should_spanned = "Prelude",
+    should_spanned = "<Self as UiAssoc>::X",
     should_spanned = "UiIdx",
     should_spanned = "ConstTy",
     should_spanned = "Option<u8>",
@@ -275,19 +255,12 @@ pub mod same_context {
     should_spanned = "&'static UiTwice",
     should_spanned = "Twice",
     should_spanned = "InSignature",
-    should_spanned = "InWhere",
-    should_spanned = "InMethod",
-    should_spanned = "Elided",
     should_spanned = "UiG<Self::A>",
     should_spanned = "SelfInside",
-    should_spanned = "UiWrap<'a>",
-    should_spanned = "Lifetimes",
     should_spanned = "Shadow",
     should_spanned = "Encoded",
     should_spanned = "crate::inner::UiIdx",
-    should_spanned = "N",
-    should_spanned = "Scoped",
-    should_error = "aborting due to 29 previous errors\n"
+    should_error = "aborting due to 15 previous errors\n"
 )]
 pub mod same_context_causes {
     ::announce::define_repeater!(pub Repeater);
@@ -310,15 +283,15 @@ pub mod same_context_causes {
         pub struct UiUnique(pub u8);
         const LEN: usize = 4;
 
-        // Every kind of cause in one item: trait path, value path, a type that cannot be carried, and
-        // a relative type (an array length makes it relative).
+        // The relative type is the cause (an array length makes it relative). The trait path, the
+        // value path and `UiWrap<'_>` are errors of type-leak: no cause.
         #[announce::announce(strict = false)]
         pub trait Many: UiBase {
             const M: usize = LEN;
             fn f(&self, a: UiWrap<'_>, c: [u8; LEN]);
         }
 
-        // A relative trait path in a bound of a parameter.
+        // A relative trait path in a bound of a parameter: no cause, the check passes.
         #[announce::announce(strict = false)]
         pub struct InBound<T: UiBase> {
             pub t: T,
@@ -379,6 +352,8 @@ pub mod same_context_causes {
         Prelude! { [Prelude!, announce::same_context!] }
     }
 
+    // No cause: type-leak's errors only.
+
     m::Many! {
         [
             m::Many!,
@@ -395,9 +370,9 @@ pub mod same_context_causes {
         ]
     }
 
-    // More causes, in a second module and a second call, after the first: a where clause, the bound of
-    // a method's parameter, a relative type as an argument and as the return type, and relative types
-    // that a repeater cannot carry.
+    // More causes, in a second module and a second call, after the first: a relative type as an
+    // argument and as the return type, and a relative type that a repeater cannot carry. (A where
+    // clause, the bound of a method's parameter and an elided lifetime are errors of type-leak.)
     pub mod inner2 {
         pub struct UiG<T>(pub T);
     }
@@ -449,11 +424,10 @@ pub mod same_context_causes {
         ]
     }
 
-    // A third call: every cause at its own place, with the others. Only `f` of `Lifetimes` has a
-    // lifetime that is in its return type alone; `Shadow` has `UiLocal` as a parameter of one method
-    // and as the return type of another; a const generic that cannot be encoded is reported with the
-    // trait path of `Encoded`; and the `N` of the default of `Scoped` is the constant, not the
-    // parameter of `f`.
+    // A third call: every cause at its own place, with the others. `Shadow` has `UiLocal` as a
+    // parameter of one method and as the return type of another; a const generic that cannot be
+    // encoded is reported next to the trait path of `Encoded`, which is type-leak's. `Lifetimes` and
+    // `Scoped` have errors of type-leak only.
     mod m3 {
         use super::inner::{UiArr, UiLocal, UiWrap};
         use super::m::UiBase;
@@ -544,13 +518,14 @@ pub mod recorded_outside {
     announce_test_ui_lib::m::Plain! { [announce_test_ui_lib::m::Plain!, announce_test_derive::resolved_copy!] PlainFromHere }
 }
 
-// A relative trait path in a bound is recorded too, but rustc stops at a trait it cannot find in
-// the bounds of an item before it checks the call: the error is its own, at the call.
+// A relative trait path in a bound is not recorded: it is an error of type-leak, in the table of the
+// item, and `Entry::item_resolved` reports it, in type-leak's words, at the call (the item is of
+// another crate, so its tokens have no place here).
 #[subcrate(
     ::announce,
     announce_test_derive = derive,
     announce_test_ui_lib = ui_lib,
-    should_error = "cannot find trait `UiBase` in this scope",
+    should_error = "use absolute path: 'UiBase'",
     should_spanned = "m::Sub! { [m::Sub!, announce_test_derive::resolved_copy!] SubFromHere }",
     should_error = "aborting due to 1 previous error\n",
 )]
@@ -563,15 +538,18 @@ pub mod recorded_trait_path {
 // A callback that needs a type table (`apply_leak!` reads `Entry::type_leak()?`) gets an error
 // for an item announced with `strict = false`, wherever it is called (a proc macro cannot tell):
 // a line for each cause, with the whole path of the trampoline of the call underlined, also for an
-// item of another crate and through its `$crate` macro.
+// item of another crate and through its `$crate` macro. An item that has only errors of type-leak
+// has no record: the callback reports those, at their tokens.
 #[subcrate(
     ::announce,
     announce_test_derive = derive,
     announce_test_ui_lib = ui_lib,
     should_error = "this macro cannot use `announce_test_ui_lib::m::Holder`: `UiLocal` cannot be named outside its module",
-    should_error = "this macro cannot use `m::Elided`: `UiWrap<'_>` cannot be carried",
     should_error = "this macro cannot use `m::ConstTy`: `crate::inner::UiIdx` cannot be carried",
-    should_error = "this macro cannot use `m::Sub`: `UiBase` cannot be named outside its module",
+    // The errors of type-leak are not recorded: the table has them, and the callback reports them
+    // in type-leak's words, at the tokens in the definition.
+    should_error = "use absolute path: 'UiWrap<'_>'",
+    should_error = "use absolute path: 'UiBase'",
     should_error = "this macro cannot use `m::Pair`: `UiLocal` cannot be named outside its module",
     should_error = "this macro cannot use `m::Pair`: `UiOther` cannot be named outside its module",
     should_error = "this macro cannot use `Item`: `UiLocal` cannot be named outside its module",
@@ -580,9 +558,9 @@ pub mod recorded_trait_path {
     should_error = "this macro cannot use `m::Holder`: `UiLocal` cannot be named outside its module",
     should_spanned = "announce_test_ui_lib::m::Holder",
     should_spanned = "announce_test_ui_lib::apply_holder!(announce_test_derive::apply_leak, FromTheLibrary)",
-    should_spanned = "m::Elided",
+    should_spanned = "UiWrap<'_>",
     should_spanned = "m::ConstTy",
-    should_spanned = "m::Sub",
+    should_spanned = "UiBase",
     should_spanned = "m::Pair",
     should_spanned = "Item",
     should_error = "aborting due to 8 previous errors\n",

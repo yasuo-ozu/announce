@@ -358,7 +358,7 @@ fn type_leak_info_lets_callbacks_resolve_local_types() {
         "{}",
         raw
     );
-    // `Local` is not in scope in `leaked::s`; `TypeLeak::apply` resolves it.
+    // `Local` is not in scope in `leaked::s`; `TypeLeak::try_apply` resolves it.
     let v = leaked::s::Leaky::<u32> {
         a: Local(1),
         b: vec![2],
@@ -372,14 +372,14 @@ fn type_leak_info_lets_callbacks_resolve_local_types() {
         }
     }
     assert_eq!(leaked::t::LeakTrait::make(&X), Local(5));
-    // The META carries type-leak's `Referrer` (the types with the generics of
-    // their contexts) and the context of the item.
+    // The META carries type-leak's result (the `Referrer`, with the types and the generics of
+    // their contexts, and the errors that remain) and the context of the item.
     let m = norm(leaked::s::M[0]);
-    assert!(m.contains("referrer=[\"type-leak-format-"), "{}", m);
+    assert!(m.contains("result=[\"type-leak-format-"), "{}", m);
     assert!(m.contains("(Local)") && m.contains("<T>;(Vec<T>)"), "{}", m);
     let t = norm(leaked::t::M[0]);
     assert!(
-        t.contains("referrer=[\"type-leak-format-") && t.contains("(Local)"),
+        t.contains("result=[\"type-leak-format-") && t.contains("(Local)"),
         "{}",
         t
     );

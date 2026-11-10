@@ -437,8 +437,9 @@
 /// The item is announced as written. type-leak analyses it and numbers the relative
 /// types it finds: the *entries* `0, 1, ..`. For each entry, `#[announce]` emits an
 /// impl of the repeater for `()` next to the item. The generics that the type uses
-/// are encoded in the first argument, and the second, `KEY`, is the entry `I` of the item
-/// `ID`, a number chosen for it (`type_leak::repeater_key(ID, I)`, a `u128`):
+/// are encoded in the first argument. The second, `KEY`, is a `u128`: the entry `I` is in
+/// its low half, and `ID`, a number chosen for the item, is in its high half
+/// (`Projection::key(I)` of type-leak):
 ///
 /// ```text
 /// impl crate::Repeater<(), KEY0> for () { type Type = Local; }
@@ -446,15 +447,23 @@
 /// ```
 ///
 /// With a `repeater`, `META` always has one more element, `type_leak(..)`, with no
-/// entries when no type needed it. A callback reads it with
+/// entries when no type needed it:
+///
+/// ```text
+/// type_leak(repeater = $crate::Repeater, id = ID, context = 0, result = [ .. ])
+/// ```
+///
+/// `result` is the result of the analysis in type-leak's own format: the entries, and the
+/// errors that type-leak found (see "What a repeater does not carry"). `context` is the
+/// scope of the item in it. A callback reads the element with
 /// `announce::helper::Entry::type_leak`. Its format and the encoding of the generics
 #[cfg_attr(
     feature = "proc-macro-api",
-    doc = "are in [`announce::helper::TypeLeak`]. `TypeLeak::apply` rewrites every entry in an"
+    doc = "are in [`announce::helper::TypeLeak`]. `TypeLeak::try_apply` rewrites every entry in an"
 )]
 #[cfg_attr(
     not(feature = "proc-macro-api"),
-    doc = "are in `announce::helper::TypeLeak`. `TypeLeak::apply` rewrites every entry in an"
+    doc = "are in `announce::helper::TypeLeak`. `TypeLeak::try_apply` rewrites every entry in an"
 )]
 /// item to `<() as $crate::Repeater<ARGS, KEY>>::Type`:
 ///
@@ -465,8 +474,8 @@
 /// # let mut out = Vec::new();
 /// for entry in input.entries_in_order() {
 ///     let mut item = entry.item()?;           // the definition, as written
-///     if let Some(tl) = entry.type_leak()? {  // `None` without a repeater
-///         tl.apply(&mut item);
+///     if let Some(tl) = entry.type_leak()? {  // `None` without a repeater or an error
+///         tl.try_apply(&mut item)?;           // reports the errors of type-leak
 ///     }
 ///     // emit `item`
 /// #   out.push(item);
@@ -491,11 +500,19 @@
 ///
 /// That resolves in any crate, because `$crate` is the defining crate. A callback
 /// that writes the item at another place, such as the `impl Tr<u8> for X` of a
-/// trait, uses `TypeLeak::try_apply_at` with a `UseSite`.
+/// trait, uses `TypeLeak::try_apply_at` with the generic arguments of the use site.
 ///
-/// ## Errors a repeater does not fix
+/// ## What a repeater does not carry
 ///
-/// A repeater carries types only. The rest must resolve by itself:
+/// A repeater carries types only. type-leak finds the parts that no table can carry, and
+/// copies each as written: it recovers and goes on, so one analysis lists them all. These
+/// errors are not the definition's. `#[announce]` does not report them. They are in the
+/// `result` of the `type_leak(..)` element, and the consumer decides. A callback that applies
+/// the table (`TypeLeak::try_apply`, `Entry::item_resolved`) gets them as errors, all at once,
+/// in type-leak's own words, at their tokens in the definition. It may allow them first
+/// (`TypeLeak::allow`, `TypeLeak::ignore`) if it promises that the part compiles as written
+/// where it is copied. An item that has such errors and no entry has the element too, with no
+/// `repeater` and no `id`: `type_leak(context = 0, result = [ .. ])`.
 ///
 /// - **Trait paths**: supertraits, bounds in generics and `where` clauses, and
 ///   `impl` bounds must be absolute. `trait Sub: Base` is an error; write
@@ -508,25 +525,9 @@
 ///   bound (`T: crate::Tr<{ N }>`) must be absolute (`crate::N`) or be a const parameter
 ///   in scope (a trait's const default may name `Self::N` too). An array length or a const
 ///   argument inside a type (`[u8; N]`, `Wrap<{ N }>`) is carried with the type: with a
-///   relative constant `N` the type is relative, and needs a `repeater`.
-/// - **Type aliases** must use absolute paths on the right-hand side, and take no
-///   `repeater`. `type A = Option<Local>` is an error; write
-///   `::core::option::Option<crate::Local>`.
-/// - A relative type may mention a const parameter only if the parameter has a
-///   primitive type (`bool`, `char`, any integer). A const parameter of a type alias
-///   (`const N: Idx`, even an absolute alias) cannot be encoded.
-///
-/// The type analysis rejects more, at the offending type ("`Local<'_>` cannot be named
-/// outside its module (a type that cannot be carried)"), whatever the `repeater`. In each
-/// case, write the relative type with an absolute path (`crate::..`, `::other_crate::..`),
-/// and nothing needs to be carried:
-///
-/// - **`Self` in a relative type.** `Self` has no meaning in the repeater's impl, so
-///   `fn f(&self) -> Local<Self>` and `Local<Self::Out>` are errors, while
-///   `::std::boxed::Box<Self::Out>` and a bare `Self::Out` are fine. In a struct,
-///   enum or union, `Local<Self::A>` must be written out
-///   (`Local<<Self as crate::Trait>::A>`). `Local<T::Output>` is fine, `T` being a
-///   parameter of the item.
+///   relative constant `N` the type is relative, and needs a `repeater`. `None`, `Some`,
+///   `Ok`, `Err` and `drop` are names of the std prelude: they need `allow_std_prelude = true`.
+/// - **`Self` without a meaning**: in a type alias.
 /// - **A bound cycle.** A relative type in a bound or `where` clause that mentions
 ///   the bounded parameter, as in `struct S<T: ::core::convert::From<Local<T>>>(T)`,
 ///   is an error: the rewritten bound would have to hold before it can be checked.
@@ -544,13 +545,29 @@
 ///   have `'a` only inside a projection. Keep `'a` in another argument (`&'a self`,
 ///   `b: &'a u8`) or write `Local` with an absolute path.
 ///
+/// In each case, writing the relative type with an absolute path (`crate::..`,
+/// `::other_crate::..`) means that nothing needs to be carried.
+///
+/// ## Errors at the definition
+///
+/// These are the errors of `#[announce]` itself: one for each, at its tokens in the item, all
+/// reported at once.
+///
+/// - **A relative type without a `repeater`**: add the option, or write the path absolutely.
+/// - **A relative type in a type alias**, which has no table and takes no `repeater`:
+///   `type A = Option<Local>` is an error; write `::core::option::Option<crate::Local>`.
+/// - **A type that cannot be carried**, because its impl is for `()`:
+///   - A relative type that names `Self`, as `fn f(&self) -> Local<Self>` and
+///     `Local<Self::Out>` do. `Self` has no meaning for `()`. `::std::boxed::Box<Self::Out>`
+///     and a bare `Self::Out` are fine. Write the type with an absolute path.
+///   - A relative type that mentions a const parameter whose type is not primitive. The
+///     parameter needs the type of a repeater's slot (`bool`, `char`, any integer). A const
+///     parameter of an alias (`const N: Idx`, even an absolute alias) cannot be encoded.
+///
 /// ## Items that resolve in their module only
 ///
-/// A type or path that cannot be named outside its module (a relative type without a
-/// `repeater`, a relative trait or value path, a type the analysis refuses, a const generic that
-/// cannot be encoded) is an error at the definition: one for each, at its tokens in the item and
-/// with what the definer can do, all reported at once. A `repeater` carries the relative types,
-/// but not a trait path or a const parameter that is not of a primitive type.
+/// A relative type without a `repeater`, or a type that cannot be carried, is an error at the
+/// definition:
 ///
 /// ```text
 /// error: `Local` cannot be named outside its module: add `repeater = ..` to the `#[announce]`, or write the path absolutely
@@ -573,13 +590,13 @@
 ///   `#[announce]`, or write the path absolutely``.
 /// - `Entry::leak_failure()` returns the record.
 /// - `Entry::item_resolved(krate)` is the item to emit and what goes with it: with a table the
-///   rewritten item, with a record the item as written and a check
-///   (`LeakFailure::assume_success`) that fails to compile unless the call is in the item's
-///   module. A callback that emits the item elsewhere gets rustc's own "cannot find type"
-///   errors first, and then the error of the check; with a relative trait path in a bound
-///   (`trait Sub: Base`) rustc stops at "cannot find trait" (E0405) before it.
+///   rewritten item (an error if the table has errors of type-leak that remain), with a record
+///   the item as written and a check (`LeakFailure::assume_success`) that fails to compile
+///   unless the call is in the item's module. A callback that emits the item elsewhere gets
+///   rustc's own "cannot find type" errors first, and then the error of the check.
 /// - [`announce::same_context!`] in the chain emits only that check. It works in item,
-///   statement and `(expr)` position, not in type or pattern position.
+///   statement and `(expr)` position, not in type or pattern position. The errors of type-leak
+///   are not in the record: they are in the table, which this check does not read.
 ///
 /// Inside means the module where the call expands. For a call in the body of a `macro_rules!`
 /// macro that is the module of the invocation, not the module that defines the macro. A module

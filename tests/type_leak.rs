@@ -1,5 +1,5 @@
 //! Repeater tables as a consumer sees them: the META, and the items re-emitted
-//! through `TypeLeak::apply` in modules where the relative types are not in scope.
+//! through `TypeLeak::try_apply` in modules where the relative types are not in scope.
 
 fn norm(s: &str) -> String {
     s.split_whitespace().collect()
@@ -18,7 +18,7 @@ fn without_id(meta: &str) -> String {
     format!("{}ID{}", &m[..start], &m[end..])
 }
 
-// H4: a repeater, but only absolute types: the table is there and empty.
+// H4: a repeater, but only absolute types: the table is there and empty (no entry, no error).
 mod empty {
     pub mod re {
         ::announce_tests::defs::empty_table::NoLeaks! { [::announce_tests::defs::empty_table::NoLeaks!, ::announce_tests::derive::apply_leak!] M }
@@ -33,11 +33,11 @@ fn repeater_with_only_absolute_types_has_an_empty_table() {
     assert_eq!(
         without_id(empty::re::M[0]),
         format!(
-            "type_leak(repeater=$crate::empty_table::Repeater,id=ID,context=0,referrer=[\"type-leak-format-{}\"()])",
+            "type_leak(repeater=$crate::empty_table::Repeater,id=ID,context=0,result=[\"type-leak-format-{}\"declared<>;()])",
             announce::type_leak::Referrer::FORMAT_VERSION
         )
     );
-    // `Entry::type_leak()` is `Some`, with empty lists.
+    // `Entry::type_leak()` is `Some`, with no entry.
     assert_eq!(empty::ty::T, ["[]"]);
     // The item is unchanged.
     let v = empty::re::NoLeaks {
@@ -86,10 +86,11 @@ fn repeater_table_keeps_bounds() {
     assert_eq!(bounds::bounded_ty::T, ["[Local@(),Wrap<T>@(T,)]"]);
     let m = without_id(bounds::bounded::M[0]);
     assert!(
-        m.starts_with("type_leak(repeater=$crate::table_bounds::Repeater,id=ID,context=0,referrer=[\"type-leak-format-"),
+        m.starts_with("type_leak(repeater=$crate::table_bounds::Repeater,id=ID,context="),
         "{}",
         m
     );
+    assert!(m.contains(",result=[\"type-leak-format-"), "{}", m);
     assert!(!m.contains("Vec"), "{}", m);
 }
 
@@ -215,8 +216,8 @@ fn tuple_carries_only_the_relative_member() {
     assert_eq!(t.t, (Local(1), 2));
     assert_eq!(leak08::tup_ty::T, ["[Local@()]"]);
     let m = without_id(leak08::tup::M[0]);
-    assert!(m.contains(",referrer=[\"type-leak-format-"), "{}", m);
-    assert!(m.ends_with("(Local)])"), "{}", m);
+    assert!(m.contains(",result=[\"type-leak-format-"), "{}", m);
+    assert!(m.contains("(Local)"), "{}", m);
 }
 
 #[test]
@@ -241,4 +242,76 @@ fn method_lifetime_kept_by_another_argument() {
     assert_eq!(*c::Constrained::by_self(&X, Wrap(&v)), 3);
     assert_eq!(*c::Constrained::by_arg(&X, Wrap(&v), &v), 3);
     assert_eq!(c::ty::T, ["[Wrap<'a>@(&'a(),)]"]);
+}
+
+// The errors of type-leak travel in the table: the consumer reports them, or allows them.
+mod errors {
+    pub mod rows {
+        ::announce_tests::defs::table_errors::OnlyErrors! {
+            [
+                ::announce_tests::defs::table_errors::OnlyErrors!,
+                ::announce_tests::defs::table_errors::Mixed!,
+                ::announce_tests::defs::table_errors::Clean!,
+                ::announce_tests::defs::table_errors::Nothing!,
+                ::announce_tests::derive::table_errors!
+            ] ROWS
+        }
+    }
+    pub mod types {
+        ::announce_tests::defs::table_errors::Mixed! {
+            [::announce_tests::defs::table_errors::Mixed!, ::announce_tests::derive::leak_types!] T
+        }
+    }
+    pub mod only {
+        ::announce_tests::defs::table_errors::OnlyErrors! {
+            [::announce_tests::defs::table_errors::OnlyErrors!, ::announce_tests::derive::leak_types!] T
+        }
+    }
+    pub mod meta {
+        ::announce_tests::defs::table_errors::OnlyErrors! {
+            [::announce_tests::defs::table_errors::OnlyErrors!, ::announce_tests::defs::table_errors::Mixed!, ::announce_tests::defs::table_errors::Clean!, ::announce_tests::derive::rest_probe!]
+        }
+    }
+}
+
+#[test]
+fn the_errors_of_type_leak_are_in_the_table_for_the_consumer() {
+    // Newest first in the chain, oldest first in the rows: `OnlyErrors`, `Mixed`, `Clean`,
+    // `Nothing`. The errors are the causes in the definitions, as type-leak found them; `try_apply`
+    // fails with them, and works after the consumer allowed them. A table without errors applies
+    // as it is, and `Nothing` has no table.
+    assert_eq!(
+        errors::rows::ROWS,
+        ["Base/error/ok", "Wrap<'_>/error/ok", "/ok/ok", "-"]
+    );
+}
+
+#[test]
+fn a_table_without_a_repeater_has_the_errors_and_no_entry() {
+    // The META of an item without a `repeater`: no `repeater` and no `id`, the context and the
+    // result with the error; with a `repeater`, the table has the entries and the error.
+    let m = errors::meta::META;
+    assert_eq!(m.len(), 3);
+    let only = norm(m[0]);
+    assert!(only.starts_with("type_leak(context="), "{}", only);
+    assert!(only.contains(",result=[\"type-leak-format-"), "{}", only);
+    assert!(only.contains("@[{trait(Base)"), "{}", only);
+    assert!(!only.contains("repeater="), "{}", only);
+    let mixed = without_id(m[1]);
+    assert!(
+        mixed.starts_with("type_leak(repeater=$crate::table_errors::Repeater,id=ID,context="),
+        "{}",
+        mixed
+    );
+    assert!(
+        mixed.contains("(Local)") && mixed.contains("@[{"),
+        "{}",
+        mixed
+    );
+    // No error, no `@[`.
+    let clean = without_id(m[2]);
+    assert!(!clean.contains("@["), "{}", clean);
+    // The entries: `OnlyErrors` has none, `Mixed` has `Local` and not `Wrap<'_>`.
+    assert_eq!(errors::only::T, ["[]"]);
+    assert_eq!(errors::types::T, ["[Local@()]"]);
 }

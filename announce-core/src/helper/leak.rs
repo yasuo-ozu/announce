@@ -1,8 +1,8 @@
 //! Numbering by token text for [`type_leak`].
 //!
 //! `type_leak::Referrer` numbers its entries by context (in order of first
-//! appearance) and then by token text. [`StableReferrer`] numbers the required
-//! entries by token text alone. A definer and a consumer then get the same indices
+//! appearance) and then by token text. [`StableReferrer`] numbers the entries by token text
+//! alone. A definer and a consumer then get the same indices
 //! even when their analyses give the contexts other ids.
 //!
 //! Both sides must see the same tokens. A definer sees the item before `#[cfg]`
@@ -11,7 +11,7 @@
 //!
 //! With `#[announce(repeater = ..)]` none of this is needed. The definer builds the
 //! table, the `type_leak(..)` META carries it, and the callback applies it with
-//! [`TypeLeak::apply`](crate::helper::TypeLeak::apply).
+//! [`TypeLeak::try_apply`](crate::helper::TypeLeak::try_apply).
 
 use proc_macro2::TokenStream;
 use syn::Type;
@@ -35,36 +35,37 @@ pub fn normalize_crate(item: &mut syn::Item) {
     syn::visit_mut::VisitMut::visit_item_mut(&mut V, item);
 }
 
-/// A `type_leak::Referrer` whose required entries are numbered by token text.
+/// A `type_leak::Referrer` whose entries are numbered by token text.
 ///
-/// Optional entries (absolute paths of other crates, which a `Referrer`
-/// replaces only when it is made strict) have no number: they are left as
-/// written.
+/// Every live entry has a number, the position of its type among the distinct types of the
+/// entries, sorted by token text. An absolute path of another crate is an entry only if the
+/// analysis was not told that the crate is the same on both sides
+/// (`type_leak::Rules::external_crates()`, which announce uses).
 #[derive(Clone, Debug)]
 pub struct StableReferrer {
     inner: type_leak::Referrer,
-    /// The distinct types of the required entries, sorted by token text.
+    /// The distinct types of the entries, sorted by token text.
     order: Vec<Type>,
-    /// The stable index of each entry of `inner`, `None` for an optional one.
+    /// The stable index of each entry of `inner`, by its `EntryId`; `None` for an index that
+    /// is no live entry (one that `LeakerResult::ignore` removed).
     stable: Vec<Option<usize>>,
 }
 
+/// The repeater that [`StableReferrer`] has the visitor write, to read the entry back from its
+/// `KEY`.
+const MARK: &str = "__AnnounceStable";
+
 impl StableReferrer {
-    /// Renumbers `referrer`'s required entries by their token text.
+    /// Renumbers `referrer`'s entries by their token text.
     pub fn new(referrer: type_leak::Referrer) -> Self {
-        let mut order: Vec<Type> = referrer.required().map(|(_, t)| t.clone()).collect();
+        let mut order: Vec<Type> = referrer.iter().map(|(_, t, _)| t.clone()).collect();
         order.sort_by_cached_key(|t| t.to_token_stream().to_string());
         order.dedup();
-        let stable = referrer
-            .iter()
-            .enumerate()
-            .map(|(ix, t)| {
-                referrer
-                    .must(ix)
-                    .then(|| order.iter().position(|o| o == t))
-                    .flatten()
-            })
-            .collect();
+        let mut stable = Vec::new();
+        for (entry, ty, _) in referrer.iter() {
+            stable.resize(stable.len().max(entry.index() + 1), None);
+            stable[entry.index()] = order.iter().position(|o| o == ty);
+        }
         StableReferrer {
             inner: referrer,
             order,
@@ -87,28 +88,67 @@ impl StableReferrer {
         self.order.iter().position(|t| t == ty)
     }
 
-    fn stable_fn<'a>(
-        stable: &'a [Option<usize>],
-        mut f: impl FnMut(Type, usize) -> Type + 'a,
-    ) -> impl FnMut(Type, usize) -> Type + 'a {
-        // An optional entry is replaced only by a strict `Referrer`, which
-        // this is not: leave it as written if it ever shows up.
-        move |ty, unstable| match stable[unstable] {
-            Some(i) => f(ty, i),
-            None => ty,
-        }
+    /// The stable index of the entry `entry` of the `Referrer`, which [`Referrer::iter`] gives.
+    ///
+    /// [`Referrer::iter`]: type_leak::Referrer::iter
+    pub fn stable_index(&self, entry: type_leak::EntryId) -> Option<usize> {
+        self.stable.get(entry.index()).copied().flatten()
     }
 
-    /// `Referrer::expand` with stable indices. `context` is what the `intern_*`
-    /// method of the `Leaker` returned.
+    /// The marker projection: the visitor writes `<Self as MARK<ARGS, ix>>::Type` for the entry
+    /// `ix` (the `id` is 0, so the `KEY` is the index), which [`StableRewrite`] finds again.
+    fn projection() -> type_leak::Projection {
+        let path: syn::Path = syn::Path::from(proc_macro2::Ident::new(
+            MARK,
+            proc_macro2::Span::call_site(),
+        ));
+        let param = proc_macro2::Ident::new("__S", proc_macro2::Span::call_site());
+        type_leak::Projection::new(path, 0, type_leak::ImplSelf::Param(param))
+    }
+
+    /// `Referrer::visitor` with stable indices: rewrites every leaked type of an item (or of a
+    /// type, or of anything a `VisitMut` method takes) by `f`, which gets the type of the entry
+    /// as the definer wrote it and its stable index. `context` is what the `intern_*` method of
+    /// the `Leaker` returned. `visit` is the `VisitMut` call of the visitor it gets
+    /// (`|v| v.visit_item_mut(&mut item)`).
+    pub fn rewrite<T>(
+        &self,
+        context: type_leak::ContextId,
+        value: &mut T,
+        visit: impl Fn(&mut dyn syn::visit_mut::VisitMut, &mut T),
+        f: impl FnMut(Type, usize) -> Type,
+    ) {
+        let projection = Self::projection();
+        {
+            let mut v = self.inner.visitor(context, &projection);
+            visit(&mut v, value);
+        }
+        // The entries are written through the marker: read them back, and call `f`.
+        let types: Vec<Option<&Type>> = {
+            let mut types = vec![None; self.stable.len()];
+            for (entry, ty, _) in self.inner.iter() {
+                types[entry.index()] = Some(ty);
+            }
+            types
+        };
+        let mut rewrite = StableRewrite {
+            stable: self,
+            types,
+            f,
+        };
+        visit(&mut rewrite, value);
+    }
+
+    /// `Referrer::expand` with stable indices. `context` is what the `intern_*` method of the
+    /// `Leaker` returned.
     pub fn expand(
         &self,
         context: type_leak::ContextId,
-        ty: Type,
+        mut ty: Type,
         f: impl FnMut(Type, usize) -> Type,
     ) -> Type {
-        self.inner
-            .expand(context, ty, Self::stable_fn(&self.stable, f))
+        self.rewrite(context, &mut ty, |v, ty| v.visit_type_mut(ty), f);
+        ty
     }
 
     /// `Referrer::visitor` with stable indices: rewrites every leaked type in an
@@ -119,16 +159,70 @@ impl StableReferrer {
         item: &mut syn::Item,
         f: impl FnMut(Type, usize) -> Type,
     ) {
-        let mut v = self
-            .inner
-            .visitor(context, Self::stable_fn(&self.stable, f));
-        syn::visit_mut::VisitMut::visit_item_mut(&mut v, item);
+        self.rewrite(context, item, |v, item| v.visit_item_mut(item), f);
     }
 
     /// The types as a tuple type `(T0, T1, ..)` (handy for META).
     pub fn to_tuple(&self) -> TokenStream {
         let t = &self.order;
         template_quote::quote! { ( #(#t,)* ) }
+    }
+}
+
+/// Finds the paths through [`MARK`] that the visitor of type-leak wrote, and replaces each by the
+/// closure's type for its entry.
+struct StableRewrite<'a, F> {
+    stable: &'a StableReferrer,
+    types: Vec<Option<&'a Type>>,
+    f: F,
+}
+
+impl<F: FnMut(Type, usize) -> Type> StableRewrite<'_, F> {
+    /// The index of the entry that `ty`, a path through [`MARK`], is for.
+    fn entry_of(ty: &Type) -> Option<usize> {
+        let path = match ty {
+            Type::Path(syn::TypePath {
+                qself: Some(qself),
+                path,
+            }) => {
+                // `<impl_for as MARK<ARGS, KEY>>::Type`: the trait is the first segments of `path`.
+                let at = qself.position;
+                let mut trait_path = path.clone();
+                trait_path.segments = path.segments.iter().take(at).cloned().collect();
+                trait_path
+            }
+            _ => return None,
+        };
+        let last = path.segments.last()?;
+        if last.ident != MARK {
+            return None;
+        }
+        match &last.arguments {
+            syn::PathArguments::AngleBracketed(args) => match args.args.last()? {
+                syn::GenericArgument::Const(syn::Expr::Lit(syn::ExprLit {
+                    lit: syn::Lit::Int(key),
+                    ..
+                })) => key.base10_parse().ok(),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+}
+
+impl<F: FnMut(Type, usize) -> Type> syn::visit_mut::VisitMut for StableRewrite<'_, F> {
+    fn visit_type_mut(&mut self, ty: &mut Type) {
+        let entry = Self::entry_of(ty).and_then(|ix| {
+            let original = self.types.get(ix).copied().flatten()?;
+            Some((
+                original.clone(),
+                self.stable.stable.get(ix).copied().flatten()?,
+            ))
+        });
+        match entry {
+            Some((original, stable)) => *ty = (self.f)(original, stable),
+            None => syn::visit_mut::visit_type_mut(self, ty),
+        }
     }
 }
 
@@ -143,9 +237,10 @@ mod tests {
             .collect()
     }
 
+    /// The analysis as announce makes it: the absolute paths of other crates are no entries.
     fn analyse(item: &syn::ItemStruct) -> (StableReferrer, type_leak::ContextId) {
-        let mut l = type_leak::Leaker::new();
-        let context = l.intern_struct(item, true);
+        let mut l = type_leak::Leaker::with_rule(type_leak::Rules::new().external_crates());
+        let context = l.intern_struct(item);
         (StableReferrer::new(l.result().finish().unwrap()), context)
     }
 
@@ -184,9 +279,12 @@ mod tests {
         let item: syn::ItemStruct =
             syn::parse_quote! { pub struct S { a: u8, b: ::std::string::String, c: crate::X } };
         // Primitives and `crate::` paths need allowing, as announce does.
-        let rules = type_leak::Rules::new().primitive().crate_paths();
-        let mut l = type_leak::Leaker::from_config(rules, type_leak::Options::new());
-        let context = l.intern_struct(&item, true);
+        let rules = type_leak::Rules::new()
+            .primitive()
+            .crate_paths()
+            .external_crates();
+        let mut l = type_leak::Leaker::with_rule(rules);
+        let context = l.intern_struct(&item);
         let r = StableReferrer::new(l.result().finish().unwrap());
         assert!(r.is_empty());
         assert!(r.types().is_empty());
@@ -212,7 +310,7 @@ mod tests {
     }
 
     #[test]
-    fn index_of_is_none_for_unknown_and_optional_types() {
+    fn index_of_is_none_for_unknown_and_absolute_types() {
         let item: syn::ItemStruct =
             syn::parse_quote! { pub struct S { a: Foo, b: ::other::X, c: Bar } };
         let (r, _) = analyse(&item);
@@ -223,13 +321,13 @@ mod tests {
     }
 
     #[test]
-    fn expand_leaves_optional_entries_as_written() {
+    fn expand_leaves_absolute_types_as_written() {
         let item: syn::ItemStruct = syn::parse_quote! { pub struct S { a: Foo, b: ::other::X } };
         let (r, context) = analyse(&item);
         let x: Type = syn::parse_quote!(::other::X);
-        // The closure is not called for an optional entry.
+        // The closure is not called for an absolute type: it is no entry.
         assert_eq!(
-            squash(r.expand(context, x.clone(), |_, _| panic!("optional"))),
+            squash(r.expand(context, x.clone(), |_, _| panic!("no entry"))),
             "::other::X"
         );
         let mut seen = Vec::new();

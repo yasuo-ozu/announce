@@ -87,8 +87,10 @@ pub struct Options {
     /// `false`: they are removed there, which makes the trampoline smaller.
     /// The item that is compiled keeps its docs either way.
     pub docs: bool,
-    /// `strict = false` records a type that cannot be named outside its module in the `META`
-    /// for the call to check, instead of failing at the definition. Default `true`.
+    /// `strict = false` records a type that cannot be named outside its module (a relative type
+    /// without a `repeater`, or one that cannot be carried) in the `META` for the call to check,
+    /// instead of failing at the definition. The errors of type-leak are no such cause: they are
+    /// in the `type_leak(..)` table for the consumer. Default `true`.
     pub strict: bool,
     /// The option keys that were written (a value that is set is told from a default).
     pub(crate) given: Vec<String>,
