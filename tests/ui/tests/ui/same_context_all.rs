@@ -9,6 +9,7 @@ mod m {
 
     #[announce::announce(strict = false)]
     pub trait Many: UiBase {
+        const M: usize = LEN;
         fn f(&self, a: UiWrap<'_>, b: UiLocal, c: [u8; LEN]) -> UiOther;
     }
 }

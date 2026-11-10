@@ -57,7 +57,7 @@
 //! and a default; a method may have its own generics. Everything else is a
 //! reason to run the full analysis.
 
-use crate::leak::PRELUDE;
+use crate::leak::{PRELUDE, PRIMITIVES};
 use crate::options::Options;
 use syn::visit::Visit;
 use syn::{
@@ -113,11 +113,6 @@ struct Fast {
     in_type: usize,
     scopes: Vec<Scope>,
 }
-
-const PRIMITIVES: &[&str] = &[
-    "bool", "char", "str", "u8", "u16", "u32", "u64", "u128", "usize", "i8", "i16", "i32", "i64",
-    "i128", "isize", "f32", "f64",
-];
 
 fn is_one_of(id: &Ident, names: &[&str]) -> bool {
     names.iter().any(|n| id == n)

@@ -1,23 +1,35 @@
 error: `N` cannot be named outside its module (a relative value path): write the path absolutely
- --> tests/ui/value_paths.rs:7:9
+ --> tests/ui/value_paths.rs:8:9
   |
-7 |     A = N as isize,
+8 |     A = N as isize,
   |         ^
 
 error: `N` cannot be named outside its module (a relative value path): write the path absolutely
-  --> tests/ui/value_paths.rs:13:22
+  --> tests/ui/value_paths.rs:14:22
    |
-13 |     const M: usize = N;
+14 |     const M: usize = N;
    |                      ^
 
 error: `N` cannot be named outside its module (a relative value path): write the path absolutely
-  --> tests/ui/value_paths.rs:18:38
+  --> tests/ui/value_paths.rs:19:47
    |
-18 | pub struct ConstArg(pub crate::Buf<{ N }>);
-   |                                      ^
+19 | pub struct ConstParamDefault<const K: usize = N>;
+   |                                               ^
 
 error: `N` cannot be named outside its module (a relative value path): write the path absolutely
-  --> tests/ui/value_paths.rs:22:47
+  --> tests/ui/value_paths.rs:24:43
    |
-22 | pub struct ConstParamDefault<const K: usize = N>;
-   |                                               ^
+24 | pub struct ConstArgInBound<T: crate::Tr<{ N }>>(pub T);
+   |                                           ^
+
+error: `[u8; N]` cannot be named outside its module: add `repeater = ..` to the `#[announce]`, or write the path absolutely
+  --> tests/ui/value_paths.rs:29:23
+   |
+29 | pub struct RelLen(pub [u8; N]);
+   |                       ^^^^^^^
+
+error: `crate::Buf<{ N }>` cannot be named outside its module: add `repeater = ..` to the `#[announce]`, or write the path absolutely
+  --> tests/ui/value_paths.rs:31:25
+   |
+31 | pub struct ConstArg(pub crate::Buf<{ N }>);
+   |                         ^^^^^^^^^^^^^^^^^

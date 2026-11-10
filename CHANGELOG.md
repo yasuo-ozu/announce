@@ -39,6 +39,10 @@
   primitive type, to use a primitive type). All the causes of an item are reported at once (also
   in the record of `strict = false`): a relative trait path or value path no longer hides the
   relative types and the refused types of the item.
+- A trait object (`dyn Base`) and the constants inside a type (`[u8; N]`, `Wrap<{ N }>`) are
+  carried with the type by a `repeater`, instead of being errors for their trait or value path;
+  without a `repeater` they are relative types. Trait paths in bounds and `impl Trait`, and value
+  paths in discriminants, const defaults and the const arguments of a bound, stay errors.
 
 ## 0.2.0
 

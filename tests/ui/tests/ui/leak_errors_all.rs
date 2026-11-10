@@ -22,9 +22,11 @@ mod d {
         pub t: T,
     }
 
-    // Trait path, refused type, relative type and value path.
+    // Trait path, value path, refused type and relative types (an array length makes the type
+    // relative).
     #[announce::announce]
     pub trait Sub: UiBase {
+        const M: usize = LEN;
         fn f(&self, a: UiWrap<'_>, b: UiLocal, c: [u8; LEN]);
     }
 
@@ -35,10 +37,12 @@ mod d {
     // With a `repeater` the relative type is carried: it is no error, the others still are.
     #[announce::announce(repeater = crate::Repeater)]
     pub trait WithRepeater: UiBase {
+        const M: usize = LEN;
         fn f(&self, a: UiOther, b: UiWrap<'_>, c: [u8; LEN]);
     }
 
-    // A relative type that has a cause in it is reported as written.
+    // A relative constant or a trait object in a type makes it a relative type, reported as
+    // written.
     #[announce::announce]
     pub struct Inside {
         pub a: UiArr<{ LEN }>,

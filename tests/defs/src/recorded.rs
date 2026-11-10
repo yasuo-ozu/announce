@@ -54,6 +54,7 @@ pub mod m {
     /// type-leak refuses and relative types. They are all in the record.
     #[announce(strict = false)]
     pub trait Many: Base {
+        const M: usize = LEN;
         fn f(&self, a: Wrap<'_>, b: Local, c: [u8; LEN]) -> Other;
     }
 
