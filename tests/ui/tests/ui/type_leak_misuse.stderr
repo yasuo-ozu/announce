@@ -1,5 +1,0 @@
-error: `repeater` must be a trait of this crate, written `crate::path::to::Repeater` (callers resolve it through `$crate`, and the table implements it for `()`, which the orphan rule only allows for a local trait)
- --> tests/ui/type_leak_misuse.rs:4:33
-  |
-4 | #[announce::announce(repeater = Repeater)]
-  |                                 ^^^^^^^^

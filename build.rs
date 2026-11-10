@@ -16,8 +16,9 @@ fn main() {
             let minor: u32 = it.next()?.parse().ok()?;
             Some(if major > 1 { u32::MAX } else { minor })
         })
-        // Unknown compiler version: assume a current one.
-        .unwrap_or(u32::MAX);
+        // Unknown compiler version: the texts are cosmetic, and an attribute that an old
+        // compiler does not know is an error, so leave them out.
+        .unwrap_or(0);
     if minor >= 80 {
         println!("cargo:rustc-check-cfg=cfg(announce_diagnostic)");
     }

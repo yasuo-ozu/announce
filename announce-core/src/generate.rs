@@ -931,6 +931,29 @@ fn trampoline_with(
     out
 }
 
+/// The marker of a recorded failure `id`, next to the item: a private trait implemented for
+/// `Probe<id>`, in scope only in the item's module. The check of `LeakFailure::assume_success`
+/// calls its method on that probe, so it finds this one there and `ContextFallback` elsewhere.
+fn here_marker(opts: &Options, random: u64, id: &syn::LitInt) -> TokenStream {
+    let krate = opts.krate();
+    let name = Ident::new(
+        &format!("__AnnounceHere_{}", hex(random)),
+        Span::call_site(),
+    );
+    quote! {
+        #[doc(hidden)]
+        #[allow(non_camel_case_types, dead_code)]
+        trait #name {
+            fn __announce_ctx(self) -> #krate::__private::ThisCallInTheModule;
+        }
+        impl #name for #krate::__private::Probe<#id> {
+            fn __announce_ctx(self) -> #krate::__private::ThisCallInTheModule {
+                #krate::__private::ThisCallInTheModule
+            }
+        }
+    }
+}
+
 /// What stands in for the trampoline and the `Announce` impl when `generate` has failed
 /// (after its error), for the sentinel of the announcement (`runner::Sentinel`) to find: the
 /// impl, or a macro with the arm of the sentinel only. Without it the sentinel would report a
@@ -1058,15 +1081,49 @@ pub(crate) fn emit(
     // `repeater` is required when the item has types that do not resolve
     // outside this crate. When every path in the item certainly resolves
     // everywhere there is nothing to find, and type-leak is not run.
-    let fast = opts.repeater.is_none() && crate::fastpath::accepts(item, opts);
-    let (leak_impls, leak_meta) = if fast {
+    // A relative type without a `repeater`, and one that has no impl, is an error here, or with
+    // `strict = false` a record. The errors of type-leak are in the table, for the consumer.
+    //
+    // Either way the definition gets the check that the primitive names that a callback copies
+    // as written are the primitives here (`Leaker::assertions()`): from the analysis, or, where
+    // type-leak did not run, from the names that the scan saw.
+    let scanned = if opts.repeater.is_none() {
+        crate::fastpath::scan(item, opts)
+    } else {
+        None
+    };
+    let fast = scanned.is_some();
+    let (leak_impls, leak_meta, here, assertions) = if let Some(scanned) = scanned {
         #[cfg(test)]
         crate::fastpath::assert_agrees(item, opts);
-        (TokenStream::new(), TokenStream::new())
+        (
+            TokenStream::new(),
+            TokenStream::new(),
+            TokenStream::new(),
+            crate::fastpath::assertions(&scanned.primitives),
+        )
     } else {
-        match crate::leak::table(item, opts, random)? {
-            Some(l) => (l.impls, l.meta),
-            None => (TokenStream::new(), TokenStream::new()),
+        let outcome = crate::leak::table(item, opts, random)?;
+        let assertions = outcome.assertions;
+        match outcome.table {
+            Some(crate::leak::Table::Leaked(l)) => {
+                (l.impls, l.meta, TokenStream::new(), assertions)
+            }
+            Some(crate::leak::Table::Failed(f)) if opts.strict => {
+                return Err(f.to_definition_error())
+            }
+            Some(crate::leak::Table::Failed(f)) => (
+                TokenStream::new(),
+                f.meta(),
+                here_marker(opts, random, &f.id),
+                assertions,
+            ),
+            None => (
+                TokenStream::new(),
+                TokenStream::new(),
+                TokenStream::new(),
+                assertions,
+            ),
         }
     };
     t.step_labelled("analysis", if fast { "fast" } else { "full" });
@@ -1097,6 +1154,8 @@ pub(crate) fn emit(
         #real_item
         #tramp
         #leak_impls
+        #assertions
+        #here
         #(#checks)*
         #mock_copy
         #marker
@@ -1707,6 +1766,201 @@ mod tests {
         let opts: Options = syn::parse2(opts.parse().unwrap()).unwrap();
         let item: Item = syn::parse2(item).unwrap();
         squash(generate(item, &opts, 3, &OwnedAttrs::from_strs(owned)).unwrap())
+    }
+
+    /// The check of one primitive name, as `Leaker::assertions()` writes it, as `squash` prints it.
+    fn check_of(name: &str) -> String {
+        format!(
+            "fn__type_leak_assert_{0}_is_primitive(x:&{0})->&::core::primitive::{0}{{x}}",
+            name
+        )
+    }
+
+    /// The names that the output of `generate_for` checks, in the order of the output.
+    fn checked_names(out: &str) -> Vec<&str> {
+        let mut names = Vec::new();
+        for part in out.split("fn__type_leak_assert_").skip(1) {
+            names.push(part.split("_is_primitive").next().unwrap());
+        }
+        names
+    }
+
+    #[test]
+    fn the_definition_checks_the_primitive_names_that_a_callback_copies_as_written() {
+        let head = "#[allow(dead_code,non_snake_case)]const_:()={";
+        let attr = "crate = ::l::announce";
+        let repeater = "crate = ::l::announce, repeater = crate::R";
+        // The fast path (no relative path, no type-leak): each name once, in the order seen.
+        let out = generate_for(
+            attr,
+            &[],
+            quote! { pub struct S { pub a: u32, pub b: u8, pub c: [u32; 2], pub d: ::std::vec::Vec<u8> } },
+        );
+        assert_eq!(checked_names(&out), ["u32", "u8"], "{}", out);
+        let want = format!("{}{}{}}};", head, check_of("u32"), check_of("u8"));
+        assert!(out.contains(&want), "{}\n{}", out, want);
+        // The same item with a `repeater`, which type-leak analyses: the names are its own
+        // (the order may differ).
+        let out = generate_for(
+            repeater,
+            &[],
+            quote! { pub struct S { pub a: u32, pub b: u8, pub c: [u32; 2], pub d: ::std::vec::Vec<u8> } },
+        );
+        let mut names = checked_names(&out);
+        names.sort();
+        assert_eq!(names, ["u32", "u8"], "{}", out);
+        assert!(out.contains(&check_of("u8")) && out.contains(&check_of("u32")));
+        // A table and a relative type: the impls, the META and the check.
+        let out = generate_for(
+            repeater,
+            &[],
+            quote! { pub struct S { pub a: u8, pub b: Local } },
+        );
+        assert_eq!(checked_names(&out), ["u8"], "{}", out);
+        assert!(
+            out.contains("impl") && out.contains("type_leak(repeater"),
+            "{}",
+            out
+        );
+        // Without a table, after the analysis: the type of another crate is no entry.
+        let out = generate_for(
+            attr,
+            &[],
+            quote! { pub struct S { pub a: ::other::X<bool>, pub b: crate::Y } },
+        );
+        assert_eq!(checked_names(&out), ["bool"], "{}", out);
+        assert!(!out.contains("type_leak("), "{}", out);
+        // A record (`strict = false`): the item is copied as written by the callbacks all the
+        // same.
+        let out = generate_for(
+            "crate = ::l::announce, strict = false",
+            &[],
+            quote! { pub struct S { pub a: u8, pub b: Local } },
+        );
+        assert_eq!(checked_names(&out), ["u8"], "{}", out);
+        assert!(out.contains("type_leak_error("), "{}", out);
+        // With `strict = true` the same item is an error, and nothing is emitted.
+        let opts: Options = syn::parse_str(attr).unwrap();
+        let it: Item = syn::parse2(quote! { pub struct S { pub a: u8, pub b: Local } }).unwrap();
+        assert!(generate(it, &opts, 3, &OwnedAttrs::new()).is_err());
+        // The type of a const parameter is copied as written, `allow_primitive` or not (without
+        // it the fast path does not run, and the analysis does not leak a primitive const).
+        for opts in [
+            attr,
+            "crate = ::l::announce, allow_primitive = false",
+            repeater,
+        ] {
+            let out = generate_for(opts, &[], quote! { pub struct S<const N: u8>; });
+            assert_eq!(checked_names(&out), ["u8"], "{}: {}", opts, out);
+        }
+        // The primitives of a trait: methods, associated types and consts.
+        let out = generate_for(
+            attr,
+            &[],
+            quote! { pub trait Tr { type A: ::core::convert::Into<char>; const C: i64 = 3; fn f(&self, a: bool) -> &str; } },
+        );
+        let mut names = checked_names(&out);
+        names.sort();
+        assert_eq!(names, ["bool", "char", "i64", "str"], "{}", out);
+        // No primitive name, no check: on the fast path, the full path and for a module.
+        for (opts, item) in [
+            (
+                attr,
+                quote! { pub struct S { pub a: crate::X, pub b: ::std::string::String } },
+            ),
+            (
+                attr,
+                quote! { pub struct S { pub a: ::other::X, pub b: crate::Y } },
+            ),
+            (repeater, quote! { pub struct S { pub a: Local } }),
+            (attr, quote! { pub struct S; }),
+            (attr, quote! { pub mod m { pub struct S(u8); } }),
+            // Not copied as written: `u8` is a relative type for `allow_primitive = false`, and the
+            // repeater carries it.
+            (
+                "crate = ::l::announce, allow_primitive = false, repeater = crate::R",
+                quote! { pub struct S { pub a: u8 } },
+            ),
+        ] {
+            let out = generate_for(opts, &[], item.clone());
+            assert!(!out.contains("__type_leak_assert"), "{}: {}", item, out);
+        }
+        // A name that is a generic of the item is no primitive.
+        let out = generate_for(attr, &[], quote! { pub struct S<u8>(pub u8); });
+        assert!(!out.contains("__type_leak_assert"), "{}", out);
+    }
+
+    #[test]
+    fn a_failure_is_an_error_unless_strict_is_false_and_then_it_is_recorded() {
+        let attempt = |opts: &str, item: TokenStream| {
+            let opts: Options =
+                syn::parse_str(&format!("crate = ::l::announce, {}", opts)).unwrap();
+            generate(syn::parse2(item).unwrap(), &opts, 3, &OwnedAttrs::new())
+        };
+        let local = || quote! { pub struct S { pub a: Local } };
+        // One error for each thing, with what the definer can do.
+        let item = quote! { pub struct S { pub a: Local, pub b: Other } };
+        let errors: Vec<String> = attempt("", item)
+            .err()
+            .unwrap()
+            .into_iter()
+            .map(|e| e.to_string())
+            .collect();
+        assert_eq!(
+            errors,
+            [
+                "`Local` cannot be named outside its module: add `repeater = ..` to the `#[announce]`, \
+                 or write the path absolutely",
+                "`Other` cannot be named outside its module: add `repeater = ..` to the `#[announce]`, \
+                 or write the path absolutely"
+            ]
+        );
+        // With `strict = false`: the record, not a table, and a marker for its id. (The META
+        // ends with `krate = ".."` when Cargo names the crate that compiles.)
+        let out = squash(attempt("strict = false", local()).unwrap());
+        for needle in [
+            "=>[type_leak_error(id=3u64,item=S,errors=[(Local)\"without`repeater`\"{\
+             message=\"useabsolutepath:'Local'\",\
+             help=\"write`Local`withanabsolutepath(e.g.`crate::Local`),oradd`repeater=..`\
+             tothe`#[announce]`of`S`\"}]",
+            "]{pubstructS{puba:Local}}",
+            "#[doc(hidden)]#[allow(non_camel_case_types,dead_code)]\
+             trait__AnnounceHere_0000000000000003{\
+             fn__announce_ctx(self)->::l::announce::__private::ThisCallInTheModule;}\
+             impl__AnnounceHere_0000000000000003for::l::announce::__private::Probe<3u64>{\
+             fn__announce_ctx(self)->::l::announce::__private::ThisCallInTheModule{\
+             ::l::announce::__private::ThisCallInTheModule}}",
+        ] {
+            assert!(out.contains(needle), "{} in {}", needle, out);
+        }
+        assert!(!out.contains("type_leak("), "{}", out);
+        // A repeater carries the type: a table, no failure and no marker. Nothing to carry,
+        // nothing recorded.
+        for (opts, item, table) in [
+            ("repeater = crate::R", local(), true),
+            (
+                "",
+                quote! { pub struct S { pub a: u8, pub b: ::std::vec::Vec<u8> } },
+                false,
+            ),
+        ] {
+            for strict in ["strict = false, ", ""] {
+                let out = squash(attempt(&format!("{}{}", strict, opts), item.clone()).unwrap());
+                assert_eq!(
+                    out.contains("type_leak(repeater=$crate::R"),
+                    table,
+                    "{}",
+                    out
+                );
+                assert!(!out.contains("__AnnounceHere_"), "{}", out);
+            }
+        }
+        // A repeater on a type alias stays an error.
+        assert!(attempt(
+            "strict = false, repeater = crate::R",
+            quote! { pub type A = u8; }
+        )
+        .is_err());
     }
 
     #[test]

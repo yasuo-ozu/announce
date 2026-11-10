@@ -2,76 +2,131 @@
 //! type-leak table.
 //!
 //! On the cfg-evaluated item, type-leak finds the types that would not
-//! resolve at a caller: relative paths such as `Local` or `super::X`.
-//! The decision is type-leak's own: `Referrer::required()` after
-//! `Leaker::finish()`, with primitives and `crate::` paths allowed. Std items
-//! must be written absolutely (`::std::vec::Vec<u8>`); prelude names such as
-//! `Vec` or `Option` count as relative unless `allow_std_prelude = true`
-//! (type-leak's `allowed_paths`, with the names in [`PRELUDE`]). The one
-//! exception is `Sized`: `T: ?Sized`, `where Self: Sized` and `trait T: Sized`
-//! are accepted bare, because the language gives it a meaning of its own.
+//! resolve at a caller: relative paths such as `Local` or `super::X`. The
+//! analysis is type-leak's own (`Leaker` and `LeakerResult`). Its rules allow
+//! `crate::` paths, every absolute path (`::std::vec::Vec<u8>`, `::other::X`:
+//! the same crate on both sides), primitives with `allow_primitive`, and with
+//! `allow_std_prelude = true` the prelude names (type-leak's `Rules::prelude()`,
+//! and the names in [`NEWER_PRELUDE`]). The one exception is `Sized`: `T: ?Sized`,
+//! `where Self: Sized` and `trait T: Sized` are accepted bare, because the
+//! language gives it a meaning of its own. For a trait, `Leaker::check_values` is
+//! on, so the defaults of associated consts are read too, but not the bodies of
+//! provided methods (`Leaker::check_bodies` stays off), as announce does not
+//! analyse them. Inline modules are not analysed.
 //!
-//! type-leak sees the item as written. `Self` is not internable
-//! (`allow_self = false`): it has no meaning in an `impl .. for ()`, and it
-//! resolves everywhere. On top of type-leak, announce checks
-//! - trait paths (supertraits, bounds, `impl`/`dyn` bounds): absolute only,
-//! - value paths in array lengths, enum discriminants, const generic arguments
-//!   and const defaults: absolute, `Self::..` or a const parameter (a repeater
-//!   only carries types; the types named inside such an expression, as in
-//!   `size_of::<Local>()`, are carried like any other: type-leak reads array
-//!   lengths, const arguments, discriminants and the defaults of const
-//!   parameters, not the defaults of associated consts).
+//! The result of the analysis is a [`LeakerResult`]: the `Referrer`, which lists
+//! the *entries* (the types that depend on where they are written), and the errors
+//! for the parts that no table can carry. type-leak recovers from such an error:
+//! the part is copied as written and the analysis goes on. The errors are not
+//! announce's business. The definition never reports, rewords or records them: they
+//! travel in the META inside the `LeakerResult`, and the consumer decides, by
+//! reporting them (`Entry::item_resolved`) or by allowing them (type-leak's `allow`, `ignore`
+//! and `ignore_if` on `TypeLeak::result`).
 //!
-//! type-leak's own errors are re-worded by [`report`]: its help and notes talk
-//! about its API (`LeakerConfig`, `allow_self`, ..) and an example crate name.
+//! The analysis also gives the check of the primitive names (`Leaker::assertions()`): a
+//! primitive name that a callback copies as written (`u8`, with `Rules::primitive()` and as the
+//! type of a const parameter; also in a part that an error makes copied as written) means the
+//! primitive there, and the module of the definition may shadow it (`struct u8;`). The check is a
+//! `const _` item that does not compile in such a module. It is emitted at the definition
+//! whenever the item is analysed, with a table ([`Table::Leaked`]), without one, and with a
+//! record ([`Table::Failed`], `strict = false`): [`Outcome::assertions`]. An item that the fast
+//! path accepts is not analysed, and gets the same check from the names that the scan sees
+//! (`fastpath`).
 //!
-//! If any relative type remains, `repeater = ..` is **required** (for type
-//! aliases, which are not a type-leak target, it is an error instead). The
-//! repeater is the trait that `define_repeater!` (type-leak's
-//! `repeater_definition()`) defines in the definer's crate. Each required
-//! entry `I` of the `Referrer` then gets an impl of it, written by type-leak
-//! (`Referrer::repeater_impl_with`):
+//! announce's own failures are these, and each is an error at the definition (or,
+//! with `strict = false`, a `type_leak_error(..)` record, see [`Table::Failed`]):
+//! - an entry without a `repeater = ..` ([`WITHOUT_REPEATER`]), or in a type alias
+//!   ([`ALIAS`]; aliases get no table),
+//! - an entry that has no impl: its type needs `Self`, or a const generic that is not
+//!   of a primitive type ([`NOT_PRIMITIVE`]).
+//!
+//! The repeater is the trait that `define_repeater!` (type-leak's
+//! `repeater_definition()`) defines in the definer's crate. Each entry `I` of the
+//! `Referrer` gets an impl of it, written by type-leak
+//! (`LeakerResult::repeater_impls`):
 //!
 //! ```text
-//! impl<P..> REPEATER<(ARGS..), ID, I> for () { type Type = T_I; }
+//! impl<P..> REPEATER<(ARGS..), KEY> for () { type Type = T_I; }
 //! ```
 //!
-//! where `P..` are the generics of the *context of that entry* (the scope
-//! where the type is written: the item, a method, a GAT) and `ARGS` encodes the
-//! ones the type uses; const generics of every primitive type go through the
-//! repeater's slots (`RepeaterSlots`). The payload stays the original item; the
-//! entry's META gets `type_leak(repeater = .., id = .., context = .., referrer =
-//! [..])`, the `Referrer` as type-leak serializes it, and a callback rewrites
-//! the payload with that `Referrer` (`announce::helper::TypeLeak::apply`), so the
-//! consumer's arguments are type-leak's too.
+//! where `KEY` is `Projection::key(I)` (the `id` of the table in its high 64 bits, `I` in
+//! the low ones), `P..` are the generics of the *context of that entry* (the scope where
+//! the type is written: the item, a method, a GAT) and `ARGS` encodes the ones the type
+//! uses; const generics of every primitive type go through the repeater's const slots (a
+//! `u128` is the `KEY` itself). The payload stays the original item. The META of the entry
+//! is
+//!
+//! ```text
+//! type_leak(repeater = .., id = .., context = .., result = [..])
+//! ```
+//!
+//! `result` is the `LeakerResult` as type-leak serializes it: the `Referrer`, then the
+//! errors that remain. `repeater` and `id` are there for a definition with `repeater = ..`.
+//! Without one, and with no entry but some errors, the META is
+//! `type_leak(context = .., result = [..])`, so that the consumer sees the errors. A
+//! callback rewrites the payload with it (`announce::helper::Entry::item_resolved`).
+//! An item that the analysis found nothing in has no META, unless it has a `repeater`
+//! (then the table is empty).
 
-use crate::helper::TypeLeak;
+use crate::helper::ignored_view;
+use crate::helper::{LeakError, LeakFailure, TypeLeak, ALIAS, NOT_PRIMITIVE, WITHOUT_REPEATER};
+use crate::options::Options;
 use proc_macro2::{Ident, Span, TokenStream};
-use syn::visit::Visit;
-use syn::{Item, Path, Result, Type};
-use template_quote::quote;
-use type_leak::{ContextId, ImplSelf, Referrer, RepeaterSlots};
+use syn::{Item, ItemImpl, Path, Result, Type};
+use template_quote::ToTokens;
+use type_leak::{Cause, ContextId, ImplSelf, LeakerResult, Place, Projection, Referrer, Rules};
 
 pub struct Leaked {
     /// Impls emitted at the definition site.
     pub impls: TokenStream,
-    /// `type_leak(repeater = .., id = .., context = .., referrer = [..])`.
+    /// `type_leak(repeater = .., id = .., context = .., result = [..])`; without the first two
+    /// where there is no `repeater`.
     pub meta: TokenStream,
 }
 
+/// What [`table`] makes of an item: the table, and the check that goes with the definition.
+#[derive(Default)]
+pub struct Outcome {
+    /// The table, or the record of why there is none; `None` where the item has nothing for a
+    /// table to carry.
+    pub table: Option<Table>,
+    /// type-leak's check that the primitive names that a callback copies as written (`u8`) are
+    /// the primitives in the module of the definition (`Leaker::assertions()`). Empty where none
+    /// is copied. It belongs to the definition whatever `table` is, also a record.
+    pub assertions: TokenStream,
+}
+
+/// What an item that is analysed gets in the META: see [`Outcome::table`].
+pub enum Table {
+    /// The impls and the `type_leak(..)` META of an item with a `repeater`, or the META alone
+    /// of an item without one that has errors of type-leak and no entry.
+    Leaked(Leaked),
+    /// Something in the item has no table here: an entry without a `repeater`, or without an
+    /// impl. The META is `type_leak_error(..)`.
+    Failed(LeakFailure),
+}
+
 /// The analysis of an item: what type-leak found, and the scope of the item.
-#[derive(Debug)]
 pub struct Analysis {
+    /// What type-leak found: the entries and the errors.
+    pub result: LeakerResult,
+    /// The `Referrer` of [`result`](Self::result), with its errors ignored (see
+    /// [`ignored_view`]): the entries that the impls are written for.
     pub referrer: Referrer,
     /// The top-level context of the item in `referrer`.
     pub context: ContextId,
+    /// `Leaker::assertions()`: the check that the primitive names copied as written are not
+    /// shadowed in the module of the item, to emit there. Empty if none is.
+    pub assertions: TokenStream,
 }
 
 impl Analysis {
-    /// The types that need a repeater impl (type-leak's required entries), with
-    /// their index. One type text can be several entries, one for each context.
-    pub fn required(&self) -> impl Iterator<Item = (usize, &Type)> {
-        self.referrer.required()
+    /// The entries that need a repeater impl, with their context: the live entries of the
+    /// `Referrer`. One type text can be several entries, one for each context.
+    pub fn entries(
+        &self,
+    ) -> impl Iterator<Item = (type_leak::EntryId, &Type, &type_leak::Context)> {
+        self.referrer.iter()
     }
 }
 
@@ -133,170 +188,15 @@ pub(crate) const PRELUDE: &[&str] = &[
     "FromIterator",
 ];
 
-fn is_absolute(p: &Path) -> bool {
-    let first = p
-        .segments
-        .first()
-        .map(|s| s.ident.to_string())
-        .unwrap_or_default();
-    p.leading_colon.is_some() || first == "crate" || first == "$crate"
-}
-
-/// `Sized`, as written in `T: ?Sized`, `where Self: Sized` and `T: Sized`: the
-/// single segment `Sized` without arguments or a leading `::`. It is the one
-/// prelude trait that is accepted bare without `allow_std_prelude`: the
-/// language gives `?Sized` (and `Sized`) a meaning of their own, so it cannot
-/// be meaningfully shadowed, and it is written in nearly every generic API
-/// that takes unsized types.
-fn is_bare_sized(p: &Path) -> bool {
-    p.leading_colon.is_none()
-        && p.segments.len() == 1
-        && p.segments[0].ident == "Sized"
-        && p.segments[0].arguments.is_none()
-}
-
-/// Trait paths (supertraits, generic and where-clause bounds, `impl`/`dyn`
-/// bounds) must be absolute: a repeater only carries *types*, so a relative
-/// trait path could never resolve at a caller (decided 2026-10-01). Bare
-/// `Sized` and `?Sized` are accepted ([`is_bare_sized`]); with
-/// `allow_std_prelude = true`, bare prelude traits are accepted too.
-fn check_trait_paths(item: &Item, allow_prelude: bool) -> Result<()> {
-    struct V {
-        allow_prelude: bool,
-        err: Option<syn::Error>,
-    }
-    impl<'ast> syn::visit::Visit<'ast> for V {
-        fn visit_trait_bound(&mut self, b: &'ast syn::TraitBound) {
-            let p = &b.path;
-            let first = p
-                .segments
-                .first()
-                .map(|s| s.ident.to_string())
-                .unwrap_or_default();
-            let prelude =
-                self.allow_prelude && p.segments.len() == 1 && PRELUDE.contains(&first.as_str());
-            if !(is_absolute(p) || prelude || is_bare_sized(p)) && self.err.is_none() {
-                self.err = Some(syn::Error::new_spanned(
-                    p,
-                    "announce: trait paths must be absolute (`::core::fmt::Display`, `crate::Base`; \
-                     `Sized` and `?Sized` may be bare); a repeater only covers types, not traits",
-                ));
-            }
-            syn::visit::visit_trait_bound(self, b);
-        }
-    }
-    let mut v = V {
-        allow_prelude,
-        err: None,
-    };
-    syn::visit::Visit::visit_item(&mut v, item);
-    v.err.map_or(Ok(()), Err)
-}
-
-/// Value expressions inside types and signatures (array lengths, enum
-/// discriminants, const generic arguments, const defaults) are copied to
-/// callers like the types around them, but a repeater cannot carry values:
-/// every path in them must be absolute, `Self::..`, or a const parameter. A
-/// relative array length would make type-leak carry the whole
-/// array type. The types named inside a value (`size_of::<Local>()`) are
-/// type-leak's business, not checked here.
-fn check_values(item: &Item, const_params: &[String]) -> Result<()> {
-    struct V<'a> {
-        consts: &'a [String],
-        err: Option<syn::Error>,
-    }
-    impl V<'_> {
-        fn check(&mut self, e: &syn::Expr) {
-            struct P<'b, 'a>(&'b mut V<'a>);
-            impl<'ast> Visit<'ast> for P<'_, '_> {
-                fn visit_expr_path(&mut self, p: &'ast syn::ExprPath) {
-                    let path = &p.path;
-                    let first = path
-                        .segments
-                        .first()
-                        .map(|s| s.ident.to_string())
-                        .unwrap_or_default();
-                    let ok = p.qself.is_some()
-                        || is_absolute(path)
-                        || first == "Self"
-                        || (path.segments.len() == 1 && self.0.consts.contains(&first));
-                    if !ok && self.0.err.is_none() {
-                        self.0.err = Some(syn::Error::new_spanned(
-                            path,
-                            "announce: value paths in array lengths, enum discriminants, const generic \
-                             arguments and const defaults must be absolute (`crate::N`, \
-                             `::core::mem::size_of::<T>()`), start with `Self::` or be a const parameter; \
-                             a repeater only covers types, not values",
-                        ));
-                    }
-                    syn::visit::visit_expr_path(self, p);
-                }
-            }
-            Visit::visit_expr(&mut P(self), e);
-        }
-    }
-    impl<'ast> Visit<'ast> for V<'_> {
-        fn visit_type_array(&mut self, a: &'ast syn::TypeArray) {
-            self.check(&a.len);
-            syn::visit::visit_type_array(self, a);
-        }
-        fn visit_variant(&mut self, v: &'ast syn::Variant) {
-            if let Some((_, e)) = &v.discriminant {
-                self.check(e);
-            }
-            syn::visit::visit_variant(self, v);
-        }
-        fn visit_trait_item_const(&mut self, c: &'ast syn::TraitItemConst) {
-            if let Some((_, e)) = &c.default {
-                self.check(e);
-            }
-            syn::visit::visit_trait_item_const(self, c);
-        }
-        fn visit_const_param(&mut self, c: &'ast syn::ConstParam) {
-            if let Some(e) = &c.default {
-                self.check(e);
-            }
-            syn::visit::visit_const_param(self, c);
-        }
-        fn visit_generic_argument(&mut self, a: &'ast syn::GenericArgument) {
-            if let syn::GenericArgument::Const(e) = a {
-                self.check(e);
-            }
-            syn::visit::visit_generic_argument(self, a);
-        }
-        // Provided-method bodies are not analysed (documented gap).
-        fn visit_block(&mut self, _: &'ast syn::Block) {}
-    }
-    let mut v = V {
-        consts: const_params,
-        err: None,
-    };
-    Visit::visit_item(&mut v, item);
-    v.err.map_or(Ok(()), Err)
-}
-
-/// Names of type-leak's API that its messages use for the options a user of
-/// `#[announce]` does not have.
-const API_NAMES: &[&str] = &[
-    "LeakerConfig",
-    "allow_self",
-    "allowed_paths",
-    "Leaker",
-    "Visitor",
-    "Referrer",
-    "enter_type",
-    "enter_impl",
-    "enter_trait",
-];
-
-fn names_api(text: &str) -> bool {
-    API_NAMES.iter().any(|n| text.contains(n))
-}
+/// The names of [`PRELUDE`] that type-leak's `Rules::prelude()` does not allow, as the copy may be
+/// of an edition or a Rust whose prelude lacks them (2021, 1.56): announce accepts them with
+/// `allow_std_prelude = true`.
+const NEWER_PRELUDE: &[&str] = &["TryFrom", "TryInto", "FromIterator"];
 
 /// Token streams print a space between every token (`inner :: G < Self :: A >`,
 /// `T : :: core :: convert :: From < G < T > >`); text with such types in it
 /// printed as one writes them.
-fn tidy(text: &str) -> String {
+pub(crate) fn tidy(text: &str) -> String {
     // `T : :: core` must not become `T :::core`.
     const LEADING: &str = "\u{1}";
     let mut text = text.replace(" : :: ", &format!(": {}", LEADING));
@@ -321,364 +221,279 @@ fn tidy(text: &str) -> String {
     text.replace(LEADING, "::")
 }
 
-/// The help of type-leak without the options that name its API: "allow it
-/// with `LeakerConfig::allowed_paths`", "analyze the item with
-/// `allow_self = true`" (`Self` is never internable for `#[announce]`) and
-/// "enter a scope that declares `Self`". They are clauses of a ", or"-list, so
-/// the separator goes with them.
-fn without_api_options(help: &str) -> String {
-    let mut help = help.to_string();
-    for clause in [
-        "allow it with `LeakerConfig::allowed_paths`",
-        "analyze the item with `allow_self = true`",
-        "enter a scope that declares `Self` around it \
-         (`Leaker::enter_type`, `enter_impl` or `enter_trait`)",
-    ] {
-        for pattern in [
-            format!(", or {}", clause),
-            format!(", {}", clause),
-            format!("{}, or ", clause),
-            format!("{}, ", clause),
-            clause.to_string(),
-        ] {
-            help = help.replace(&pattern, "");
-        }
-    }
-    help
-}
-
-/// type-leak shows the absolute form of a relative path as an example in an
-/// invented crate: "(e.g. `::my_crate::inner::G`)". Inside the defining crate
-/// it is `crate::inner::G`; `::other_crate::..` is for another crate.
-fn crate_example(help: &str) -> String {
-    const EXAMPLE: &str = "(e.g. `::my_crate::";
-    let mut help = help.to_string();
-    if let Some(i) = help.find(EXAMPLE) {
-        let after = &help[i + EXAMPLE.len()..];
-        if let Some(j) = after.find("`)") {
-            let rest = &after[..j];
-            help = format!(
-                "{}(e.g. `crate::{rest}`, or `::other_crate::{rest}` for an item of another \
-                 crate){}",
-                &help[..i],
-                &after[j + 2..],
-                rest = rest
-            );
-        }
-    }
-    help.replace("::my_crate::", "crate::")
-}
-
-/// A note without type-leak's API in it.
-fn note_text(note: &str) -> Option<String> {
-    let note = note
-        .replace(" (`Visitor::with_self()`)", "")
-        .replace("the Leaker", "announce")
-        .replace("the Referrer", "the table");
-    if names_api(&note) {
-        None
-    } else {
-        Some(tidy(&note))
-    }
-}
-
-/// The std prelude name that heads the offending type, when it is relative here
-/// (`allow_std_prelude` is off). type-leak then names the whole type, says why it
-/// cannot be leaked (`Self::Out`, `'_`, ..) and shows the absolute path of the
-/// prelude name: "use `::core::option::Option` instead of `Option`". The reason
-/// to act on is the relative name, which this finds.
-fn prelude_name(item: &type_leak::ErrorItem, opts: &crate::options::Options) -> Option<String> {
-    if opts.allow_std_prelude || !item.help_text()?.starts_with("use `") {
-        return None;
-    }
-    let name = item.tokens.clone().into_iter().next()?.to_string();
-    if PRELUDE.contains(&name.as_str()) {
-        Some(name)
-    } else {
-        None
-    }
-}
-
-/// The start of the note of type-leak that names what stops a relative type from being
-/// leaked: "it cannot be leaked as a whole because of `Self::Out`".
-const WHOLE_NOTE: &str = "it cannot be leaked as a whole because of ";
-
-/// The headline of one error, in terms of `#[announce]`. For a prelude name it
-/// says that the name is relative, which is what the user can change.
-fn headline(item: &type_leak::ErrorItem, opts: &crate::options::Options) -> String {
-    match prelude_name(item, opts) {
-        Some(name) => format!(
-            "announce: the prelude name `{}` is relative here, so `{}` does not resolve outside \
-             the defining crate",
-            name,
-            tidy(&item.tokens.to_string())
-        ),
-        None => format!("announce: {}", tidy(&item.message)),
-    }
-}
-
-/// The help of one error, in terms of `#[announce]`.
-fn help_text(item: &type_leak::ErrorItem, opts: &crate::options::Options) -> String {
-    let mut help = without_api_options(item.help_text().unwrap_or_default());
-    if item.message.contains("has no meaning here") {
-        // `Self` in a type alias; type-leak: "or enter a scope that declares `Self`".
-        help = "write the type instead of `Self`".to_string();
-    } else if let Some(name) = prelude_name(item, opts) {
-        // type-leak: "use `::core::option::Option` instead of `Option`".
-        if let Some(absolute) = help.split('`').nth(1) {
-            let mut tokens = item.tokens.clone().into_iter().skip(1);
-            let args = match tokens.next() {
-                Some(proc_macro2::TokenTree::Punct(p)) if p.as_char() == '<' => "<..>",
-                _ => "",
-            };
-            return format!(
-                "write `{}{}` instead of `{}{}`, or set `allow_std_prelude = true` to accept \
-                 prelude names",
-                absolute, args, name, args
-            );
-        }
-    }
-    let help = tidy(&crate_example(&help));
-    if help.trim().is_empty() || names_api(&help) {
-        format!(
-            "write the paths in `{}` as absolute paths",
-            tidy(&item.tokens.to_string())
-        )
-    } else {
-        help
-    }
-}
-
-/// The errors of type-leak, one `syn::Error` per offending path or type: the
-/// headline, the notes that say why, and what to write instead. Their wording
-/// is type-leak's, minus its API and its example crate name (see
-/// [`help_text`], [`note_text`] and [`tidy`]). A relative prelude name is
-/// explained as that ([`headline`], [`prelude_name`]).
-fn report(e: type_leak::NotInternableError, opts: &crate::options::Options) -> syn::Error {
-    let mut out: Option<syn::Error> = None;
-    for item in e.items() {
-        let mut message = headline(&item, opts);
-        let mut seen: Vec<String> = Vec::new();
-        let relative_prelude = prelude_name(&item, opts).is_some();
-        for note in item.notes.iter().filter_map(|(_, n)| note_text(n)) {
-            // The headline says that the name is relative: say what that costs, not
-            // that the type "cannot be leaked".
-            let note = match note.strip_prefix(WHOLE_NOTE) {
-                Some(cause) if relative_prelude => {
-                    format!("a relative type cannot be carried with {} in it", cause)
-                }
-                _ => note,
-            };
-            if !seen.contains(&note) {
-                message.push_str(&format!("\n  = note: {}", note));
-                seen.push(note);
-            }
-        }
-        message.push_str(&format!("\n  = help: {}", help_text(&item, opts)));
-        let err = syn::Error::new(item.span, message);
-        match &mut out {
-            Some(o) => o.combine(err),
-            None => out = Some(err),
-        }
-    }
-    out.expect("a NotInternableError has at least one item")
-}
-
-/// Every const generic parameter declared anywhere in `item` (item, methods,
-/// generic associated types): the names that `check_values` accepts in a value
-/// path. A name is enough there: what is carried is decided by type-leak.
-fn const_param_names(item: &Item) -> Vec<String> {
-    struct V(Vec<String>);
-    impl<'ast> Visit<'ast> for V {
-        fn visit_const_param(&mut self, c: &'ast syn::ConstParam) {
-            self.0.push(c.ident.to_string());
-            syn::visit::visit_const_param(self, c);
-        }
-    }
-    let mut v = V(Vec::new());
-    Visit::visit_item(&mut v, item);
-    v.0
-}
-
 /// Analyses `item` with type-leak. `None` for items that are not analysed
 /// (inline modules: the documented wrapper pattern).
 ///
 /// In a test build every answer is checked against the fast path
 /// ([`crate::fastpath`]), which must never accept more than this does.
-pub fn analyze(item: &Item, opts: &crate::options::Options) -> Result<Option<Analysis>> {
+pub fn analyze(item: &Item, opts: &Options) -> Option<Analysis> {
     let result = analyze_full(item, opts);
     #[cfg(test)]
     crate::fastpath::check_analysis(item, opts, &result);
     result
 }
 
-fn analyze_full(item: &Item, opts: &crate::options::Options) -> Result<Option<Analysis>> {
+pub(crate) fn analyze_full(item: &Item, opts: &Options) -> Option<Analysis> {
     if !matches!(
         item,
         Item::Struct(_) | Item::Enum(_) | Item::Union(_) | Item::Trait(_) | Item::Type(_)
     ) {
-        return Ok(None);
+        return None;
     }
-    check_trait_paths(item, opts.allow_std_prelude)?;
-    check_values(item, &const_param_names(item))?;
-    // Primitives (optionally), `crate::` paths and (optionally) the prelude
-    // are allowed.
-    let mut config = type_leak::LeakerConfig::new();
-    config.allow_crate();
-    // `::std` and `::alloc` are the same crate on both sides. Left optional,
-    // each `::std::vec::Vec<T>` would be an entry of the table, which travels in
-    // every META; allowed, only the relative types inside it are carried.
-    config
-        .allowed_paths
-        .extend([syn::parse_quote!(::std), syn::parse_quote!(::alloc)]);
+    Some(intern(item, opts))
+}
+
+/// Runs type-leak over `item`, which `analyze_full` has found to be analysed. The errors that it
+/// recovers from stay in the result: they are the consumer's to report.
+fn intern(item: &Item, opts: &Options) -> Analysis {
+    // `crate::` paths, primitives (optionally) and the prelude (optionally) are allowed, and
+    // every absolute path: `::std` and `::alloc`, and the other crates, are the same crate on both
+    // sides, so a type of them is no entry, and only the relative types inside it are carried.
+    let mut rules = Rules::new().crate_paths().external_crates();
     if opts.allow_primitive {
-        config.allow_primitive();
+        rules = rules.primitive();
     }
+    let mut allowed: Vec<Path> = Vec::new();
     if opts.allow_std_prelude {
-        config.allowed_paths.extend(
-            PRELUDE
+        // type-leak's prelude is that of every edition as of Rust 1.56, with `Some`, `None`, `Ok`,
+        // `Err` and `drop`. The names of `PRELUDE` that it leaves out as newer are kept.
+        rules = rules.prelude();
+        allowed.extend(
+            NEWER_PRELUDE
                 .iter()
                 .map(|n| Path::from(Ident::new(n, Span::call_site()))),
         );
     } else {
         // Bare `Sized` (`Self: Sized`, `trait T: Sized`, `T: ?Sized + Sized`) is
-        // accepted without the option, like in `check_trait_paths`.
-        config
-            .allowed_paths
-            .push(Path::from(Ident::new("Sized", Span::call_site())));
+        // accepted without the option.
+        allowed.push(Path::from(Ident::new("Sized", Span::call_site())));
     }
-    let mut leaker = type_leak::Leaker::from_config(config);
-    // `Self` has no meaning in an `impl .. for ()`, and resolves everywhere:
-    // `allow_self = false`.
-    let analysed = match item {
-        Item::Struct(s) => leaker.intern_struct(s, false),
-        Item::Enum(e) => leaker.intern_enum(e, false),
-        Item::Union(u) => leaker.intern_union(u, false),
-        Item::Trait(t) => leaker.intern_trait(t, false),
-        Item::Type(a) => leaker
-            .enter_generics(&a.generics, |view| syn::visit::visit_item_type(view, a))
-            .map(|(context, ())| context),
-        _ => return Ok(None),
+    let rules = rules
+        .or_if(move |cause: &Cause, _: Place| allowed.iter().any(|path| cause.starts_with(path)));
+    let mut leaker = type_leak::Leaker::with_rule(rules);
+    // The default values of associated consts, but not the bodies of provided methods: a
+    // relative path in a body is not an error for announce (`check_bodies` stays off).
+    leaker.check_values = matches!(item, Item::Trait(_));
+    let context = match item {
+        Item::Struct(s) => leaker.intern_struct(s),
+        Item::Enum(e) => leaker.intern_enum(e),
+        Item::Union(u) => leaker.intern_union(u),
+        Item::Trait(t) => leaker.intern_trait(t),
+        Item::Type(a) => {
+            leaker
+                .enter_generics(&a.generics, |view| syn::visit::visit_item_type(view, a))
+                .0
+        }
+        _ => unreachable!("`analyze_full` passes the analysed items only"),
     };
-    let context = analysed.map_err(|e| report(e, opts))?;
-    // Only the required entries need a repeater; absolute paths of other
-    // crates (`::other::Wrap<u8>`) are optional entries, left as written by a
-    // consumer's Referrer. The order is type-leak's own, which is
-    // deterministic. The same type text is one entry per context (method
-    // generics with different bounds, a generic named like a type): each has
-    // its own impl and its own arguments.
-    let referrer = leaker.finish();
-    Ok(Some(Analysis { referrer, context }))
-}
-
-/// An error of type-leak's encoders, in announce's words.
-fn encode_error(e: type_leak::EncodeError) -> syn::Error {
-    match &e {
-        type_leak::EncodeError::UnsupportedConstType(ty) => syn::Error::new_spanned(
-            ty,
-            "announce: a const generic that a carried (`repeater`) type uses must have a \
-             primitive type (`bool`, `char`, `u8`..`u128`, `i8`..`i128`, `usize`, `isize`); \
-             a type alias or another type cannot be encoded",
-        ),
-        _ => syn::Error::new(e.span(), format!("announce: {}", e)),
+    // `result()` consumes the Leaker, so the check of the primitive names is taken first.
+    let assertions = leaker.assertions();
+    // The same type text is one entry per context (method generics with different bounds, a
+    // generic named like a type): each has its own impl and its own arguments. The Referrer is of
+    // what type-leak could intern, whatever it refused.
+    let result = leaker.result();
+    // The Referrer is needed while errors of type-leak remain, and `finish()` is the only way to
+    // it: look at it with every error ignored. That makes the parts whole, and removes only an
+    // entry that has an error of its own (`NestedSelfInBounds`, which needs a nested item that
+    // these `intern_*` calls never see), so the entries are those the impls are written for
+    // (`result.repeater_impls()`, on the result itself).
+    let referrer = ignored_view(&result);
+    Analysis {
+        result,
+        referrer,
+        context,
+        assertions,
     }
 }
 
-/// Enforces `repeater` when it is needed, and builds the table.
-pub fn table(item: &Item, opts: &crate::options::Options, random: u64) -> Result<Option<Leaked>> {
+/// Whether the errors are at the same tokens, also where they are written: `{:?}` of tokens has
+/// the spans of a proc macro (and none in a test build, where the text alone tells them apart).
+fn at_same_tokens(a: &LeakError, b: &LeakError) -> bool {
+    format!("{:?}", a.tokens) == format!("{:?}", b.tokens)
+}
+
+/// Why an entry is an error where no repeater carries it.
+fn unrepeated(item: &Item) -> &'static str {
+    if matches!(item, Item::Type(_)) {
+        ALIAS
+    } else {
+        WITHOUT_REPEATER
+    }
+}
+
+/// An error of type-leak's encoders, as a recorded thing. `entry` is the type of the entry that
+/// has no impl.
+fn encode_error(e: type_leak::EncodeError, entry: &Type) -> LeakError {
+    use type_leak::EncodeError;
+    match &e {
+        EncodeError::UnsupportedConstType(ty) => LeakError::new(ty, NOT_PRIMITIVE),
+        EncodeError::UnexpectedArgument(arg) => {
+            LeakError::new(arg, "with a generic argument that cannot be encoded")
+        }
+        EncodeError::MissingArgument(param) => {
+            LeakError::new(param, "with a generic parameter that has no argument")
+        }
+        EncodeError::UnboundedTraitObject(ty) => {
+            LeakError::new(ty, "with a trait object that has no lifetime bound")
+        }
+        EncodeError::NeedsSelf(_) => LeakError::new(entry, "with `Self` in a carried type"),
+        _ => LeakError::new(entry, format!("with a type that cannot be encoded ({})", e)),
+    }
+}
+
+/// The repeater `repeater` as the projection of the impls: for `()`, with the `id` of the
+/// announcement, and `()` is what a consumer's projection names. An entry that names `Self` has
+/// no impl for `()`, so it is a cause of [`encode_errors`].
+fn projection(repeater: &Path, random: u64) -> Projection {
+    Projection::new(
+        repeater.clone(),
+        random,
+        ImplSelf::Marker(syn::parse_quote!(())),
+    )
+}
+
+/// The causes that keep an entry from having an impl, each once: a const generic that several
+/// entries use stops them all. Every entry is looked at, so the causes are all there is, not the
+/// first.
+fn encode_errors(analysis: &Analysis, projection: &Projection) -> Vec<LeakError> {
+    let unit: Type = syn::parse_quote!(());
+    let mut errors = Vec::<LeakError>::new();
+    for (entry, ty, context) in analysis.entries() {
+        if let Err(e) = projection.of(&unit, context, entry) {
+            let e = encode_error(e, ty);
+            if !errors
+                .iter()
+                .any(|x| x.reason == e.reason && at_same_tokens(x, &e))
+            {
+                errors.push(e);
+            }
+        }
+    }
+    errors
+}
+
+/// The record of `errors` for `item`, with the texts that a call says about each; `None`
+/// without errors.
+fn failed(item: &Item, random: u64, errors: Vec<LeakError>) -> Result<Option<Table>> {
+    if errors.is_empty() {
+        return Ok(None);
+    }
+    let (ident, _) = crate::generate::ident_vis(item)?;
+    let id = syn::LitInt::new(&format!("{}u64", random), Span::call_site());
+    let name = syn::ext::IdentExt::unraw(&ident).to_string();
+    let errors = errors.into_iter().map(|e| e.described(&name)).collect();
+    let mut failure = LeakFailure::new(ident, id, errors);
+    // The crate that `#[announce]` compiles is the definer, which the texts name for `$crate`.
+    failure.krate = std::env::var("CARGO_CRATE_NAME").ok();
+    Ok(Some(Table::Failed(failure)))
+}
+
+/// Enforces `repeater` when it is needed, and builds the table, or records why there is none.
+/// The check of type-leak that the primitive names are not shadowed (`Leaker::assertions()`) is
+/// of the analysis, so it is in the outcome for every item that is analysed.
+pub fn table(item: &Item, opts: &crate::options::Options, random: u64) -> Result<Outcome> {
     let repeater = opts.repeater.as_ref();
     // Type aliases are not a type-leak target: their right-hand side must be
     // written with paths that resolve everywhere.
-    if let Item::Type(alias) = item {
-        if let Some(a) = repeater {
-            return Err(syn::Error::new_spanned(
-                a,
-                "`repeater` is not supported on type aliases; write the right-hand side with absolute paths",
-            ));
-        }
-        if let Some(analysis) = analyze(item, opts)? {
-            if let Some((_, ty)) = analysis.required().next() {
-                return Err(syn::Error::new_spanned(
-                    ty,
-                    format!(
-                        "announce: the right-hand side of type alias `{}` must not contain relative paths; \
-                         write this type as an absolute path (`crate::..`, `$crate::..` or `::other_crate::..`)",
-                        alias.ident
-                    ),
-                ));
-            }
-        }
-        return Ok(None);
+    if let (Item::Type(_), Some(a)) = (item, repeater) {
+        return Err(syn::Error::new_spanned(
+            a,
+            "`repeater` is not supported on type aliases; write the right-hand side with absolute paths",
+        ));
     }
-    let analysis = analyze(item, opts)?;
-    let (repeater, analysis) = match (repeater, analysis) {
-        (Some(a), None) => {
+    let mut analysis = match (analyze(item, opts), repeater) {
+        (Some(analysis), _) => analysis,
+        (None, Some(a)) => {
             return Err(syn::Error::new_spanned(
                 a,
                 "`repeater` is supported on struct, enum, union and trait items",
             ))
         }
-        (None, None) => return Ok(None),
-        (None, Some(analysis)) => {
-            let n = analysis.required().count();
-            let ty = match analysis.required().next() {
-                None => return Ok(None),
-                Some((_, t)) => t,
-            };
-            return Err(syn::Error::new_spanned(
-                ty,
-                format!(
-                    "announce: this type does not resolve outside the defining crate{}; \
-                     add `#[announce(repeater = crate::path::to::Repeater)]` (define the trait \
-                     with `announce::define_repeater!(pub Repeater);`), \
-                     or write it as an absolute path (`crate::..`, `::std::vec::Vec<..>`, `::other_crate::..`; \
-                     std prelude names count as relative)",
-                    if n > 1 { format!(" ({} such types)", n) } else { String::new() }
-                ),
-            ));
-        }
-        (Some(a), Some(analysis)) => (a, analysis),
+        (None, None) => return Ok(Outcome::default()),
     };
-    let id = syn::LitInt::new(&format!("{}u64", random), Span::call_site());
-    let referrer = &analysis.referrer;
-    // One impl per required entry, written by type-leak from the context of
-    // the entry: its own generics with their bounds and where predicates, and
-    // the trait arguments that encode the ones the type uses (const generics
-    // through the slots of the repeater). The impl is for `()`: no entry names
-    // `Self` (`allow_self = false`), so any marker will do, and `()` is what a
-    // consumer's projection names.
-    let slots = RepeaterSlots::new(repeater.clone());
-    let marker: Type = syn::parse_quote!(());
-    let mut impls = TokenStream::new();
-    for (ix, _) in analysis.required() {
-        let r = referrer
-            .repeater_impl_with(ix, ImplSelf::Marker(&marker), |value, param| {
-                slots.encode_const(value, &param.ty)
-            })
-            .map_err(encode_error)?;
-        let (impl_generics, _, where_clause) = r.generics.split_for_impl();
-        let (args, self_ty, ty) = (&r.args, &r.self_ty, &r.ty);
-        impls.extend(quote! {
-            #[doc(hidden)]
-            impl #impl_generics #repeater<#args, #id, #ix> for #self_ty #where_clause {
-                type Type = #ty;
+    let assertions = std::mem::take(&mut analysis.assertions);
+    let table = tabulate(item, repeater, random, analysis)?;
+    Ok(Outcome { table, assertions })
+}
+
+/// The table of `analysis`, the analysis of `item`.
+fn tabulate(
+    item: &Item,
+    repeater: Option<&Path>,
+    random: u64,
+    analysis: Analysis,
+) -> Result<Option<Table>> {
+    let repeater = match repeater {
+        Some(repeater) => repeater,
+        None => {
+            // Every entry is an error without a repeater, which a type alias has none of.
+            let reason = unrepeated(item);
+            let mut errors = Vec::<LeakError>::new();
+            for (_, ty, _) in analysis.entries() {
+                let e = LeakError::new(ty, reason);
+                if !errors.iter().any(|x| at_same_tokens(x, &e)) {
+                    errors.push(e);
+                }
             }
-        });
+            if !errors.is_empty() {
+                return failed(item, random, errors);
+            }
+            // Nothing for a table to carry. The errors of type-leak are the consumer's.
+            if analysis.result.errors().is_empty() {
+                return Ok(None);
+            }
+            let table = TypeLeak::new(None, analysis.context, analysis.result);
+            let meta = table.meta();
+            check_round_trip(&meta, &table)?;
+            return Ok(Some(Table::Leaked(Leaked {
+                impls: TokenStream::new(),
+                meta,
+            })));
+        }
+    };
+    let projection = projection(repeater, random);
+    let errors = encode_errors(&analysis, &projection);
+    if !errors.is_empty() {
+        return failed(item, random, errors);
     }
-    let table = TypeLeak::new(repeater.clone(), id, referrer.clone(), analysis.context);
+    let written = match analysis.result.repeater_impls(&projection) {
+        Ok(written) => written,
+        Err(e) => {
+            // Every cause is in `encode_errors` already; this is no more than a guard.
+            let ty: Type = syn::parse_quote!(());
+            return failed(item, random, vec![encode_error(e, &ty)]);
+        }
+    };
+    let mut impls = TokenStream::new();
+    for r in written {
+        let mut imp: ItemImpl = r.into();
+        imp.attrs.push(syn::parse_quote!(#[doc(hidden)]));
+        imp.to_tokens(&mut impls);
+    }
+    let table = TypeLeak::new(Some(projection), analysis.context, analysis.result);
     // The consumer reads the META back and uses the same indices as the impls
     // above, so the table must survive its own serialization unchanged.
     let meta = table.meta();
-    check_round_trip(&meta, referrer)?;
-    Ok(Some(Leaked { impls, meta }))
+    check_round_trip(&meta, &table)?;
+    Ok(Some(Table::Leaked(Leaked { impls, meta })))
 }
 
-/// The `Referrer` that a consumer parses from `meta` is the one the impls were
-/// written from (same entries, same indices, same contexts).
-fn check_round_trip(meta: &TokenStream, referrer: &Referrer) -> Result<()> {
-    let element: crate::helper::Meta = syn::parse2(meta.clone())?;
-    let read = TypeLeak::from_kv(&mut element.kv()?)?;
-    if read.referrer == *referrer {
+/// The table that a consumer parses from `meta` is the one the impls were
+/// written from (same entries, same indices, same contexts, same errors).
+fn check_round_trip(meta: &TokenStream, table: &TypeLeak) -> Result<()> {
+    let read: TypeLeak = syn::parse2(meta.clone())?;
+    let same = |a: &Projection, b: &Projection| {
+        a.id == b.id && a.path.to_token_stream().to_string() == b.path.to_token_stream().to_string()
+    };
+    let projection = match (&read.projection, &table.projection) {
+        (Some(a), Some(b)) => same(a, b),
+        (None, None) => true,
+        _ => false,
+    };
+    // The result does not compare as a whole: its errors, and its Referrer the same way for both.
+    let same_result = read.result.errors() == table.result.errors()
+        && ignored_view(&read.result) == ignored_view(&table.result);
+    if projection && read.context == table.context && same_result {
         Ok(())
     } else {
         Err(syn::Error::new(
@@ -691,8 +506,9 @@ fn check_round_trip(meta: &TokenStream, referrer: &Referrer) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::helper::TypeLeak;
     use crate::options::Options;
-    use template_quote::ToTokens;
+    use template_quote::quote;
 
     fn item(ts: TokenStream) -> Item {
         syn::parse2(ts).unwrap()
@@ -709,6 +525,13 @@ mod tests {
         }
     }
 
+    fn prelude() -> Options {
+        Options {
+            allow_std_prelude: true,
+            ..Options::default()
+        }
+    }
+
     fn squash(ts: impl ToTokens) -> String {
         ts.to_token_stream()
             .to_string()
@@ -716,13 +539,155 @@ mod tests {
             .collect()
     }
 
+    /// The entries that type-leak finds in `it`, as text.
     fn analysed(it: TokenStream, o: &Options) -> Vec<String> {
         analyze(&item(it), o)
             .unwrap()
-            .unwrap()
-            .required()
-            .map(|(_, t)| squash(t))
+            .entries()
+            .map(|(_, t, _)| squash(t))
             .collect()
+    }
+
+    /// The errors that type-leak finds in `it`: the text of each cause.
+    fn errors_of(it: TokenStream, o: &Options) -> Vec<String> {
+        analyze(&item(it), o)
+            .unwrap()
+            .result
+            .errors()
+            .iter()
+            .map(|e| squash(&e.cause))
+            .collect()
+    }
+
+    /// Whether type-leak finds nothing in `it`: no entry and no error.
+    fn clean(it: TokenStream, o: &Options) -> bool {
+        let a = analyze(&item(it), o).unwrap();
+        let clean = a.entries().next().is_none() && a.result.errors().is_empty();
+        clean
+    }
+
+    /// How many entries and errors type-leak finds in `it`.
+    fn found(it: TokenStream, o: &Options) -> usize {
+        let a = analyze(&item(it), o).unwrap();
+        a.entries().count() + a.result.errors().len()
+    }
+
+    /// A reason in a word, to write the causes of an item in a line.
+    fn tag(reason: &str) -> &str {
+        match reason {
+            WITHOUT_REPEATER => "relative",
+            ALIAS => "alias",
+            NOT_PRIMITIVE => "const",
+            "with `Self` in a carried type" => "self",
+            other => other.trim_start_matches("with "),
+        }
+    }
+
+    /// `ty` is the one relative type of `it`: an error without a repeater, an entry and an
+    /// impl with one.
+    fn carried(it: TokenStream, ty: &str) {
+        assert_eq!(causes(it.clone()), [format!("{}: relative", ty)], "{}", it);
+        assert_eq!(analysed(it.clone(), &with_repeater()), [ty], "{}", it);
+        let impls = squash(&leaked(it.clone()).impls);
+        assert!(
+            impls.contains(&format!("typeType={};", ty)),
+            "{}: {}",
+            it,
+            impls
+        );
+    }
+
+    /// What `table` records for `it`, as `tokens: reason` for each cause; nothing if it
+    /// builds a table or finds nothing.
+    fn causes_with(it: TokenStream, o: &Options) -> Vec<String> {
+        match table(&item(it), o, 1).unwrap().table {
+            Some(Table::Failed(f)) => f
+                .errors
+                .iter()
+                .map(|e| format!("{}: {}", squash(&e.tokens), tag(&e.reason)))
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    fn causes(it: TokenStream) -> Vec<String> {
+        causes_with(it, &opts())
+    }
+
+    /// The record of `it`, or a panic.
+    fn record(it: TokenStream, o: &Options) -> LeakFailure {
+        match table(&item(it), o, 99).unwrap().table {
+            Some(Table::Failed(f)) => f,
+            _ => panic!("a record"),
+        }
+    }
+
+    /// The rows of a table, `item => text`, a line each.
+    fn pairs(table: &str) -> impl Iterator<Item = (&str, &str)> {
+        table.lines().filter_map(|l| l.split_once(" => "))
+    }
+
+    fn rows(table: &str) -> impl Iterator<Item = (TokenStream, &str)> {
+        pairs(table).map(|(it, text)| (it.parse().unwrap(), text))
+    }
+
+    /// The causes of each row, `item => cause | cause`.
+    fn check(table: &str, o: &Options) {
+        for (it, want) in rows(table) {
+            assert_eq!(causes_with(it.clone(), o).join(" | "), want, "{}", it);
+        }
+    }
+
+    /// The table of `it` with the repeater `crate::R` and the id 42.
+    fn leaked(it: TokenStream) -> Leaked {
+        match table(&item(it), &with_repeater(), 42).unwrap().table {
+            Some(Table::Leaked(l)) => l,
+            _ => panic!("a table"),
+        }
+    }
+
+    /// The `KEY` argument of the repeater for the entry `nth` of [`leaked`], as `squash` prints it.
+    fn key(nth: usize) -> String {
+        let projection = TypeLeak::projection_of(syn::parse_quote!(crate::R), 42);
+        let entry: type_leak::EntryId = syn::parse_str(&nth.to_string()).unwrap();
+        format!("{}u128", projection.key(entry))
+    }
+
+    /// The entries of `table`, with its errors ignored in a copy.
+    fn entries(table: &TypeLeak) -> Vec<(type_leak::EntryId, Type)> {
+        ignored_view(&table.result)
+            .iter()
+            .map(|(entry, ty, _)| (entry, ty.clone()))
+            .collect()
+    }
+
+    /// The META of `it` that has no repeater, read back; `None` where it has no META.
+    fn meta_of(it: TokenStream, o: &Options) -> Option<TypeLeak> {
+        match table(&item(it), o, 42).unwrap().table {
+            Some(Table::Leaked(l)) => Some(syn::parse2(l.meta).unwrap()),
+            Some(Table::Failed(_)) => panic!("a record"),
+            None => None,
+        }
+    }
+
+    #[test]
+    fn tidy_prints_types_as_written() {
+        assert_eq!(tidy("'inner :: G < Self :: A >'"), "'inner::G<Self::A>'");
+        assert_eq!(tidy("Box < Wrap < '_ > >"), "Box<Wrap<'_>>");
+        assert_eq!(tidy("Vec < & 'a u8 >"), "Vec<&'a u8>");
+        assert_eq!(tidy("(A , B)"), "(A, B)");
+        assert_eq!(
+            tidy("T : :: core :: convert :: From < inner :: G < T > >"),
+            "T: ::core::convert::From<inner::G<T>>"
+        );
+        assert_eq!(tidy("const N : inner :: Ty"), "const N: inner::Ty");
+        // Tokens print differently inside the compiler and outside of it.
+        assert_eq!(tidy("two ! ()"), "two!()");
+        assert_eq!(tidy("two! ()"), "two!()");
+        assert_eq!(tidy("vec! [1 , 2]"), "vec![1, 2]");
+        // Prose and text that is tidy already stay as they are.
+        let prose = "write `<Self as Tr>::A`, or use `crate::X` (e.g. `&'a self`)";
+        assert_eq!(tidy(prose), prose);
     }
 
     #[test]
@@ -766,21 +731,11 @@ mod tests {
     }
 
     #[test]
-    fn type_alias_with_a_relative_type_is_an_error() {
-        let e = table(&item(quote! { type A = Local; }), &opts(), 1)
-            .err()
-            .unwrap()
-            .to_string();
-        assert!(
-            e.contains("right-hand side of type alias `A` must not contain relative paths"),
-            "{}",
-            e
-        );
-        let e = table(&item(quote! { type B<T> = Wrap<T>; }), &opts(), 1)
-            .err()
-            .unwrap()
-            .to_string();
-        assert!(e.contains("type alias `B`"), "{}", e);
+    fn type_alias_with_a_relative_type_is_recorded() {
+        assert_eq!(causes(quote! { type A = Local; }), ["Local: alias"]);
+        assert_eq!(causes(quote! { type B<T> = Wrap<T>; }), ["Wrap<T>: alias"]);
+        // A prelude name is relative too.
+        assert_eq!(causes(quote! { type C = Vec<u8>; }), ["Vec<u8>: alias"]);
     }
 
     #[test]
@@ -791,7 +746,7 @@ mod tests {
             quote! { type A = u8; },
             quote! { type A<T> = ::std::vec::Vec<T>; },
         ] {
-            assert!(table(&item(it), &opts(), 1).unwrap().is_none());
+            assert!(table(&item(it), &opts(), 1).unwrap().table.is_none());
         }
     }
 
@@ -821,8 +776,8 @@ mod tests {
     #[test]
     fn modules_and_functions_are_not_analysed() {
         let m = item(quote! { mod m { pub struct S { a: Local } } });
-        assert!(analyze(&m, &opts()).unwrap().is_none());
-        assert!(table(&m, &opts(), 1).unwrap().is_none());
+        assert!(analyze(&m, &opts()).is_none());
+        assert!(table(&m, &opts(), 1).unwrap().table.is_none());
         let e = table(&m, &with_repeater(), 1).err().unwrap().to_string();
         assert!(
             e.contains("`repeater` is supported on struct, enum, union and trait items"),
@@ -830,7 +785,7 @@ mod tests {
             e
         );
         let f = item(quote! { fn f(a: Local) {} });
-        assert!(analyze(&f, &opts()).unwrap().is_none());
+        assert!(analyze(&f, &opts()).is_none());
     }
 
     #[test]
@@ -863,6 +818,29 @@ mod tests {
     }
 
     #[test]
+    fn a_type_of_another_crate_is_no_entry() {
+        // Every absolute path is the same crate on both sides: `::std` as well as `::other`.
+        let o = opts();
+        assert!(clean(
+            quote! { struct S { a: ::other::X<u8>, b: ::std::vec::Vec<crate::Y> } },
+            &o
+        ));
+        // A relative type in it is carried, with the absolute type around it.
+        let it = quote! { struct S { a: ::std::vec::Vec<Local>, b: ::other::X<u8> } };
+        assert_eq!(
+            analysed(it.clone(), &with_repeater()),
+            ["::std::vec::Vec<Local>"]
+        );
+        let impls = squash(&leaked(it).impls);
+        assert_eq!(impls.matches("for()").count(), 1, "{}", impls);
+        assert!(
+            impls.contains("typeType=::std::vec::Vec<Local>;"),
+            "{}",
+            impls
+        );
+    }
+
+    #[test]
     fn analyze_honours_the_primitive_and_prelude_options() {
         let it = quote! { struct S { a: u8, b: Vec<u8> } };
         let strict = Options {
@@ -872,52 +850,154 @@ mod tests {
         assert!(analysed(it.clone(), &strict).iter().any(|t| t == "u8"));
         let default = analysed(it.clone(), &opts());
         assert_eq!(default, ["Vec<u8>"]);
-        let prelude = Options {
-            allow_std_prelude: true,
-            ..Options::default()
-        };
-        assert!(analysed(it, &prelude).is_empty());
+        assert!(analysed(it, &prelude()).is_empty());
     }
 
     #[test]
-    fn types_in_associated_const_defaults_are_not_read() {
-        // A known limit: type-leak does not read the
-        // default of an associated const, so nothing is carried.
+    fn types_in_associated_const_defaults_are_carried() {
+        // type-leak reads the default of an associated const (`check_values`), so the type
+        // in it is an entry like any other.
         let it = quote! { trait Tr { const N: usize = ::core::mem::size_of::<inner::Local>(); } };
-        assert!(analysed(it, &opts()).is_empty());
+        carried(it.clone(), "inner::Local");
+        // The callback's copy has the projection in the value.
+        let table: TypeLeak = syn::parse2(leaked(it.clone()).meta).unwrap();
+        let mut copy = item(it);
+        table.resolve_into(&mut copy).unwrap();
+        let key: TokenStream = key(0).parse().unwrap();
+        assert_eq!(
+            squash(&copy),
+            squash(quote! {
+                trait Tr {
+                    const N: usize =
+                        ::core::mem::size_of::<<() as crate::R<(), #key>>::Type>();
+                }
+            })
+        );
+        // A relative path that is not a type is an error of type-leak, for the consumer: it is
+        // not a cause here.
+        let it = quote! { trait Tr { const N: usize = LEN; fn f(&self) -> Local; } };
+        assert_eq!(causes(it.clone()), ["Local: relative"]);
+        assert_eq!(errors_of(it, &opts()), ["LEN"]);
     }
 
     #[test]
-    fn trait_paths_must_be_absolute() {
-        let e = analyze(&item(quote! { trait T: Base {} }), &opts())
-            .err()
-            .unwrap()
-            .to_string();
-        assert!(e.contains("trait paths must be absolute"), "{}", e);
-        let e = analyze(&item(quote! { struct S<T: Base>(T); }), &opts())
-            .err()
-            .unwrap()
-            .to_string();
-        assert!(e.contains("trait paths must be absolute"), "{}", e);
-        assert!(analyze(&item(quote! { trait T: crate::Base {} }), &opts()).is_ok());
-        assert!(analyze(
-            &item(quote! { struct S<T: ::core::fmt::Debug>(T); }),
-            &opts()
-        )
-        .is_ok());
-        // Bare prelude traits only with `allow_std_prelude`, and then the
-        // trait-path error is the one that goes away.
-        let it = item(quote! { struct S<T: Clone>(T); });
-        let e = analyze(&it, &opts()).err().unwrap().to_string();
-        assert!(e.contains("trait paths must be absolute"), "{}", e);
-        assert!(analyze(
-            &it,
-            &Options {
-                allow_std_prelude: true,
-                ..Options::default()
+    fn a_prelude_value_needs_the_prelude_option() {
+        // `check_values` reads the default of an associated const, where `None` is a relative
+        // path, and the rule of the prelude accepts it like the name of a type.
+        for (value, name) in [
+            ("None", "None"),
+            ("Some(1)", "Some"),
+            ("Ok(1)", "Ok"),
+            ("Err(1)", "Err"),
+            ("drop(1)", "drop"),
+        ] {
+            let it = format!(
+                "trait T {{ const X: ::core::option::Option<u8> = {}; }}",
+                value
+            );
+            let it: TokenStream = it.parse().unwrap();
+            assert_eq!(errors_of(it.clone(), &opts()), [name], "{}", it);
+            // It is no cause at the definition: the consumer reports it.
+            assert!(causes(it.clone()).is_empty(), "{}", it);
+            assert!(clean(it.clone(), &prelude()), "{}", it);
+        }
+        // Only the bare name is the prelude's.
+        let it = quote! { trait T { const X: ::core::option::Option<u8> = inner::None; } };
+        assert_eq!(errors_of(it, &prelude()), ["inner::None"]);
+        let it = quote! { trait T { const X: ::core::option::Option<u8> = ::core::option::Option::None; } };
+        assert!(clean(it, &opts()));
+    }
+
+    #[test]
+    fn the_prelude_option_takes_the_names_of_the_tables() {
+        // type-leak's `Rules::prelude()` is the prelude of Rust 1.56: it has `drop`, and leaves
+        // out `TryFrom`, `TryInto` and `FromIterator`, which announce takes bare as well (its
+        // fast path does too, and must not accept more than the analysis). This pins the set,
+        // so that a change of type-leak's list is announce's to decide.
+        let types = PRELUDE.iter().map(|n| format!("struct S({});", n));
+        let values = ["Some", "None", "Ok", "Err", "drop"]
+            .iter()
+            .map(|n| format!("trait T {{ const X: () = {}; }}", n));
+        for src in types.chain(values) {
+            let it: TokenStream = src.parse().unwrap();
+            // `analyze` compares with the fast path as well.
+            assert!(clean(it.clone(), &prelude()), "{}", src);
+            // Only `Sized` is accepted bare without the option.
+            if !src.contains("Sized") {
+                assert_eq!(found(it.clone(), &opts()), 1, "{}", src);
             }
-        )
-        .is_ok());
+        }
+        for name in NEWER_PRELUDE {
+            assert!(PRELUDE.contains(name), "{}", name);
+        }
+        // What a later prelude added is not taken, as type-leak leaves it out.
+        for src in [
+            "struct S(Future);",
+            "trait T { const X: usize = size_of::<u8>(); }",
+        ] {
+            let it: TokenStream = src.parse().unwrap();
+            assert_eq!(found(it, &prelude()), 1, "{}", src);
+        }
+    }
+
+    #[test]
+    fn the_bodies_of_provided_methods_are_not_analysed() {
+        // `check_values` is on for a trait, but `check_bodies` is off.
+        let it = quote! {
+            trait Tr {
+                const N: usize = 4;
+                fn f(&self) { helper(); let x: Local = Local; }
+                fn g(&self) -> u8 { Self::N as u8 }
+            }
+        };
+        assert!(clean(it.clone(), &opts()));
+        assert!(analysed(it, &with_repeater()).is_empty());
+        // The signature is read all the same.
+        let it = quote! { trait Tr { fn f(&self, a: Local) { helper(); } } };
+        carried(it, "Local");
+    }
+
+    #[test]
+    fn a_relative_trait_path_is_an_error_for_the_consumer() {
+        for bad in [
+            quote! { trait T: Base {} },
+            quote! { struct S<T: Base>(T); },
+            quote! { trait T { fn f(&self, x: impl Base); } },
+            quote! { trait T { fn f<U: Base>(&self, u: U); } },
+        ] {
+            assert_eq!(errors_of(bad.clone(), &opts()), ["Base"], "{}", bad);
+            // It is no cause at the definition, with or without a repeater.
+            assert!(causes(bad.clone()).is_empty(), "{}", bad);
+            assert!(causes_with(bad, &with_repeater()).is_empty());
+        }
+        assert!(clean(quote! { trait T: crate::Base {} }, &opts()));
+        assert!(clean(
+            quote! { struct S<T: ::core::fmt::Debug>(T); },
+            &opts()
+        ));
+        // Bare prelude traits only with `allow_std_prelude`.
+        let it = quote! { struct S<T: Clone>(T); };
+        assert_eq!(errors_of(it.clone(), &opts()), ["Clone"]);
+        assert!(clean(it, &prelude()));
+    }
+
+    #[test]
+    fn a_trait_object_is_a_type_that_is_carried() {
+        for (it, ty) in rows(
+            "
+            struct S { a: ::std::boxed::Box<dyn Base> } => dynBase
+            struct S { a: ::std::boxed::Box<dyn Base + Send> } => dynBase+Send
+            struct S<T> { a: ::std::boxed::Box<dyn Base<T>>, t: T } => dynBase<T>
+            trait T { fn f(&self, a: &(dyn Base + 'static)); } => dynBase+'static
+            struct S { a: ::std::boxed::Box<dyn Fn(Local) -> u8> } => dynFn(Local)->u8
+        ",
+        ) {
+            assert!(table(&item(it.clone()), &opts(), 1).is_ok());
+            carried(it, ty);
+        }
+        // An absolute trait object is no entry.
+        let it = quote! { struct S { a: ::std::boxed::Box<dyn crate::Base> } };
+        assert!(analysed(it, &with_repeater()).is_empty());
     }
 
     #[test]
@@ -936,8 +1016,7 @@ mod tests {
             quote! { struct S<T: ?Sized + ::core::fmt::Debug>(::std::boxed::Box<T>); },
             quote! { struct S<T: ?::core::marker::Sized>(::std::boxed::Box<T>); },
         ] {
-            let a = analyze(&item(ok.clone()), &opts());
-            assert!(a.is_ok(), "{}: {}", ok, a.err().unwrap());
+            assert!(clean(ok.clone(), &opts()), "{}", ok);
         }
         // The relative types next to it are carried as before.
         let impls = squash(
@@ -947,7 +1026,7 @@ mod tests {
             .impls,
         );
         assert!(
-            impls.contains("impl<U:?Sized>crate::R<(*constU,),42u64,"),
+            impls.contains(&format!("impl<U:?Sized>crate::R<(*constU,),{}>", key(0))),
             "{}",
             impls
         );
@@ -965,57 +1044,107 @@ mod tests {
             quote! { struct S<T: self::Sized>(T); },
             quote! { struct S<T: Sized2>(T); },
         ] {
-            let e = analyze(&item(bad.clone()), &opts())
-                .err()
-                .unwrap()
-                .to_string();
-            assert!(e.contains("trait paths must be absolute"), "{}: {}", bad, e);
+            assert_eq!(found(bad.clone(), &opts()), 1, "{}", bad);
         }
         // With the option, the prelude traits are accepted, `Sized` as well.
-        let prelude = Options {
-            allow_std_prelude: true,
-            ..Options::default()
-        };
         for ok in [
             quote! { struct S<T: Clone + ?Sized>(::std::boxed::Box<T>); },
             quote! { trait T { fn f(&self) where Self: Sized; } },
             quote! { trait T: Sized {} },
         ] {
-            let a = analyze(&item(ok.clone()), &prelude);
-            assert!(a.is_ok(), "{}: {}", ok, a.err().unwrap());
+            assert!(clean(ok.clone(), &prelude()), "{}", ok);
         }
     }
 
     #[test]
-    fn value_paths_must_be_absolute() {
+    fn value_paths_are_errors_for_the_consumer() {
         for bad in [
-            quote! { struct S([u8; N]); },
             quote! { enum E { A = N } },
             quote! { struct S<const M: usize = N>; },
-            quote! { struct S(crate::Buf<{ N }>); },
             quote! { trait T { const M: usize = N; } },
+            quote! { struct S<T: ::x::Tr<{ N }>>(T); },
+            quote! { struct S<T>(T) where T: ::x::Tr<{ N }>; },
         ] {
-            let e = analyze(&item(bad.clone()), &opts())
-                .err()
-                .unwrap()
-                .to_string();
-            assert!(
-                e.contains(
-                    "value paths in array lengths, enum discriminants, const generic arguments"
-                ),
-                "{}: {}",
-                bad,
-                e
-            );
-            assert!(!e.contains("trait paths"), "{}", e);
+            assert_eq!(errors_of(bad.clone(), &opts()), ["N"], "{}", bad);
+            // A repeater does not carry a value, and it is no cause at the definition.
+            assert_eq!(errors_of(bad.clone(), &with_repeater()), ["N"]);
+            assert!(causes_with(bad.clone(), &with_repeater()).is_empty());
+            assert!(causes(bad).is_empty());
         }
         for ok in [
             quote! { struct S([u8; crate::N]); },
             quote! { struct S<const N: usize>([u8; N]); },
             quote! { enum E { A = ::core::mem::size_of::<u8>() as isize } },
+            // A primitive type is allowed (`allow_primitive`) in a value too.
+            quote! { enum E { A = u8::MAX as isize } },
+            quote! { enum E { A = crate::N, B = 2 } },
+            quote! { struct S<const M: usize = { crate::N }>; },
+            quote! { struct S<T: ::x::Tr<{ crate::N }>>(T); },
         ] {
-            assert!(analyze(&item(ok), &opts()).is_ok());
+            assert!(clean(ok.clone(), &opts()), "{}", ok);
         }
+    }
+
+    #[test]
+    fn a_value_path_is_a_const_parameter_of_its_own_scope() {
+        // The parameter of a method or of a generic associated type is not one of the item,
+        // nor of another method.
+        for bad in [
+            quote! { trait T { const M: usize = N; fn f<const N: usize>(&self); } },
+            quote! { trait T { fn f<const N: usize>(&self); const M: usize = N; } },
+            quote! { trait T { fn f<const N: usize>(&self); fn g<const M: usize = N>(&self); } },
+            quote! { trait T { fn f<const N: usize>(&self); fn g<U: ::x::Tr<{ N }>>(&self); } },
+            quote! { trait T { type A<const N: usize>; const M: usize = N; } },
+            quote! { trait T { type A<const N: usize>; type B<U: ::x::Tr<{ N }>>; } },
+            quote! { trait T { type A<const N: usize>; fn g<U: ::x::Tr<{ N }>>(&self); } },
+        ] {
+            assert_eq!(errors_of(bad.clone(), &opts()), ["N"], "{}", bad);
+        }
+        // Its own scope, and the item's everywhere.
+        for ok in [
+            quote! { trait T { fn f<const N: usize, const M: usize = N>(&self); } },
+            quote! { trait T { fn f<const N: usize>(&self) where Self: ::x::Tr<{ N }>; } },
+            quote! { trait T { type A<const N: usize>: ::x::Tr<{ N }>; } },
+            quote! { trait T<const N: usize> { const M: usize = N; fn f(&self) where Self: ::x::Tr<{ N }>; } },
+            quote! { trait T<const N: usize> { fn f<const M: usize>(&self) where Self: ::x::Tr<{ N }>; } },
+            quote! { trait T<const N: usize> { type A<const M: usize = N>; } },
+            quote! { struct S<const N: usize, const M: usize = N>; },
+        ] {
+            assert!(clean(ok.clone(), &opts()), "{}", ok);
+        }
+    }
+
+    #[test]
+    fn values_inside_a_type_are_carried_with_it() {
+        for (it, ty) in rows(
+            "
+            struct S([u8; N]); => [u8;N]
+            struct S(crate::Buf<{ N }>); => crate::Buf<{N}>
+            struct S(Wrap<{ N }>); => Wrap<{N}>
+            struct S { a: ::std::boxed::Box<[u8; N]> } => [u8;N]
+            struct S<T: ::core::convert::From<[u8; N]>>(T); => [u8;N]
+            trait T { fn f(&self, a: [u8; N]) -> u8; } => [u8;N]
+            struct S { a: fn([u8; N]) -> u8 } => [u8;N]
+        ",
+        ) {
+            carried(it, ty);
+        }
+        // Constants that are fine on their own stay so inside a type.
+        for ok in [
+            quote! { struct S<const N: usize>([u8; N]); },
+            quote! { struct S([u8; crate::N]); },
+            quote! { struct S(::std::boxed::Box<[u8; Self::N]>); },
+        ] {
+            assert!(analysed(ok, &with_repeater()).is_empty());
+        }
+        // The values outside of types are errors of type-leak all the same.
+        let it = quote! { enum E { A = M, B([u8; N]) } };
+        assert_eq!(causes(it.clone()), ["[u8;N]: relative"]);
+        assert_eq!(errors_of(it.clone(), &with_repeater()), ["M"]);
+        assert!(causes_with(it, &with_repeater()).is_empty());
+        // The types named in a value are carried like the others.
+        let it = quote! { enum E { A = ::core::mem::size_of::<[u8; N]>() as isize } };
+        assert_eq!(analysed(it, &with_repeater()), ["[u8;N]"]);
     }
 
     #[test]
@@ -1024,69 +1153,104 @@ mod tests {
         // projection (inside the `for<'b>`) passes it.
         let impls = squash(&leaked(quote! { struct S { f: for<'b> fn(Local<'b>) } }).impls);
         assert!(
-            impls.contains("impl<'b>crate::R<(&'b(),),42u64,0usize>for(){typeType=Local<'b>;}"),
+            impls.contains(&format!(
+                "impl<'b>crate::R<(&'b(),),{}>for(){{typeType=Local<'b>;}}",
+                key(0)
+            )),
             "{}",
             impls
         );
     }
 
     #[test]
-    fn relative_type_without_repeater_is_an_error() {
-        let e = table(&item(quote! { struct S { a: Local } }), &opts(), 1)
-            .err()
-            .unwrap()
-            .to_string();
-        assert!(
-            e.contains("does not resolve outside the defining crate"),
-            "{}",
-            e
+    fn relative_type_without_repeater_is_recorded() {
+        assert_eq!(
+            causes(quote! { struct S { a: Local } }),
+            ["Local: relative"]
         );
-        assert!(e.contains("repeater = crate::path::to::Repeater"), "{}", e);
-        assert!(
-            e.contains("announce::define_repeater!(pub Repeater);"),
-            "{}",
-            e
+        // Every type that needed a table, once each.
+        assert_eq!(
+            causes(quote! { struct S { a: Local, b: Other, c: Local, d: u8 } }),
+            ["Local: relative", "Other: relative"]
         );
-        assert!(!e.contains("such types"), "{}", e);
-        let e = table(
-            &item(quote! { struct S { a: Local, b: Other } }),
-            &opts(),
-            1,
-        )
-        .err()
-        .unwrap()
-        .to_string();
-        assert!(e.contains("(2 such types)"), "{}", e);
+        // The record is for the item, with the id of the announcement.
+        let f = record(quote! { pub struct S { a: Local } }, &opts());
+        assert_eq!(f.ident.to_string(), "S");
+        assert_eq!(f.id.base10_digits(), "99");
+        // The texts of the cause are in the META that the callbacks read.
+        let meta = squash(f.meta());
+        assert!(meta.starts_with("type_leak_error(id=99u64,"), "{}", meta);
+        assert!(
+            meta.contains("message=\"useabsolutepath:'Local'\""),
+            "{}",
+            meta
+        );
+    }
+
+    #[test]
+    fn a_cause_carries_the_texts_that_a_call_says() {
+        // A relative type: the path in it, written absolutely whatever stands around it.
+        for (it, path) in rows(
+            "
+            pub struct S { pub a: Local } => Local
+            pub struct S { pub a: &'static Local } => Local
+            pub struct S { pub a: *const inner::Other } => inner::Other
+            pub struct S { pub a: &'static mut inner::Third } => inner::Third
+            pub struct S { pub a: ::std::boxed::Box<dyn Fourth> } => Fourth
+            pub struct S { pub a: (u8, Local) } => Local
+            pub struct S { pub a: [u8; N] } => N
+            pub struct S(pub crate::Buf<{ N }>); => N
+        ",
+        ) {
+            let e = &record(it.clone(), &opts()).errors[0];
+            let message = format!("use absolute path: '{}'", path);
+            let help = format!(
+                "write `{p}` with an absolute path (e.g. `crate::{p}`), or add `repeater = ..` \
+                 to the `#[announce]` of `S`",
+                p = path
+            );
+            assert_eq!(e.message.as_deref(), Some(&*message), "{}", it);
+            assert_eq!(e.help.as_deref(), Some(&*help), "{}", it);
+            assert!(e.notes.is_empty());
+        }
+        // A prelude name: the help says what the name costs.
+        let f = record(quote! { trait T { fn f(&self, a: Vec<Local>); } }, &opts());
+        assert_eq!(
+            f.errors[0].help.as_deref(),
+            Some(
+                "write `Vec` with an absolute path (it is a name of the std prelude, which a caller \
+                 may shadow), or add `allow_std_prelude = true` to the `#[announce]` of `T`"
+            )
+        );
+        // A const generic that is not of a primitive type.
+        let it = quote! { struct S<const N: crate::Idx> { a: Wrap<N> } };
+        let e = &record(it, &with_repeater()).errors[0];
+        assert_eq!(
+            e.message.as_deref(),
+            Some("const parameter of a non-primitive type: 'crate::Idx'")
+        );
+        assert_eq!(
+            e.help.as_deref(),
+            Some("use a primitive type for the const parameter")
+        );
     }
 
     #[test]
     fn nothing_to_carry_gives_no_table_without_repeater() {
         let it = item(quote! { struct S { a: u8, b: crate::X, c: ::std::string::String } });
-        assert!(table(&it, &opts(), 1).unwrap().is_none());
-    }
-
-    /// The table of `it` with the repeater `crate::R` and the id 42.
-    fn leaked(it: TokenStream) -> Leaked {
-        table(&item(it), &with_repeater(), 42).unwrap().unwrap()
+        assert!(table(&it, &opts(), 1).unwrap().table.is_none());
     }
 
     #[test]
     fn repeater_table_has_one_impl_per_type() {
-        let it = item(quote! { struct S { a: Local, b: Other, c: Local } });
-        let leaked = table(&it, &with_repeater(), 42).unwrap().unwrap();
+        let leaked = leaked(quote! { struct S { a: Local, b: Other, c: Local } });
         let impls = squash(&leaked.impls);
         assert_eq!(impls.matches("for()").count(), 2, "{}", impls);
-        // The arguments come first: `Repeater<ARGS, ID, NTH>`.
-        assert!(
-            impls.contains("crate::R<(),42u64,0usize>for()"),
-            "{}",
-            impls
-        );
-        assert!(
-            impls.contains("crate::R<(),42u64,1usize>for()"),
-            "{}",
-            impls
-        );
+        // The arguments come first: `Repeater<ARGS, KEY>`.
+        for nth in 0..2 {
+            let path = format!("crate::R<(),{}>for()", key(nth));
+            assert!(impls.contains(&path), "{}", impls);
+        }
         assert!(
             impls.contains("typeType=Local;") && impls.contains("typeType=Other;"),
             "{}",
@@ -1095,7 +1259,7 @@ mod tests {
         let meta = squash(&leaked.meta);
         assert!(
             meta.starts_with(
-                "type_leak(repeater=crate::R,id=42u64,context=0,referrer=[\"type-leak-format-"
+                "type_leak(repeater=crate::R,id=42u64,context=1,result=[\"type-leak-format-"
             ),
             "{}",
             meta
@@ -1110,59 +1274,129 @@ mod tests {
         let impls = squash(&leaked.impls);
         // `T` keeps its own bound; `U` is never mentioned.
         assert!(
-            impls.contains("impl<T:::core::fmt::Debug>crate::R<(T,),42u64,"),
+            impls.contains(&format!(
+                "impl<T:::core::fmt::Debug>crate::R<(T,),{}>",
+                key(0)
+            )),
             "{}",
             impls
         );
         assert!(impls.contains("typeType=Wrap<T>;"), "{}", impls);
         assert!(!impls.contains("U"), "{}", impls);
         // Lifetimes appear as `&'a ()`, consts as `[(); N]`.
-        assert!(impls.contains("crate::R<(&'a(),),42u64,"), "{}", impls);
-        assert!(impls.contains("crate::R<([();N],),42u64,"), "{}", impls);
+        for (args, nth) in [("&'a()", 1), ("[();N]", 2)] {
+            let path = format!("crate::R<({},),{}>", args, key(nth));
+            assert!(impls.contains(&path), "{}: {}", path, impls);
+        }
         assert!(impls.contains("impl<constN:usize>"), "{}", impls);
-        assert!(impls.contains("crate::R<(),42u64,"), "{}", impls);
+        assert!(
+            impls.contains(&format!("crate::R<(),{}>", key(3))),
+            "{}",
+            impls
+        );
     }
 
     #[test]
     fn repeater_table_encodes_const_generics_of_every_primitive_type() {
         let leaked = leaked(quote! {
-            struct S<const A: u8, const B: bool, const C: char, const D: i64, const E: u64, const F: isize>(
-                inner::W<A, B, C, D, E, F>
+            struct S<const A: u8, const B: bool, const C: char, const D: i64, const E: u64, const F: isize, const K: u128>(
+                inner::W<A, B, C, D, E, F, K>
             );
         });
         let impls = squash(&leaked.impls);
         assert!(
             impls.starts_with(
-                "#[doc(hidden)]impl<constA:u8,constB:bool,constC:char,constD:i64,constE:u64,constF:isize>crate::R<("
+                "#[doc(hidden)]impl<constA:u8,constB:bool,constC:char,constD:i64,constE:u64,constF:isize,constK:u128>crate::R<("
             ),
             "{}",
             impls
         );
-        // Every parameter in its own slot of the repeater; `usize` is a length.
+        // Every parameter in its own slot of the repeater; `usize` is a length, and `u128` is
+        // the `KEY` slot.
         for slot in [
-            "*constdyncrate::R<(),0,0,false,'\\0',A,Type=()>",
-            "*constdyncrate::R<(),0,0,B,Type=()>",
-            "*constdyncrate::R<(),0,0,false,C,Type=()>",
-            "*constdyncrate::R<(),E,0,Type=()>",
+            "*constdyncrate::R<(),0,false,'\\0',A,Type=()>",
+            "*constdyncrate::R<(),0,B,Type=()>",
+            "*constdyncrate::R<(),0,false,C,Type=()>",
+            "*constdyncrate::R<(),K,Type=()>",
         ] {
             assert!(impls.contains(slot), "{}: {}", slot, impls);
         }
         assert!(impls.contains("D,Type=()>"), "{}", impls);
+        assert!(impls.contains("E,Type=()>"), "{}", impls);
         assert!(impls.contains("F,Type=()>"), "{}", impls);
     }
 
     #[test]
-    fn repeater_table_rejects_an_alias_as_the_type_of_a_const_generic() {
+    fn repeater_table_records_an_alias_as_the_type_of_a_const_generic() {
         // An absolute alias is fine for the analysis, but cannot be encoded.
-        let it = item(quote! { struct S<const N: crate::Idx> { a: Wrap<N> } });
-        let e = table(&it, &with_repeater(), 1).err().map(|e| e.to_string());
-        assert!(
-            e.map_or(false, |e| e.contains("must have a primitive type")),
-            "an error"
-        );
+        let it = quote! { struct S<const N: crate::Idx> { a: Wrap<N> } };
+        assert_eq!(causes_with(it, &with_repeater()), ["crate::Idx: const"]);
         // Not used by a carried type: nothing to encode.
-        let it = item(quote! { struct S<const N: crate::Idx> { a: Local, b: [u8; 4] } });
-        assert!(table(&it, &with_repeater(), 1).is_ok());
+        leaked(quote! { struct S<const N: crate::Idx> { a: Local, b: [u8; 4] } });
+    }
+
+    #[test]
+    fn every_encode_cause_is_reported_at_once() {
+        // The causes are announce's: the entries that have no impl. The errors of type-leak
+        // (`T: Base`, `M`, `Wrap<'_>`) are the consumer's, and are no cause here.
+        check("
+            struct S<T: Base, const N: crate::Idx> { a: Local<N>, t: T } => crate::Idx: const
+            struct S<T: Base, const N: crate::Idx> { a: Local<N>, b: Wrap<'_>, t: T } => crate::Idx: const
+            enum E<const N: crate::Idx> { A = M, B(Local<N>) } => crate::Idx: const
+            struct S<const N: crate::Idx, const M: crate::Idx2> { a: Local<N>, b: Other<M> } => crate::Idx: const | crate::Idx2: const
+            struct S<T: Base, const N: crate::Idx> { a: Local, t: T } =>
+            struct S { a: inner::G<Self>, b: Other<Self> } => Other<Self>: self | inner::G<Self>: self
+            struct S<T> { a: Local<T>, b: inner::G<Self> } => inner::G<Self>: self
+            struct S<const N: crate::Idx> { a: Local<N>, b: inner::G<Self> } => crate::Idx: const
+        ", &with_repeater());
+        // One cause makes several entries fail, and is one error.
+        check("
+            struct S<T: Base, const N: crate::Idx> { a: Local<N>, b: Other<N>, t: T } => crate::Idx: const
+        ", &with_repeater());
+        // Without a repeater there is no table to write: every entry is a cause of its own.
+        check(
+            "
+            struct S<T: Base, const N: crate::Idx> { a: Local<N>, t: T } => Local<N>: relative
+            struct S { a: inner::G<Self>, b: Local } => inner::G<Self>: relative | Local: relative
+        ",
+            &opts(),
+        );
+        let record = record(
+            quote! { struct S<const N: crate::Idx, const M: crate::Idx2> { a: Local<N>, b: Other<M> } },
+            &with_repeater(),
+        );
+        assert_eq!(record.errors.len(), 2);
+    }
+
+    #[test]
+    fn an_entry_that_names_self_has_no_impl() {
+        // The impls are for `()`, which `Self` is not: the entry cannot be written.
+        let f = record(quote! { struct S { a: inner::G<Self> } }, &with_repeater());
+        assert_eq!(f.errors.len(), 1);
+        assert_eq!(f.errors[0].reason, "with `Self` in a carried type");
+        assert_eq!(squash(&f.errors[0].tokens), "inner::G<Self>");
+        // A trait: `Self` is the implementor.
+        check(
+            "
+            trait Tr { fn f(&self) -> inner::G<Self>; } => inner::G<Self>: self
+            trait Tr { type A; fn f(&self) -> inner::G<Self::A>; } => inner::G<Self::A>: self
+        ",
+            &with_repeater(),
+        );
+        // `Self` alone, and an absolute type that names it, are no entry.
+        for ok in [
+            quote! { struct S(::other::G<Self>); },
+            quote! { trait Tr { type Out; fn f(&self) -> Self::Out; } },
+            quote! { struct S<T: ::core::ops::Add>(inner::G<T::Output>); },
+        ] {
+            assert!(
+                !causes_with(ok.clone(), &with_repeater())
+                    .iter()
+                    .any(|c| c.ends_with(": self")),
+                "{}",
+                ok
+            );
+        }
     }
 
     #[test]
@@ -1178,11 +1412,11 @@ mod tests {
         let impls = squash(&leaked.impls);
         assert_eq!(impls.matches("for()").count(), 3, "{}", impls);
         assert!(
-            impls.contains("impl<X:::core::clone::Clone>crate::R<(X,),42u64,"),
+            impls.contains("impl<X:::core::clone::Clone>crate::R<(X,),"),
             "{}",
             impls
         );
-        assert!(impls.contains("impl<X>crate::R<(X,),42u64,"), "{}", impls);
+        assert!(impls.contains("impl<X>crate::R<(X,),"), "{}", impls);
         assert_eq!(
             impls.matches("typeType=inner::GC<X>;").count(),
             2,
@@ -1199,7 +1433,10 @@ mod tests {
         });
         let impls = squash(&leaked.impls);
         assert!(
-            impls.contains("implcrate::R<(),42u64,0usize>for(){typeType=Local;}"),
+            impls.contains(&format!(
+                "implcrate::R<(),{}>for(){{typeType=Local;}}",
+                key(0)
+            )),
             "{}",
             impls
         );
@@ -1215,8 +1452,8 @@ mod tests {
             .impls,
         );
         assert!(
-            impls.contains("impl<T:::core::convert::Into<V>,V>crate::R<(T,V,),42u64,")
-                || impls.contains("impl<T:::core::convert::Into<V>,V>crate::R<(T,V),42u64,"),
+            impls.contains("impl<T:::core::convert::Into<V>,V>crate::R<(T,V,),")
+                || impls.contains("impl<T:::core::convert::Into<V>,V>crate::R<(T,V),"),
             "{}",
             impls
         );
@@ -1232,8 +1469,13 @@ mod tests {
             .impls,
         );
         assert!(
-            impls.contains("impl<T>crate::R<(T,),42u64,0usize>for()where T:::core::clone::Clone")
-                || impls.contains("impl<T:::core::clone::Clone>crate::R<(T,),42u64,0usize>for()"),
+            impls.contains(&format!(
+                "impl<T>crate::R<(T,),{}>for()where T:::core::clone::Clone",
+                key(0)
+            )) || impls.contains(&format!(
+                "impl<T:::core::clone::Clone>crate::R<(T,),{}>for()",
+                key(0)
+            )),
             "{}",
             impls
         );
@@ -1249,12 +1491,12 @@ mod tests {
             .impls,
         );
         assert!(
-            impls.contains("impl<U>crate::R<(U,),42u64,0usize>for()"),
+            impls.contains(&format!("impl<U>crate::R<(U,),{}>for()", key(0))),
             "{}",
             impls
         );
         assert!(
-            impls.contains("crate::R<(),42u64,1usize>for()"),
+            impls.contains(&format!("crate::R<(),{}>for()", key(1))),
             "{}",
             impls
         );
@@ -1264,9 +1506,9 @@ mod tests {
             })
             .impls,
         );
-        assert!(impls.contains("impl<N>crate::R<(N,),42u64,"), "{}", impls);
+        assert!(impls.contains("impl<N>crate::R<(N,),"), "{}", impls);
         assert!(
-            impls.contains("impl<constN:usize>crate::R<([();N],),42u64,"),
+            impls.contains("impl<constN:usize>crate::R<([();N],),"),
             "{}",
             impls
         );
@@ -1274,19 +1516,18 @@ mod tests {
 
     #[test]
     fn repeater_without_relative_types_is_an_empty_table() {
-        let it = item(quote! { struct S { a: u8 } });
-        let leaked = table(&it, &with_repeater(), 3).unwrap().unwrap();
+        let leaked = leaked(quote! { struct S { a: u8 } });
         assert!(leaked.impls.is_empty());
         let meta = squash(&leaked.meta);
         assert!(
-            meta.starts_with("type_leak(repeater=crate::R,id=3u64,context=0,referrer=["),
+            meta.starts_with("type_leak(repeater=crate::R,id=42u64,context=0,result=["),
             "{}",
             meta
         );
         // The consumer reads it back, with nothing to replace.
-        let m: crate::helper::Meta = syn::parse2(leaked.meta).unwrap();
-        let read = TypeLeak::from_kv(&mut m.kv().unwrap()).unwrap();
-        assert_eq!(read.types().count(), 0);
+        let read: TypeLeak = syn::parse2(leaked.meta).unwrap();
+        assert_eq!(entries(&read).len(), 0);
+        assert!(read.result.errors().is_empty());
     }
 
     #[test]
@@ -1294,307 +1535,140 @@ mod tests {
         let leaked = leaked(quote! {
             struct S<T> { a: Local, b: Wrap<T>, c: ::other::X<u8> }
         });
-        let m: crate::helper::Meta = syn::parse2(leaked.meta).unwrap();
-        let read = TypeLeak::from_kv(&mut m.kv().unwrap()).unwrap();
+        let read: TypeLeak = syn::parse2(leaked.meta).unwrap();
         let impls = squash(&leaked.impls);
-        // The impls are for the required entries; `::other::X<u8>` is optional.
-        assert_eq!(read.types().count(), 2);
-        for (ix, ty) in read.types() {
-            let nth = format!("42u64,{}usize>for()", ix);
+        // The impls are for the entries; `::other::X<u8>` is no entry.
+        assert_eq!(entries(&read).len(), 2);
+        for (ix, ty) in entries(&read) {
+            let nth = format!("{}>for()", key(ix.index()));
             assert!(impls.contains(&nth), "{}: {}", nth, impls);
             assert!(
-                impls.contains(&format!("typeType={};", squash(ty))),
+                impls.contains(&format!("typeType={};", squash(&ty))),
                 "{}",
                 impls
             );
         }
     }
 
-    // --- report(): type-leak's errors in announce's words ---
-
-    fn errors_of(it: TokenStream, o: &Options) -> Vec<String> {
-        analyze(&item(it), o)
-            .expect_err("an error")
-            .into_iter()
-            .map(|e| e.to_string())
-            .collect()
-    }
-
-    fn first_error(it: TokenStream) -> String {
-        errors_of(it, &opts()).remove(0)
-    }
-
-    /// Nothing of type-leak's API or example crate name, and no token spacing.
-    fn assert_announce_wording(e: &str) {
-        assert!(!names_api(e), "type-leak API in: {}", e);
-        assert!(!e.contains("my_crate"), "example crate in: {}", e);
-        for spaced in [" :: ", " < ", " > ", "< '", ":: ", "& '"] {
-            assert!(!e.contains(spaced), "spaced tokens `{}` in: {}", spaced, e);
-        }
-    }
+    // --- the errors of type-leak travel in the META ---
 
     #[test]
-    fn tidy_prints_types_as_written() {
-        assert_eq!(tidy("'inner :: G < Self :: A >'"), "'inner::G<Self::A>'");
-        assert_eq!(tidy("Box < Wrap < '_ > >"), "Box<Wrap<'_>>");
-        assert_eq!(tidy("Vec < & 'a u8 >"), "Vec<&'a u8>");
-        assert_eq!(tidy("(A , B)"), "(A, B)");
-        assert_eq!(
-            tidy("T : :: core :: convert :: From < inner :: G < T > >"),
-            "T: ::core::convert::From<inner::G<T>>"
-        );
-        assert_eq!(tidy("const N : inner :: Ty"), "const N: inner::Ty");
-        // Tokens print differently inside the compiler and outside of it.
-        assert_eq!(tidy("two ! ()"), "two!()");
-        assert_eq!(tidy("two! ()"), "two!()");
-        assert_eq!(tidy("vec! [1 , 2]"), "vec![1, 2]");
-        // Prose and text that is tidy already stay as they are.
-        let prose = "write `<Self as Tr>::A`, or use `crate::X` (e.g. `&'a self`)";
-        assert_eq!(tidy(prose), prose);
-    }
-
-    #[test]
-    fn api_options_are_removed_from_the_help() {
-        let allow = "allow it with `LeakerConfig::allowed_paths`";
-        let self_ = "analyze the item with `allow_self = true`";
-        let scope = "enter a scope that declares `Self` around it \
-                     (`Leaker::enter_type`, `enter_impl` or `enter_trait`)";
-        for (given, want) in [
-            // Last, middle, and the only other option.
-            (format!("write `X`, or {}", allow), "write `X`"),
-            (format!("write `X`, {}, or {}", allow, self_), "write `X`"),
-            (format!("write `X`, or {}", self_), "write `X`"),
-            (
-                format!("write `X`, {}, or name it", self_),
-                "write `X`, or name it",
-            ),
-            (format!("write the type, or {}", scope), "write the type"),
-            ("write `X`".to_string(), "write `X`"),
-        ] {
-            let got = without_api_options(&given);
-            assert_eq!(got, want, "{}", given);
-            assert!(!names_api(&got), "{}", got);
-        }
-    }
-
-    #[test]
-    fn the_example_crate_becomes_the_defining_crate() {
-        assert_eq!(
-            crate_example("write `inner::G` with an absolute path (e.g. `::my_crate::inner::G`)"),
-            "write `inner::G` with an absolute path (e.g. `crate::inner::G`, or \
-             `::other_crate::inner::G` for an item of another crate)"
-        );
-        // The rest of the help stays, other mentions change.
-        assert_eq!(
-            crate_example("write `Tr` (e.g. `::my_crate::Tr`), or name `<Self as ::my_crate::Tr>`"),
-            "write `Tr` (e.g. `crate::Tr`, or `::other_crate::Tr` for an item of another \
-             crate), or name `<Self as crate::Tr>`"
-        );
-        assert_eq!(
-            crate_example("use `::std::vec::Vec` instead of `Vec`"),
-            "use `::std::vec::Vec` instead of `Vec`"
-        );
-    }
-
-    #[test]
-    fn the_help_does_not_name_type_leak() {
-        // The help of type-leak for this item names `LeakerConfig`, `allow_self`
-        // and `::my_crate`: that is what `report` has to re-word.
-        let it: syn::ItemStruct = syn::parse_quote!(
-            struct S {
-                a: inner::G<Self>,
-            }
-        );
-        let raw = type_leak::Leaker::new()
-            .intern_struct(&it, false)
-            .unwrap_err()
-            .help()
-            .unwrap();
-        assert!(raw.contains("allow_self"), "{}", raw);
-        assert!(raw.contains("LeakerConfig"), "{}", raw);
-        assert!(raw.contains("::my_crate::inner::G"), "{}", raw);
-        let e = first_error(quote! { struct S { a: inner::G<Self> } });
-        assert_announce_wording(&e);
-        assert!(
-            e.contains("= help: write `inner::G` with an absolute path (e.g. `crate::inner::G`, or `::other_crate::inner::G` for an item of another crate)"),
-            "{}",
-            e
-        );
-        assert!(e.contains("use absolute path: 'inner::G<Self>'"), "{}", e);
-    }
-
-    #[test]
-    fn every_kind_of_error_is_in_announce_wording() {
+    fn the_errors_of_type_leak_are_no_cause_at_the_definition() {
+        // The part is copied as written and the analysis goes on: the entries of the rest are
+        // there, and so is each error.
         for it in [
-            quote! { struct S { a: inner::G<Self> } },
-            quote! { struct S(inner::G<Self::A>); },
-            quote! { trait Tr { type A; fn f(&self) -> inner::G<Self::A>; } },
-            quote! { struct S<T: ::core::convert::From<inner::G<T>>>(T); },
-            quote! { struct S<T>(T) where T: ::core::convert::From<inner::G<T>>; },
+            quote! { struct S { a: Wrap<'_>, b: u8 } },
+            quote! { struct S<T: Base>(T); },
+            quote! { struct S { a: Vec<&'_ u8> } },
+            quote! { enum E { A = N } },
             quote! { struct S([u8; two!()]); },
             quote! { struct S<const N: inner::Ty>; },
             quote! { trait Tr { fn f<'a>(&self, a: Wrap<'a>) -> &'a u8; } },
-            quote! { struct S { a: Wrap<'_> } },
-            quote! { struct S { a: super::m::Wrap<'_> } },
-            quote! { struct S { a: Vec<&'_ u8> } },
-            quote! { struct S<F: for<'x> ::core::ops::Fn(Rel<'x>) -> &'x u8>(F); },
             quote! { type A = Self; },
-            quote! { type A = inner::G<Self>; },
-            quote! { type A = inner::G<Self, '_>; },
+            quote! { type A = Wrap<'_>; },
         ] {
-            for e in errors_of(it.clone(), &opts()) {
-                assert_announce_wording(&e);
-                assert!(e.starts_with("announce: "), "{}", e);
-                assert!(e.contains("\n  = help: "), "{}: {}", it, e);
+            assert!(causes(it.clone()).is_empty(), "{}", it);
+            if !matches!(item(it.clone()), Item::Type(_)) {
+                assert!(
+                    causes_with(it.clone(), &with_repeater()).is_empty(),
+                    "{}",
+                    it
+                );
             }
+            let read = meta_of(it.clone(), &opts()).unwrap_or_else(|| panic!("a META: {}", it));
+            assert!(!read.result.errors().is_empty(), "{}", it);
         }
     }
 
     #[test]
-    fn self_has_no_meaning_in_a_type_alias() {
-        for it in [
-            quote! { type A = Self; },
-            quote! { type A = inner::G<Self>; },
-        ] {
-            let e = first_error(it);
-            assert!(e.contains("announce: `Self` has no meaning here"), "{}", e);
-            assert!(
-                e.ends_with("= help: write the type instead of `Self`"),
-                "{}",
-                e
-            );
+    fn errors_without_entries_are_a_meta_without_a_repeater() {
+        let it = quote! { struct S<T: Base>(T); };
+        let l = match table(&item(it), &opts(), 42).unwrap().table {
+            Some(Table::Leaked(l)) => l,
+            _ => panic!("a table"),
+        };
+        // No impl, and no `repeater` or `id`: only the context and the result.
+        assert!(l.impls.is_empty());
+        let meta = squash(&l.meta);
+        assert!(
+            meta.starts_with("type_leak(context=1,result=[\"type-leak-format-"),
+            "{}",
+            meta
+        );
+        assert!(meta.contains("@["), "{}", meta);
+        let read: TypeLeak = syn::parse2(l.meta).unwrap();
+        assert!(read.projection.is_none());
+        assert_eq!(read.result.errors().len(), 1);
+        assert_eq!(squash(&read.result.errors()[0].cause), "Base");
+        // The consumer reports it, at the cause.
+        let e = read
+            .resolve_into(&mut item(quote! { struct S<T: Base>(T); }))
+            .unwrap_err();
+        assert!(e.to_string().contains("use absolute path: 'Base'"), "{}", e);
+    }
+
+    #[test]
+    fn a_type_alias_with_errors_has_a_meta_without_a_repeater() {
+        for it in [quote! { type A = Self; }, quote! { type A = Wrap<'_>; }] {
+            let read = meta_of(it.clone(), &opts()).unwrap();
+            assert!(read.projection.is_none(), "{}", it);
+            assert_eq!(read.result.errors().len(), 1, "{}", it);
         }
+        // An alias with a relative type has the record, and no META.
+        assert_eq!(causes(quote! { type A = Local; }), ["Local: alias"]);
+        // A clean alias has nothing.
+        assert!(meta_of(quote! { type A = u8; }, &opts()).is_none());
     }
 
     #[test]
-    fn bound_cycles_and_other_rejections_are_definer_errors() {
-        // A relative type that names `Self` or `Self::A` cannot be carried; on
-        // its own, and inside an absolute type, `Self` is fine.
-        assert!(
-            first_error(quote! { struct S(inner::G<Self::A>); }).contains(
-                "write `<Self as SomeTrait>::A` instead of `Self::A` in `inner::G<Self::A>`"
-            )
-        );
-        assert!(
-            first_error(quote! { trait Tr { fn f(&self) -> inner::G<Self>; } })
-                .contains("use absolute path: 'inner::G<Self>'")
-        );
-        assert!(analyze(
-            &item(quote! { trait Tr { type Out; fn f(&self) -> Self::Out; } }),
-            &opts()
-        )
-        .is_ok());
-        assert!(analyze(&item(quote! { struct S(::other::G<Self>); }), &opts()).is_ok());
-        assert!(analyze(
-            &item(quote! { struct S<T: ::core::ops::Add>(inner::G<T::Output>); }),
-            &opts()
-        )
-        .is_ok());
-        // A bound that names a relative type which mentions the bounded parameter.
-        assert!(
-            first_error(quote! { struct S<T: ::core::convert::From<inner::G<T>>>(T); }).contains(
-                "is in a bound or where predicate, and a bound of its generics names a leaked type"
-            )
-        );
-        assert!(analyze(
-            &item(quote! { struct S<T: ::core::convert::From<inner::G<u8>>>(T); }),
-            &opts()
-        )
-        .is_ok());
-        // A relative macro in an array length; an absolute one is fine.
-        assert!(
-            first_error(quote! { struct S([u8; two!()]); }).contains("use absolute path: 'two'")
-        );
-        assert!(analyze(&item(quote! { struct S([u8; crate::two!()]); }), &opts()).is_ok());
-        // The type of a const parameter.
-        assert!(first_error(quote! { struct S<const N: inner::Ty>; })
-            .contains("use absolute path: 'inner::Ty'"));
-        assert!(analyze(&item(quote! { struct S<const N: crate::Ty>; }), &opts()).is_ok());
-        // A method lifetime that only a relative type keeps.
-        assert!(
-            first_error(quote! { trait Tr { fn f<'a>(&self, a: Wrap<'a>) -> &'a u8; } }).contains(
-                "leaves the lifetime `'a` of the method unconstrained in the copy (E0195)"
-            )
-        );
-    }
-
-    #[test]
-    fn a_prelude_name_gets_the_prelude_option() {
-        let e = first_error(quote! { struct S { a: Vec<&'_ u8> } });
-        assert!(
-            e.starts_with("announce: the prelude name `Vec` is relative here, so `Vec<&'_ u8>` does not resolve outside the defining crate"),
-            "{}",
-            e
-        );
-        assert!(
-            e.ends_with("= help: write `::std::vec::Vec<..>` instead of `Vec<..>`, or set `allow_std_prelude = true` to accept prelude names"),
-            "{}",
-            e
-        );
-        // A relative `Option` around `Self::Out`: the error is about the name, not
-        // about "leaking" the whole type.
-        let e = first_error(quote! { trait Tr { type Out; fn f(&self) -> Option<Self::Out>; } });
+    fn a_repeater_has_the_errors_in_the_table_with_the_impls() {
+        let it = quote! { struct S { a: Local, b: Wrap<'_> } };
+        let l = leaked(it.clone());
+        let impls = squash(&l.impls);
+        assert!(impls.contains("typeType=Local;"), "{}", impls);
+        let read: TypeLeak = syn::parse2(l.meta).unwrap();
+        assert!(read.projection.is_some());
+        assert_eq!(entries(&read).len(), 1);
+        assert_eq!(read.result.errors().len(), 1);
+        assert_eq!(squash(&read.result.errors()[0].cause), "Wrap<'_>");
+        // The consumer allows the part (it promises that it compiles as written), then the table
+        // is ready.
+        let mut allowed = read.clone();
+        allowed.result = allowed
+            .result
+            .allow(|cause: &Cause, _: Place| cause.starts_with(&syn::parse_quote!(Wrap)));
+        assert!(allowed.result.errors().is_empty());
+        let mut copy = item(it);
+        allowed.resolve_into(&mut copy).unwrap();
+        let key: TokenStream = key(0).parse().unwrap();
         assert_eq!(
-            e,
-            "announce: the prelude name `Option` is relative here, so `Option<Self::Out>` does not \
-             resolve outside the defining crate\n  \
-             = note: a relative type cannot be carried with `Self::Out` in it\n  \
-             = help: write `::core::option::Option<..>` instead of `Option<..>`, or set \
-             `allow_std_prelude = true` to accept prelude names"
+            squash(&copy),
+            squash(quote! { struct S { a: <() as crate::R<(), #key>>::Type, b: Wrap<'_> } })
         );
-        assert!(!e.contains("leaked"), "{}", e);
-        // Both ways out work.
-        let prelude = Options {
-            allow_std_prelude: true,
-            ..Options::default()
-        };
-        let it = item(quote! { trait Tr { type Out; fn f(&self) -> Option<Self::Out>; } });
-        assert!(analyze(&it, &prelude).is_ok());
-        let it = item(
-            quote! { trait Tr { type Out; fn f(&self) -> ::core::option::Option<Self::Out>; } },
-        );
-        assert!(analyze(&it, &opts()).is_ok());
-        // The option does what the help says.
-        let prelude = Options {
-            allow_std_prelude: true,
-            ..Options::default()
-        };
-        assert!(analyze(&item(quote! { struct S { a: Vec<&'_ u8> } }), &prelude).is_ok());
-        // Already set: type-leak's own help stays.
-        let e = errors_of(quote! { struct S { a: Box<Wrap<'_>> } }, &prelude).remove(0);
-        assert!(e.contains("use absolute path: 'Wrap<'_>'"), "{}", e);
+        assert!(read.resolve_into(&mut copy.clone()).is_err());
     }
 
     #[test]
-    fn two_offending_types_are_two_errors_at_their_own_spans() {
-        let it = item(quote! { struct S { a: Wrap<'_>, b: Other<'_> } });
-        let err = analyze(&it, &opts()).err().unwrap();
-        let all: Vec<syn::Error> = err.into_iter().collect();
-        assert_eq!(all.len(), 2);
-        let (a, b) = (all[0].to_string(), all[1].to_string());
-        assert!(a.contains("use absolute path: 'Wrap<'_>'"), "{}", a);
-        assert!(a.contains("`Wrap` with an absolute path"), "{}", a);
-        assert!(b.contains("use absolute path: 'Other<'_>'"), "{}", b);
-        assert!(b.contains("`Other` with an absolute path"), "{}", b);
-        assert_announce_wording(&a);
-        assert_announce_wording(&b);
-        // `table` reports them the same way.
-        let n = table(&it, &opts(), 1).err().unwrap().into_iter().count();
-        assert_eq!(n, 2);
-        // Three, each with its own help.
-        let n = errors_of(
-            quote! { struct S { a: Wrap<'_>, b: Other<'_>, c: Vec<&'_ u8> } },
-            &opts(),
-        );
-        assert_eq!(n.len(), 3);
-        assert!(n[2].contains("`::std::vec::Vec<..>`"), "{}", n[2]);
-        assert_announce_wording(&n[2]);
-    }
-
-    #[test]
-    fn notes_repeat_once() {
-        let e = first_error(quote! { struct S(inner::G<Self::A>); });
-        let note = "= note: it cannot be leaked as a whole because of `Self::A`";
-        assert_eq!(e.matches(note).count(), 1, "{}", e);
+    fn every_error_of_type_leak_is_reported_by_the_consumer_at_once() {
+        let it = quote! {
+            trait T<const N: usize = { Self::X }> {
+                fn f(&self, a: *const dyn Tr<'_>);
+                fn g<'x>(&self, b: Wrap<'x>) -> &'x u8;
+                fn h(&self) -> [u8; two!()];
+                fn z(&self) -> Local;
+            }
+        };
+        // Without a repeater the entry is a cause at the definition, and there is no META.
+        assert_eq!(causes(it.clone()), ["Local: relative"]);
+        let l = leaked(it.clone());
+        let read: TypeLeak = syn::parse2(l.meta).unwrap();
+        let e = read.resolve_into(&mut item(it)).unwrap_err();
+        // One error each, combined.
+        let all: Vec<String> = e.into_iter().map(|e| e.to_string()).collect();
+        assert_eq!(all.len(), 3, "{:?}", all);
+        // type-leak's own words, with its notes and helps.
+        assert!(all[0].contains("use absolute path: 'Tr<'_>'"), "{:?}", all);
+        assert!(all[1].contains("(E0195)"), "{:?}", all);
+        assert!(all[2].contains("use absolute path: 'two'"), "{:?}", all);
     }
 }
