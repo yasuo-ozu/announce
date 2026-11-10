@@ -37,8 +37,8 @@
 
 ### Changed
 
-- Breaking: announce builds on the `api-reduction` branch of type-leak (a git dependency until
-  it is released), and `announce::type_leak` and `announce::helper::type_leak` are that crate.
+- Breaking: announce builds on type-leak 0.9, and `announce::type_leak` and
+  `announce::helper::type_leak` are that crate.
   Its errors are `ErrorItem`s with a typed `Cause` and `Reason` (`NotInternableError` is gone;
   `finish()` gives them as a `LeakerResultError`, which `?` turns into one `syn::Error`),
   `Leaker::intern_*` return the `ContextId` (and take no `allow_self`), `LeakerConfig` and

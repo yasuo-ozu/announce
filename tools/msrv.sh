@@ -30,8 +30,7 @@ cd "$work"
 
 CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS=fallback cargo +stable generate-lockfile
 mkdir -p .cargo
-# What `cargo vendor` prints is the source replacement for crates.io and for the git source of
-# type-leak (its `api-reduction` branch).
+# What `cargo vendor` prints is the source replacement for crates.io.
 cargo +stable vendor vendor >.cargo/config.toml
 
 run() {
@@ -51,7 +50,7 @@ run 1.78.0 test -p announce -p announce-core
 # The doctests only see that a failing `same_context!` fails. On 1.78 it must also say why
 # (`on_unimplemented`) and must not trip over `do_not_recommend`, which 1.78 does not know.
 mkdir texts
-# The git source of type-leak needs a lock file to be used from the vendor directory.
+# The workspace's lock file, so that the crate gets the same versions (unicode-width).
 cp Cargo.lock texts/Cargo.lock
 cat >texts/Cargo.toml <<'MANIFEST'
 [package]

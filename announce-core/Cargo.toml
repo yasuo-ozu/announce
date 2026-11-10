@@ -12,7 +12,7 @@ repository = "https://github.com/yasuo-ozu/announce"
 syn = { version = "2.0.25", features = ["full", "extra-traits", "visit", "visit-mut"] }
 proc-macro2 = "1"
 template-quote = "0.4"
-type-leak = { git = "file:///home/yasuo/ghq/github.com/yasuo-ozu/type-leak", branch = "api-reduction" }
+type-leak = "0.9.0"
 
 # Not used by this crate. It caps `unicode-width`, which type-leak needs through
 # safegraph with the requirement "0.1": unicode-width 0.1.13 and 0.1.14 need

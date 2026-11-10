@@ -10,8 +10,8 @@
 //! and the names in [`NEWER_PRELUDE`]). The one exception is `Sized`: `T: ?Sized`,
 //! `where Self: Sized` and `trait T: Sized` are accepted bare, because the
 //! language gives it a meaning of its own. For a trait, `Leaker::check_values` is
-//! on, so the defaults of associated consts are read too; [`without_bodies`] takes
-//! the bodies of provided methods off the trait it is given, as announce does not
+//! on, so the defaults of associated consts are read too, but not the bodies of
+//! provided methods (`Leaker::check_bodies` stays off), as announce does not
 //! analyse them. Inline modules are not analysed.
 //!
 //! The result of the analysis is a [`LeakerResult`]: the `Referrer`, which lists
@@ -72,7 +72,6 @@ use crate::helper::ignored_view;
 use crate::helper::{LeakError, LeakFailure, TypeLeak, ALIAS, NOT_PRIMITIVE, WITHOUT_REPEATER};
 use crate::options::Options;
 use proc_macro2::{Ident, Span, TokenStream};
-use std::borrow::Cow;
 use syn::{Item, ItemImpl, Path, Result, Type};
 use template_quote::ToTokens;
 use type_leak::{Cause, ContextId, ImplSelf, LeakerResult, Place, Projection, Referrer, Rules};
@@ -244,25 +243,6 @@ pub(crate) fn analyze_full(item: &Item, opts: &Options) -> Option<Analysis> {
     Some(intern(item, opts))
 }
 
-/// The trait without the bodies of its provided methods. `Leaker::check_values` reads
-/// the default values of the associated consts, which is what announce wants, and the bodies
-/// with them, which it does not analyse (a relative path in a body is not an error).
-fn without_bodies(item: &syn::ItemTrait) -> Cow<'_, syn::ItemTrait> {
-    let has_body = |i: &syn::TraitItem| matches!(i, syn::TraitItem::Fn(f) if f.default.is_some());
-    if !item.items.iter().any(has_body) {
-        return Cow::Borrowed(item);
-    }
-    let mut bodiless = item.clone();
-    for i in &mut bodiless.items {
-        if let syn::TraitItem::Fn(f) = i {
-            if f.default.take().is_some() {
-                f.semi_token = Some(Default::default());
-            }
-        }
-    }
-    Cow::Owned(bodiless)
-}
-
 /// Runs type-leak over `item`, which `analyze_full` has found to be analysed. The errors that it
 /// recovers from stay in the result: they are the consumer's to report.
 fn intern(item: &Item, opts: &Options) -> Analysis {
@@ -291,12 +271,14 @@ fn intern(item: &Item, opts: &Options) -> Analysis {
     let rules = rules
         .or_if(move |cause: &Cause, _: Place| allowed.iter().any(|path| cause.starts_with(path)));
     let mut leaker = type_leak::Leaker::with_rule(rules);
+    // The default values of associated consts, but not the bodies of provided methods: a
+    // relative path in a body is not an error for announce (`check_bodies` stays off).
     leaker.check_values = matches!(item, Item::Trait(_));
     let context = match item {
         Item::Struct(s) => leaker.intern_struct(s),
         Item::Enum(e) => leaker.intern_enum(e),
         Item::Union(u) => leaker.intern_union(u),
-        Item::Trait(t) => leaker.intern_trait(&without_bodies(t)),
+        Item::Trait(t) => leaker.intern_trait(t),
         Item::Type(a) => {
             leaker
                 .enter_generics(&a.generics, |view| syn::visit::visit_item_type(view, a))
@@ -960,7 +942,7 @@ mod tests {
 
     #[test]
     fn the_bodies_of_provided_methods_are_not_analysed() {
-        // `check_values` would read them, so the trait is given without them.
+        // `check_values` is on for a trait, but `check_bodies` is off.
         let it = quote! {
             trait Tr {
                 const N: usize = 4;
