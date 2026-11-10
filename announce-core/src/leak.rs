@@ -17,10 +17,10 @@
 //! - trait paths (supertraits, bounds, `impl` bounds): absolute only (a trait
 //!   object is a type, carried whole),
 //! - value paths in enum discriminants, const defaults and the const arguments
-//!   of a bound: absolute, `Self::..` or a const parameter (a repeater only
-//!   carries types; the types named inside such an expression, as in
-//!   `size_of::<Local>()`, are carried like any other: type-leak reads array
-//!   lengths, const arguments, discriminants and the defaults of const
+//!   of a bound: absolute, `Self::..` or a const parameter in scope (a
+//!   repeater only carries types; the types named inside such an expression,
+//!   as in `size_of::<Local>()`, are carried like any other: type-leak reads
+//!   array lengths, const arguments, discriminants and the defaults of const
 //!   parameters, not the defaults of associated consts). A value inside a type
 //!   (`[u8; N]`, `Wrap<{ N }>`) goes with it.
 //!
@@ -213,18 +213,19 @@ fn check_trait_paths(item: &Item, allow_prelude: bool) -> Vec<LeakError> {
 /// Value expressions outside types (enum discriminants, const defaults, const
 /// arguments of a bound) are copied to callers like the types around them, but a
 /// repeater cannot carry values: every path in them must be absolute, `Self::..`,
-/// or a const parameter. A value inside a type (`[u8; N]`) is carried with it. The
-/// types named inside a value (`size_of::<Local>()`) are type-leak's business,
-/// not checked here.
-fn check_values(item: &Item, const_params: &[String]) -> Vec<LeakError> {
-    struct V<'a> {
-        consts: &'a [String],
+/// or a const parameter in scope: one of the item, or one of the method or the
+/// generic associated type that the value is in. A value inside a type (`[u8; N]`)
+/// is carried with it. The types named inside a value (`size_of::<Local>()`) are
+/// type-leak's business, not checked here.
+fn check_values(item: &Item) -> Vec<LeakError> {
+    struct V {
+        consts: Vec<String>,
         errors: Vec<LeakError>,
     }
-    impl V<'_> {
+    impl V {
         fn check(&mut self, e: &syn::Expr) {
-            struct P<'b, 'a>(&'b mut V<'a>);
-            impl<'ast> Visit<'ast> for P<'_, '_> {
+            struct P<'b>(&'b mut V);
+            impl<'ast> Visit<'ast> for P<'_> {
                 fn visit_expr_path(&mut self, p: &'ast syn::ExprPath) {
                     let path = &p.path;
                     let first = path
@@ -245,8 +246,17 @@ fn check_values(item: &Item, const_params: &[String]) -> Vec<LeakError> {
             }
             Visit::visit_expr(&mut P(self), e);
         }
+
+        /// Runs `f` with the const parameters of `g` in scope.
+        fn scoped(&mut self, g: &syn::Generics, f: impl FnOnce(&mut Self)) {
+            let outer = self.consts.len();
+            self.consts
+                .extend(g.const_params().map(|c| c.ident.to_string()));
+            f(self);
+            self.consts.truncate(outer);
+        }
     }
-    impl<'ast> Visit<'ast> for V<'_> {
+    impl<'ast> Visit<'ast> for V {
         fn visit_type(&mut self, _: &'ast Type) {}
         fn visit_variant(&mut self, v: &'ast syn::Variant) {
             if let Some((_, e)) = &v.discriminant {
@@ -255,10 +265,18 @@ fn check_values(item: &Item, const_params: &[String]) -> Vec<LeakError> {
             syn::visit::visit_variant(self, v);
         }
         fn visit_trait_item_const(&mut self, c: &'ast syn::TraitItemConst) {
-            if let Some((_, e)) = &c.default {
-                self.check(e);
-            }
-            syn::visit::visit_trait_item_const(self, c);
+            self.scoped(&c.generics, |s| {
+                if let Some((_, e)) = &c.default {
+                    s.check(e);
+                }
+                syn::visit::visit_trait_item_const(s, c);
+            });
+        }
+        fn visit_trait_item_fn(&mut self, f: &'ast syn::TraitItemFn) {
+            self.scoped(&f.sig.generics, |s| syn::visit::visit_trait_item_fn(s, f));
+        }
+        fn visit_trait_item_type(&mut self, t: &'ast syn::TraitItemType) {
+            self.scoped(&t.generics, |s| syn::visit::visit_trait_item_type(s, t));
         }
         fn visit_const_param(&mut self, c: &'ast syn::ConstParam) {
             if let Some(e) = &c.default {
@@ -275,11 +293,19 @@ fn check_values(item: &Item, const_params: &[String]) -> Vec<LeakError> {
         // Provided-method bodies are not analysed (documented gap).
         fn visit_block(&mut self, _: &'ast syn::Block) {}
     }
+    let generics = match item {
+        Item::Struct(i) => &i.generics,
+        Item::Enum(i) => &i.generics,
+        Item::Union(i) => &i.generics,
+        Item::Trait(i) => &i.generics,
+        Item::Type(i) => &i.generics,
+        _ => return Vec::new(),
+    };
     let mut v = V {
-        consts: const_params,
+        consts: Vec::new(),
         errors: Vec::new(),
     };
-    Visit::visit_item(&mut v, item);
+    v.scoped(generics, |v| Visit::visit_item(v, item));
     v.errors
 }
 
@@ -481,22 +507,6 @@ fn refusals(e: type_leak::NotInternableError, opts: &crate::options::Options) ->
     out
 }
 
-/// Every const generic parameter declared anywhere in `item` (item, methods,
-/// generic associated types): the names that `check_values` accepts in a value
-/// path. A name is enough there: what is carried is decided by type-leak.
-fn const_param_names(item: &Item) -> Vec<String> {
-    struct V(Vec<String>);
-    impl<'ast> Visit<'ast> for V {
-        fn visit_const_param(&mut self, c: &'ast syn::ConstParam) {
-            self.0.push(c.ident.to_string());
-            syn::visit::visit_const_param(self, c);
-        }
-    }
-    let mut v = V(Vec::new());
-    Visit::visit_item(&mut v, item);
-    v.0
-}
-
 /// The analysis of an item, or every cause that no table can carry.
 pub type Analysed = std::result::Result<Option<Analysis>, Vec<LeakError>>;
 
@@ -520,7 +530,7 @@ fn analyze_full(item: &Item, opts: &crate::options::Options) -> Analysed {
         return Ok(None);
     }
     let mut own = check_trait_paths(item, opts.allow_std_prelude);
-    own.extend(check_values(item, &const_param_names(item)));
+    own.extend(check_values(item));
     if own.is_empty() {
         if let Ok(analysis) = intern(item, opts) {
             return Ok(Some(analysis));
@@ -588,6 +598,33 @@ fn text(t: &impl ToTokens) -> String {
     t.to_token_stream().to_string()
 }
 
+/// Where a token is written, as text. A token with the span of the call has none: it is not
+/// written in the item, but made (type-leak says `Self` with it for the tokens of a macro), and
+/// is matched by what it says. `Span` has no equality, but its `Debug` is the position in a proc
+/// macro. Where the spans are all alike (a stream that `quote!` made, a test build) no token has
+/// a position, and the text alone tells nodes apart.
+fn spot(t: &TokenTree, call: &str) -> String {
+    let at = format!("{:?}", t.span());
+    if at == call {
+        String::new()
+    } else {
+        at
+    }
+}
+
+/// `text`, led by where the first and the last token are written, to match a node by what it
+/// says *and* where: the same type in two places is two nodes.
+fn place(t: &impl ToTokens) -> String {
+    let tokens = t.to_token_stream();
+    let call = format!("{:?}", Span::call_site());
+    let end = |t: Option<TokenTree>| t.map_or_else(String::new, |t| spot(&t, &call));
+    let (first, last) = (
+        tokens.clone().into_iter().next(),
+        tokens.clone().into_iter().last(),
+    );
+    format!("{} {} {}", end(first), end(last), tokens)
+}
+
 /// The tokens of `ts` one by one, groups opened.
 fn leaves(ts: TokenStream) -> Vec<TokenTree> {
     ts.into_iter()
@@ -598,12 +635,14 @@ fn leaves(ts: TokenStream) -> Vec<TokenTree> {
         .collect()
 }
 
-/// Where the tokens of `needle` are in a row in `hay`, by text.
+/// Where the tokens of `needle` are in a row in `hay`, by text and place ([`spot`]).
 fn find_tokens(hay: &[TokenTree], needle: &[TokenTree]) -> Option<usize> {
+    let call = format!("{:?}", Span::call_site());
     let same = |w: &[TokenTree]| {
-        w.iter()
-            .zip(needle)
-            .all(|(a, b)| a.to_string() == b.to_string())
+        w.iter().zip(needle).all(|(a, b)| {
+            let at = spot(b, &call);
+            a.to_string() == b.to_string() && (at.is_empty() || at == spot(a, &call))
+        })
     };
     match needle.len() {
         0 => None,
@@ -613,14 +652,15 @@ fn find_tokens(hay: &[TokenTree], needle: &[TokenTree]) -> Option<usize> {
 
 /// Rewrites what is an error already into what type-leak accepts, so that it goes on to
 /// find the rest: the trait and value paths that announce's checks found, and what
-/// type-leak refused. Nodes are matched by their text. A type or a value is replaced as
-/// a whole; where only a path in it is refused (the bound of a trait object, the trait
-/// of `<Self as Tr>::X`, a macro) the smallest type or value around it is. `opaque` also
-/// looks for the tokens of a refusal in those of a macro.
+/// type-leak refused. Nodes are matched by their text and place ([`place`]). A type or a
+/// value is replaced as a whole; where only a path in it is refused (the bound of a trait
+/// object, the trait of `<Self as Tr>::X`, a macro) the smallest type or value around it is.
+/// `opaque` also looks for the tokens of a refusal in those of a macro.
 #[derive(Default, Clone)]
 struct Neutralise {
-    /// The relative trait and value paths that announce's checks found.
+    /// The relative trait and value paths that announce's checks found, by [`place`].
     own: HashSet<String>,
+    /// What type-leak refused, by [`place`].
     types: HashSet<String>,
     opaque: Vec<TokenStream>,
     replaced: usize,
@@ -632,7 +672,7 @@ struct Neutralise {
 
 impl Neutralise {
     fn refused(&self, node: &impl ToTokens) -> bool {
-        !self.types.is_empty() && self.types.contains(&text(node))
+        !self.types.is_empty() && self.types.contains(&place(node))
     }
 
     /// Replaces `node` by `with()` when it is `whole` refused or holds a refused path;
@@ -658,7 +698,7 @@ impl Neutralise {
 
 impl VisitMut for Neutralise {
     fn visit_trait_bound_mut(&mut self, b: &mut syn::TraitBound) {
-        if self.in_dyn == 0 && self.own.contains(&text(&b.path)) {
+        if self.in_dyn == 0 && self.own.contains(&place(&b.path)) {
             // Absolute; the arguments stay, type-leak reads the types in them.
             let last = b.path.segments.last().cloned();
             b.path = Path {
@@ -690,7 +730,7 @@ impl VisitMut for Neutralise {
         let whole = self.refused(e)
             || matches!(&*e, Expr::Path(p) if self.in_type == 0
                 && p.qself.is_none()
-                && self.own.contains(&text(&p.path)));
+                && self.own.contains(&place(&p.path)));
         self.cover(e, whole, syn::visit_mut::visit_expr_mut, || {
             syn::parse_quote!(0)
         });
@@ -727,8 +767,9 @@ impl VisitMut for Neutralise {
     }
 }
 
-/// The types and paths of an item by their text after `fixes` (what type-leak saw of them),
-/// to report an error found in the rewritten item at the tokens as written.
+/// The types and paths of an item by their text and place after `fixes` (what type-leak saw
+/// of them), to report an error found in the rewritten item at the tokens as written. The
+/// tokens of an error that holds nothing replaced are their own place already.
 struct Originals {
     fixes: Vec<Neutralise>,
     found: HashMap<String, TokenStream>,
@@ -740,7 +781,7 @@ impl Originals {
             let mut seen = node.clone();
             rewrite(fix, &mut seen);
             self.found
-                .entry(text(&seen))
+                .entry(place(&seen))
                 .or_insert_with(|| node.to_token_stream());
         }
     }
@@ -765,7 +806,7 @@ impl<'ast> Visit<'ast> for Originals {
             let tokens = leaves(needle.clone());
             if let Some(at) = find_tokens(&inside, &tokens) {
                 self.found
-                    .entry(text(needle))
+                    .entry(place(needle))
                     .or_insert_with(|| inside[at..at + tokens.len()].iter().cloned().collect());
             }
         }
@@ -799,29 +840,36 @@ const PASSES: usize = 32;
 /// found.
 ///
 /// type-leak reports every refusal of a pass, but a relative type only shows in a pass that
-/// succeeds. So what is an error is replaced by what type-leak accepts ([`Neutralise`]) in a
-/// copy of the item, the paths of `own` first and the refused tokens after each pass, until
-/// a pass succeeds. A pass that rewrites nothing looks for the refusals in the tokens of
-/// macros; one that still rewrites nothing is the end. Errors are at the tokens of `item`.
+/// succeeds, and so does what the encoders say of the entries ([`repeater_impls`]). So what
+/// is an error is replaced by what type-leak accepts ([`Neutralise`]) in a copy of the item,
+/// the paths of `own` first and the refused tokens after each pass, until a pass succeeds. A
+/// pass that rewrites nothing looks for the refusals in the tokens of macros; one that still
+/// rewrites nothing is the end. Errors are at the tokens of `item`.
 fn failures(item: &Item, opts: &crate::options::Options, own: Vec<LeakError>) -> Vec<LeakError> {
     let mut fix = Neutralise::default();
-    fix.own.extend(own.iter().map(|e| text(&e.tokens)));
+    fix.own.extend(own.iter().map(|e| place(&e.tokens)));
     let mut work = item.clone();
     fix.visit_item_mut(&mut work);
     let mut fixes = vec![fix.clone()];
     let mut refused = Vec::new();
     let mut required = Vec::new();
+    let mut encoded = Vec::new();
     for _ in 0..PASSES {
         let found = match intern(&work, opts) {
             Ok(analysis) => {
                 required = analysis.required().map(|(_, t)| t.clone()).collect();
+                // The table of a repeater is written for the entries: what stops that is a
+                // cause too.
+                if let (Some(repeater), false) = (&opts.repeater, matches!(item, Item::Type(_))) {
+                    encoded = repeater_impls(&analysis, repeater).1;
+                }
                 break;
             }
             Err(e) => refusals(e, opts),
         };
         let opaque: Vec<_> = found.iter().map(|r| r.tokens.clone()).collect();
         for r in found {
-            if fix.types.insert(text(&r.tokens)) {
+            if fix.types.insert(place(&r.tokens)) {
                 refused.push(r);
             }
         }
@@ -843,7 +891,7 @@ fn failures(item: &Item, opts: &crate::options::Options, own: Vec<LeakError>) ->
         found: HashMap::new(),
     };
     originals.visit_item(item);
-    let at = |e: LeakError| match originals.found.get(&text(&e.tokens)).cloned() {
+    let at = |e: LeakError| match originals.found.get(&place(&e.tokens)).cloned() {
         Some(tokens) => moved_to(e, tokens),
         None => e,
     };
@@ -853,6 +901,7 @@ fn failures(item: &Item, opts: &crate::options::Options, own: Vec<LeakError>) ->
         let reason = unrepeated(item);
         errors.extend(required.iter().map(|ty| at(LeakError::new(ty, reason))));
     }
+    errors.extend(encoded.into_iter().map(&at));
     errors
 }
 
@@ -885,6 +934,40 @@ fn encode_error(e: type_leak::EncodeError) -> LeakError {
             format!("with a type that cannot be encoded ({})", e),
         ),
     }
+}
+
+/// One impl of `repeater` per required entry of `analysis`, written by type-leak from the
+/// context of the entry: its own generics with their bounds and where predicates, and the
+/// trait arguments that encode the ones the type uses (const generics through the slots of
+/// the repeater). The impl is for `()`: no entry names `Self` (`allow_self = false`), so any
+/// marker will do, and `()` is what a consumer's projection names. And the causes that keep
+/// an entry from having one, each once: a const generic that several entries use stops them
+/// all.
+fn repeater_impls(
+    analysis: &Analysis,
+    repeater: &Path,
+) -> (Vec<(usize, type_leak::RepeaterImpl)>, Vec<LeakError>) {
+    let slots = RepeaterSlots::new(repeater.clone());
+    let marker: Type = syn::parse_quote!(());
+    let (mut impls, mut errors) = (Vec::new(), Vec::<LeakError>::new());
+    for (ix, _) in analysis.required() {
+        match analysis
+            .referrer
+            .repeater_impl_with(ix, ImplSelf::Marker(&marker), |value, param| {
+                slots.encode_const(value, &param.ty)
+            }) {
+            Ok(r) => impls.push((ix, r)),
+            Err(e) => {
+                let e = encode_error(e);
+                let same =
+                    |x: &LeakError| x.reason == e.reason && place(&x.tokens) == place(&e.tokens);
+                if !errors.iter().any(same) {
+                    errors.push(e);
+                }
+            }
+        }
+    }
+    (impls, errors)
 }
 
 /// The record of `errors` for `item`, with the texts that a call says about each; `None`
@@ -937,26 +1020,12 @@ pub fn table(item: &Item, opts: &crate::options::Options, random: u64) -> Result
     };
     let id = syn::LitInt::new(&format!("{}u64", random), Span::call_site());
     let referrer = &analysis.referrer;
-    // One impl per required entry, written by type-leak from the context of
-    // the entry: its own generics with their bounds and where predicates, and
-    // the trait arguments that encode the ones the type uses (const generics
-    // through the slots of the repeater). The impl is for `()`: no entry names
-    // `Self` (`allow_self = false`), so any marker will do, and `()` is what a
-    // consumer's projection names.
-    let slots = RepeaterSlots::new(repeater.clone());
-    let marker: Type = syn::parse_quote!(());
+    let (written, errors) = repeater_impls(&analysis, repeater);
+    if !errors.is_empty() {
+        return failed(item, random, errors);
+    }
     let mut impls = TokenStream::new();
-    let mut errors = Vec::new();
-    for (ix, _) in analysis.required() {
-        let r = match referrer.repeater_impl_with(ix, ImplSelf::Marker(&marker), |value, param| {
-            slots.encode_const(value, &param.ty)
-        }) {
-            Ok(r) => r,
-            Err(e) => {
-                errors.push(encode_error(e));
-                continue;
-            }
-        };
+    for (ix, r) in written {
         let (impl_generics, _, where_clause) = r.generics.split_for_impl();
         let (args, self_ty, ty) = (&r.args, &r.self_ty, &r.ty);
         impls.extend(quote! {
@@ -965,9 +1034,6 @@ pub fn table(item: &Item, opts: &crate::options::Options, random: u64) -> Result
                 type Type = #ty;
             }
         });
-    }
-    if !errors.is_empty() {
-        return failed(item, random, errors);
     }
     let table = TypeLeak::new(repeater.clone(), id, referrer.clone(), analysis.context);
     // The consumer reads the META back and uses the same indices as the impls
@@ -1077,6 +1143,41 @@ mod tests {
             Some(Table::Failed(f)) => f,
             _ => panic!("a record"),
         }
+    }
+
+    #[derive(Default)]
+    struct Paths(Vec<Path>);
+
+    impl<'ast> Visit<'ast> for Paths {
+        fn visit_path(&mut self, p: &'ast Path) {
+            self.0.push(p.clone());
+            syn::visit::visit_path(self, p);
+        }
+    }
+
+    /// The tokens of `path` as `it` has them, which is where a refusal is made of in use: a
+    /// path of it, or with `run` a run of its tokens (a macro's). Else `path` as parsed, which
+    /// is in no place of `it`.
+    fn written(it: &Item, path: &Path, run: bool) -> TokenStream {
+        let found = if run {
+            let (hay, needle) = (leaves(it.to_token_stream()), leaves(path.to_token_stream()));
+            let same = |w: &&[TokenTree]| {
+                w.iter()
+                    .zip(&needle)
+                    .all(|(a, b)| a.to_string() == b.to_string())
+            };
+            hay.windows(needle.len())
+                .find(same)
+                .map(|w| w.iter().cloned().collect())
+        } else {
+            let mut all = Paths::default();
+            all.visit_item(it);
+            all.0
+                .iter()
+                .find(|p| text(*p) == text(path))
+                .map(|p| p.to_token_stream())
+        };
+        found.unwrap_or_else(|| path.to_token_stream())
     }
 
     /// The rows of a table, `item => text`, a line each.
@@ -1395,6 +1496,37 @@ mod tests {
     }
 
     #[test]
+    fn a_value_path_is_a_const_parameter_of_its_own_scope() {
+        // The parameter of a method or of a generic associated type is not one of the item,
+        // nor of another method.
+        for bad in [
+            quote! { trait T { const M: usize = N; fn f<const N: usize>(&self); } },
+            quote! { trait T { fn f<const N: usize>(&self); const M: usize = N; } },
+            quote! { trait T { fn f<const N: usize>(&self); fn g<const M: usize = N>(&self); } },
+            quote! { trait T { fn f<const N: usize>(&self); fn g<U: ::x::Tr<{ N }>>(&self); } },
+            quote! { trait T { type A<const N: usize>; const M: usize = N; } },
+            quote! { trait T { type A<const N: usize>; type B<U: ::x::Tr<{ N }>>; } },
+            quote! { trait T { type A<const N: usize>; fn g<U: ::x::Tr<{ N }>>(&self); } },
+        ] {
+            assert_eq!(causes(bad.clone()), ["N: value"], "{}", bad);
+            assert_eq!(causes_with(bad.clone(), &with_repeater()), ["N: value"]);
+        }
+        // Its own scope, and the item's everywhere.
+        for ok in [
+            quote! { trait T { fn f<const N: usize, const M: usize = N>(&self); } },
+            quote! { trait T { fn f<const N: usize>(&self) where Self: ::x::Tr<{ N }>; } },
+            quote! { trait T { type A<const N: usize>: ::x::Tr<{ N }>; } },
+            quote! { trait T<const N: usize> { const M: usize = N; fn f(&self) where Self: ::x::Tr<{ N }>; } },
+            quote! { trait T<const N: usize> { fn f<const M: usize>(&self) where Self: ::x::Tr<{ N }>; } },
+            quote! { trait T<const N: usize> { type A<const M: usize = N>; } },
+            quote! { struct S<const N: usize, const M: usize = N>; },
+        ] {
+            let a = analyze(&item(ok.clone()), &opts());
+            assert!(a.is_ok(), "{}: {:?}", ok, a.err().unwrap());
+        }
+    }
+
+    #[test]
     fn values_inside_a_type_are_carried_with_it() {
         for (it, ty) in rows(
             "
@@ -1630,6 +1762,31 @@ mod tests {
         assert_eq!(causes_with(it, &with_repeater()), ["crate::Idx: const"]);
         // Not used by a carried type: nothing to encode.
         leaked(quote! { struct S<const N: crate::Idx> { a: Local, b: [u8; 4] } });
+    }
+
+    #[test]
+    fn a_const_that_cannot_be_encoded_is_reported_with_the_other_causes() {
+        // The table is written for the entries that are left when the rest is replaced.
+        check("
+            struct S<T: Base, const N: crate::Idx> { a: Local<N>, t: T } => Base: trait | crate::Idx: const
+            struct S<T: Base, const N: crate::Idx> { a: Local<N>, b: Wrap<'_>, t: T } => Base: trait | Wrap<'_>: refused | crate::Idx: const
+            enum E<const N: crate::Idx> { A = M, B(Local<N>) } => M: value | crate::Idx: const
+            struct S<const N: crate::Idx, const M: crate::Idx2> { a: Local<N>, b: Other<M> } => crate::Idx: const | crate::Idx2: const
+            struct S<T: Base, const N: crate::Idx> { a: Local, t: T } => Base: trait
+        ", &with_repeater());
+        // One cause makes several entries fail, and is one error.
+        check("
+            struct S<T: Base, const N: crate::Idx> { a: Local<N>, b: Other<N>, t: T } => Base: trait | crate::Idx: const
+        ", &with_repeater());
+        // Without a repeater there is no table to write.
+        check("
+            struct S<T: Base, const N: crate::Idx> { a: Local<N>, t: T } => Base: trait | Local<N>: relative
+        ", &opts());
+        let record = record(
+            quote! { struct S<T: Base, const N: crate::Idx> { a: Local<N>, t: T } },
+            &with_repeater(),
+        );
+        assert_eq!(record.errors.len(), 2);
     }
 
     #[test]
@@ -2095,8 +2252,17 @@ mod tests {
             trait Sub: Base { const M: usize = N; fn f(&self, a: Wrap<'_>, b: Local, c: [u8; N]); } => Base: trait | N: value | Wrap<'_>: refused | Local: relative | [u8;N]: relative
             type A<T: Base> = Option<Local>; => Base: trait | Option<Local>: alias
             trait T: Base + inner::Other<u8> where Self: Third { fn f(&self) -> Local; } => Third: trait | Base: trait | inner::Other<u8>: trait | Local: relative
-            struct S { a: Local, b: Wrap<'_>, c: Other, d: Vec<&'_ u8>, e: Local, f: Wrap<'_> } => Wrap<'_>: refused | Vec<&'_u8>: the relative prelude name `Vec` | Local: relative | Other: relative
+            struct S { a: Local, b: Wrap<'_>, c: Other, d: Vec<&'_ u8>, e: Local } => Wrap<'_>: refused | Vec<&'_u8>: the relative prelude name `Vec` | Local: relative | Other: relative
         ", &opts());
+        // The same refused type in two places is a cause in each, or one where the places are
+        // alike (a test build has no positions).
+        let mut twice = causes(
+            "struct S { a: Wrap<'_>, b: Wrap<'_>, z: Local }"
+                .parse()
+                .unwrap(),
+        );
+        twice.dedup();
+        assert_eq!(twice, ["Wrap<'_>: refused", "Local: relative"]);
         // A repeater carries the relative type: it is no error, the rest still are.
         check("
             struct S<T: Base> { a: Local, t: T } => Base: trait
@@ -2213,11 +2379,12 @@ mod tests {
                 let (refused, it) = left.split_once(" | ").unwrap();
                 let refused: Path = syn::parse_str(refused).unwrap();
                 let mut it = item(it.parse().unwrap());
+                let refused = written(&it, &refused, opaque);
                 let mut fix = Neutralise::default();
                 if opaque {
-                    fix.opaque.push(refused.to_token_stream());
+                    fix.opaque.push(refused);
                 } else {
-                    fix.types.insert(text(&refused));
+                    fix.types.insert(place(&refused));
                 }
                 fix.visit_item_mut(&mut it);
                 assert_eq!(squash(it), squash(item(want.parse().unwrap())), "{}", left);

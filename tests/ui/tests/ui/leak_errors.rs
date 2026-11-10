@@ -98,3 +98,54 @@ fn main() {
     let _ = d::Runner { a: inner::UiLocal }.clone();
     let _ = d::Checked { a: inner::UiLocal }.clone();
 }
+
+// Every cause is at its own place: not at the first node that says the same, and not one error
+// for a type written in two places. A const generic that cannot be encoded is a cause too, and
+// a value path names a const parameter only where the parameter is in scope.
+mod e {
+    use super::inner::{UiArr, UiBase, UiLocal, UiWrap};
+
+    const N: usize = 4;
+
+    // Only `f` has a lifetime that is in its return type alone.
+    #[announce::announce(repeater = crate::Repeater)]
+    pub trait Lifetimes {
+        fn g<'a>(&self, a: UiWrap<'a>);
+        fn f<'a>(&self, a: UiWrap<'a>) -> &'a u8;
+    }
+
+    // `UiLocal` is a parameter of `f`, and a type in the return type of `g`.
+    #[announce::announce]
+    pub trait Shadow: UiBase {
+        fn f<UiLocal>(&self, x: UiLocal);
+        fn g(&self) -> UiLocal;
+    }
+
+    // The same type in two methods: two errors.
+    #[announce::announce]
+    pub trait Places {
+        fn a(&self, x: UiWrap<'_>);
+        fn b(&self, y: UiWrap<'_>);
+    }
+
+    // The trait path, and the const generic that no table carries.
+    #[announce::announce(repeater = crate::Repeater)]
+    pub struct Encoded<T: UiBase, const N: crate::inner::UiIdx>(pub UiArr<N>, pub T);
+
+    // The `N` of the default is the constant, not the parameter of `f`.
+    #[announce::announce(repeater = crate::Repeater)]
+    pub trait Scoped {
+        const M: usize = N;
+        fn f<const N: usize>(&self);
+    }
+
+    macro_rules! ty {
+        ($($t:tt)*) => {
+            u8
+        };
+    }
+
+    // The `Self` in the macro is underlined where it is written.
+    #[announce::announce(repeater = crate::Repeater)]
+    pub struct InMacro<T = ty!(Self)>(pub T, pub UiLocal);
+}

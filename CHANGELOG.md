@@ -46,6 +46,8 @@
   and `type_leak_error(..)` elements. A user check or `meta =` with the same last segment
   (`my::type_leak_error(1)`) is no longer taken for them. `Entry::find_meta` still compares the
   last segment.
+- A value path names a const parameter only where the parameter is in scope: the const
+  parameter `N` of a method no longer lets `const M: usize = N;` of the trait pass.
 - Breaking: `TypeLeak::from_kv` is removed. `TypeLeak` implements `syn::parse::Parse` for the
   `type_leak(..)` META element instead (`Entry::type_leak()` is unchanged).
 - Breaking: `KvArgs` and `Meta::kv()` are removed. Parse `key = value` args with your own
