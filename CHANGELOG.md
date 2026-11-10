@@ -126,6 +126,20 @@
 - Breaking: `KvArgs` and `Meta::kv()` are removed. Parse `key = value` args with your own
   `syn::parse::Parse` impl, through `Meta::parse_args_with`.
 
+### announce-std
+
+- The mocks are generated at build time, for the compiling rustc, from a list of std
+  traits that is read from std's own source. A trait or a method that the compiler does
+  not have is left out of the mock. The `announce_std_rust_1_N` cfgs and the `rustversion`
+  build dependency are gone.
+- The list is `std-traits.txt`. The dev tool `tools/gen-std` writes it
+  (`cargo run --manifest-path tools/gen-std/Cargo.toml --target-dir target/gen-std`). It
+  replaces the Python generator `tools/gen_std.py`, which copied the traits from
+  newer-type-std.
+- `BuildHasher::hash_one` is mocked from Rust 1.71, where it became stable.
+- `ToOwned::clone_into` is mocked from Rust 1.63, where it became stable. It was in the
+  mock on every compiler before.
+
 ## 0.2.0
 
 ### Merging

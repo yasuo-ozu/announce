@@ -1,0 +1,747 @@
+# The std traits that announce-std mocks, with their signatures.
+# Read from the rust-src of rustc 1.99.1 (58cf8f9c3 2026-10-13) by tools/gen-std.
+# Do not edit by hand: run
+#   cargo run --manifest-path tools/gen-std/Cargo.toml --target-dir target/gen-std
+# announce-std/build.rs keeps the records and items that the compiling rustc has,
+# and writes the mocks. The format is described in announce-std/build.rs.
+
+glob-since 1.94
+
+trait alloc GlobalAlloc
+path ::core::alloc::GlobalAlloc
+since 1.28
+std no
+derive no
+unsafe yes
+head
+item 1.28 required unsafe fn alloc(&self, layout: ::core::alloc::Layout) -> *mut ::core::primitive::u8
+item 1.28 required unsafe fn dealloc(&self, ptr: *mut ::core::primitive::u8, layout: ::core::alloc::Layout)
+item 1.28 provided unsafe fn alloc_zeroed(&self, layout: ::core::alloc::Layout) -> *mut ::core::primitive::u8
+item 1.28 provided unsafe fn realloc(&self, ptr: *mut ::core::primitive::u8, layout: ::core::alloc::Layout, new_size: ::core::primitive::usize) -> *mut ::core::primitive::u8
+
+trait any Any
+path ::core::any::Any
+since 1.0
+std no
+derive no
+unsafe no
+head : 'static
+item 1.34 required fn type_id(&self) -> ::core::any::TypeId
+
+trait borrow Borrow
+path ::core::borrow::Borrow
+since 1.0
+std no
+derive no
+unsafe no
+head <Borrowed: ?::core::marker::Sized>
+item 1.0 required fn borrow(&self) -> &Borrowed
+
+trait borrow BorrowMut
+path ::core::borrow::BorrowMut
+since 1.0
+std no
+derive no
+unsafe no
+head <Borrowed: ?::core::marker::Sized>: ::core::borrow::Borrow<Borrowed>
+item 1.0 required fn borrow_mut(&mut self) -> &mut Borrowed
+
+trait borrow ToOwned
+path ::std::borrow::ToOwned
+since 1.0
+std yes
+derive no
+unsafe no
+head
+item 1.0 required type Owned: ::core::borrow::Borrow<Self>
+item 1.0 required fn to_owned(&self) -> Self::Owned
+item 1.63 provided fn clone_into(&self, target: &mut Self::Owned)
+
+trait clone Clone
+path ::core::clone::Clone
+since 1.0
+std no
+derive yes
+unsafe no
+head : ::core::marker::Sized
+fallback-trait : ::core::clone::Clone
+fallback-impl <__T: ?::core::marker::Sized + ::core::clone::Clone> Clone for __T
+item 1.0 required fn clone(&self) -> Self
+item 1.0 provided fn clone_from(&mut self, source: &Self)
+
+trait cmp PartialEq
+path ::core::cmp::PartialEq
+since 1.0
+std no
+derive yes
+unsafe no
+head <Rhs: ?::core::marker::Sized = Self>
+fallback-trait <Rhs: ?::core::marker::Sized = Self>: ::core::cmp::PartialEq<Rhs>
+fallback-impl <__T: ?::core::marker::Sized + ::core::cmp::PartialEq<Rhs>, Rhs: ?::core::marker::Sized> PartialEq<Rhs> for __T
+item 1.0 required fn eq(&self, other: &Rhs) -> ::core::primitive::bool
+item 1.0 provided fn ne(&self, other: &Rhs) -> ::core::primitive::bool
+
+trait cmp Eq
+path ::core::cmp::Eq
+since 1.0
+std no
+derive yes
+unsafe no
+head : ::core::cmp::PartialEq<Self>
+fallback-trait : ::core::cmp::Eq
+fallback-impl <__T: ?::core::marker::Sized + ::core::cmp::Eq> Eq for __T
+
+trait cmp PartialOrd
+path ::core::cmp::PartialOrd
+since 1.0
+std no
+derive yes
+unsafe no
+head <Rhs: ?::core::marker::Sized = Self>: ::core::cmp::PartialEq<Rhs>
+fallback-trait <Rhs: ?::core::marker::Sized = Self>: ::core::cmp::PartialOrd<Rhs>
+fallback-impl <__T: ?::core::marker::Sized + ::core::cmp::PartialOrd<Rhs>, Rhs: ?::core::marker::Sized> PartialOrd<Rhs> for __T
+item 1.0 required fn partial_cmp(&self, other: &Rhs) -> ::core::option::Option<::core::cmp::Ordering>
+item 1.0 provided fn lt(&self, other: &Rhs) -> ::core::primitive::bool
+item 1.0 provided fn le(&self, other: &Rhs) -> ::core::primitive::bool
+item 1.0 provided fn gt(&self, other: &Rhs) -> ::core::primitive::bool
+item 1.0 provided fn ge(&self, other: &Rhs) -> ::core::primitive::bool
+
+trait cmp Ord
+path ::core::cmp::Ord
+since 1.0
+std no
+derive yes
+unsafe no
+head : ::core::cmp::Eq + ::core::cmp::PartialOrd<Self>
+fallback-trait : ::core::cmp::Ord
+fallback-impl <__T: ?::core::marker::Sized + ::core::cmp::Ord> Ord for __T
+item 1.0 required fn cmp(&self, other: &Self) -> ::core::cmp::Ordering
+
+trait convert AsRef
+path ::core::convert::AsRef
+since 1.0
+std no
+derive no
+unsafe no
+head <T: ?::core::marker::Sized>
+item 1.0 required fn as_ref(&self) -> &T
+
+trait convert AsMut
+path ::core::convert::AsMut
+since 1.0
+std no
+derive no
+unsafe no
+head <T: ?::core::marker::Sized>
+item 1.0 required fn as_mut(&mut self) -> &mut T
+
+trait convert Into
+path ::core::convert::Into
+since 1.0
+std no
+derive no
+unsafe no
+head <T>: ::core::marker::Sized
+item 1.0 required fn into(self) -> T
+
+trait convert TryInto
+path ::core::convert::TryInto
+since 1.34
+std no
+derive no
+unsafe no
+head <T>: ::core::marker::Sized
+item 1.34 required type Error
+item 1.34 required fn try_into(self) -> ::core::result::Result<T, Self::Error>
+
+trait default Default
+path ::core::default::Default
+since 1.0
+std no
+derive yes
+unsafe no
+head : ::core::marker::Sized
+fallback-trait : ::core::default::Default
+fallback-impl <__T: ?::core::marker::Sized + ::core::default::Default> Default for __T
+item 1.0 required fn default() -> Self
+
+trait error Error
+path ::core::error::Error
+since 1.81
+std no
+derive no
+unsafe no
+head : ::core::fmt::Debug + ::core::fmt::Display
+item 1.30 provided fn source(&self) -> ::core::option::Option<&(dyn ::core::error::Error + 'static)>
+
+trait error Error
+path ::std::error::Error
+since 1.0
+until 1.81
+std yes
+derive no
+unsafe no
+head : ::core::fmt::Debug + ::core::fmt::Display
+item 1.30 provided fn source(&self) -> ::core::option::Option<&(dyn ::std::error::Error + 'static)>
+
+trait fmt Display
+path ::core::fmt::Display
+since 1.0
+std no
+derive no
+unsafe no
+head
+item 1.0 required fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result
+
+trait fmt Debug
+path ::core::fmt::Debug
+since 1.0
+std no
+derive yes
+unsafe no
+head
+fallback-trait : ::core::fmt::Debug
+fallback-impl <__T: ?::core::marker::Sized + ::core::fmt::Debug> Debug for __T
+item 1.0 required fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result
+
+trait fmt Binary
+path ::core::fmt::Binary
+since 1.0
+std no
+derive no
+unsafe no
+head
+item 1.0 required fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result
+
+trait fmt Octal
+path ::core::fmt::Octal
+since 1.0
+std no
+derive no
+unsafe no
+head
+item 1.0 required fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result
+
+trait fmt LowerHex
+path ::core::fmt::LowerHex
+since 1.0
+std no
+derive no
+unsafe no
+head
+item 1.0 required fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result
+
+trait fmt UpperHex
+path ::core::fmt::UpperHex
+since 1.0
+std no
+derive no
+unsafe no
+head
+item 1.0 required fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result
+
+trait fmt LowerExp
+path ::core::fmt::LowerExp
+since 1.0
+std no
+derive no
+unsafe no
+head
+item 1.0 required fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result
+
+trait fmt UpperExp
+path ::core::fmt::UpperExp
+since 1.0
+std no
+derive no
+unsafe no
+head
+item 1.0 required fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result
+
+trait fmt Pointer
+path ::core::fmt::Pointer
+since 1.0
+std no
+derive no
+unsafe no
+head
+item 1.0 required fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result
+
+trait fmt Write
+path ::core::fmt::Write
+since 1.0
+std no
+derive no
+unsafe no
+head
+item 1.0 required fn write_str(&mut self, s: &::core::primitive::str) -> ::core::fmt::Result
+item 1.1 provided fn write_char(&mut self, c: ::core::primitive::char) -> ::core::fmt::Result
+item 1.0 provided fn write_fmt(&mut self, args: ::core::fmt::Arguments<'_>) -> ::core::fmt::Result
+
+trait future Future
+path ::core::future::Future
+since 1.36
+std no
+derive no
+unsafe no
+head
+item 1.36 required type Output
+item 1.36 required fn poll(self: ::core::pin::Pin<&mut Self>, cx: &mut ::core::task::Context<'_>) -> ::core::task::Poll<Self::Output>
+
+trait future IntoFuture
+path ::core::future::IntoFuture
+since 1.64
+std no
+derive no
+unsafe no
+head
+item 1.64 required type Output
+item 1.64 required type IntoFuture: ::core::future::Future<Output = Self::Output>
+item 1.64 required fn into_future(self) -> Self::IntoFuture
+
+trait hash Hash
+path ::core::hash::Hash
+since 1.0
+std no
+derive yes
+unsafe no
+head
+fallback-trait : ::core::hash::Hash
+fallback-impl <__T: ?::core::marker::Sized + ::core::hash::Hash> Hash for __T
+item 1.0 required fn hash<H: ::core::hash::Hasher>(&self, state: &mut H)
+
+trait hash Hasher
+path ::core::hash::Hasher
+since 1.0
+std no
+derive no
+unsafe no
+head
+item 1.0 required fn finish(&self) -> ::core::primitive::u64
+item 1.0 required fn write(&mut self, bytes: &[::core::primitive::u8])
+item 1.3 provided fn write_u8(&mut self, i: ::core::primitive::u8)
+item 1.3 provided fn write_u16(&mut self, i: ::core::primitive::u16)
+item 1.3 provided fn write_u32(&mut self, i: ::core::primitive::u32)
+item 1.3 provided fn write_u64(&mut self, i: ::core::primitive::u64)
+item 1.26 provided fn write_u128(&mut self, i: ::core::primitive::u128)
+item 1.3 provided fn write_usize(&mut self, i: ::core::primitive::usize)
+item 1.3 provided fn write_i8(&mut self, i: ::core::primitive::i8)
+item 1.3 provided fn write_i16(&mut self, i: ::core::primitive::i16)
+item 1.3 provided fn write_i32(&mut self, i: ::core::primitive::i32)
+item 1.3 provided fn write_i64(&mut self, i: ::core::primitive::i64)
+item 1.26 provided fn write_i128(&mut self, i: ::core::primitive::i128)
+item 1.3 provided fn write_isize(&mut self, i: ::core::primitive::isize)
+
+trait hash BuildHasher
+path ::core::hash::BuildHasher
+since 1.7
+std no
+derive no
+unsafe no
+head
+note `hash_one` is part of the mock from Rust 1.71, where it became stable. On older
+note compilers the mock has `build_hasher` only: hash a value with `x.hash(&mut b.build_hasher())`.
+item 1.7 required type Hasher: ::core::hash::Hasher
+item 1.7 required fn build_hasher(&self) -> Self::Hasher
+item 1.71 provided fn hash_one<T: ::core::hash::Hash>(&self, x: T) -> ::core::primitive::u64 where Self: ::core::marker::Sized, Self::Hasher: ::core::hash::Hasher
+
+trait io Read
+path ::std::io::Read
+since 1.0
+std yes
+derive no
+unsafe no
+head
+item 1.0 required fn read(&mut self, buf: &mut [::core::primitive::u8]) -> ::std::io::Result<::core::primitive::usize>
+
+trait io Write
+path ::std::io::Write
+since 1.0
+std yes
+derive no
+unsafe no
+head
+item 1.0 required fn write(&mut self, buf: &[::core::primitive::u8]) -> ::std::io::Result<::core::primitive::usize>
+item 1.0 required fn flush(&mut self) -> ::std::io::Result<()>
+item 1.0 provided fn write_all(&mut self, buf: &[::core::primitive::u8]) -> ::std::io::Result<()>
+
+trait io BufRead
+path ::std::io::BufRead
+since 1.0
+std yes
+derive no
+unsafe no
+head : ::std::io::Read
+item 1.0 required fn fill_buf(&mut self) -> ::std::io::Result<&[::core::primitive::u8]>
+item 1.0 required fn consume(&mut self, amount: ::core::primitive::usize)
+
+trait io Seek
+path ::std::io::Seek
+since 1.0
+std yes
+derive no
+unsafe no
+head
+item 1.0 required fn seek(&mut self, pos: ::std::io::SeekFrom) -> ::std::io::Result<::core::primitive::u64>
+item 1.55 provided fn rewind(&mut self) -> ::std::io::Result<()>
+item 1.51 provided fn stream_position(&mut self) -> ::std::io::Result<::core::primitive::u64>
+item 1.80 provided fn seek_relative(&mut self, offset: ::core::primitive::i64) -> ::std::io::Result<()>
+
+trait iter IntoIterator
+path ::core::iter::IntoIterator
+since 1.0
+std no
+derive no
+unsafe no
+head
+item 1.0 required type Item
+item 1.0 required type IntoIter: ::core::iter::Iterator<Item = Self::Item>
+item 1.0 required fn into_iter(self) -> Self::IntoIter
+
+trait iter Extend
+path ::core::iter::Extend
+since 1.0
+std no
+derive no
+unsafe no
+head <A>
+item 1.0 required fn extend<T: ::core::iter::IntoIterator<Item = A>>(&mut self, iter: T)
+
+trait iter Iterator
+path ::core::iter::Iterator
+since 1.0
+std no
+derive no
+unsafe no
+head
+item 1.0 required type Item
+item 1.0 required fn next(&mut self) -> ::core::option::Option<Self::Item>
+item 1.0 provided fn size_hint(&self) -> (::core::primitive::usize, ::core::option::Option<::core::primitive::usize>)
+item 1.0 provided fn count(self) -> ::core::primitive::usize where Self: ::core::marker::Sized
+item 1.0 provided fn last(self) -> ::core::option::Option<Self::Item> where Self: ::core::marker::Sized
+item 1.0 provided fn nth(&mut self, n: ::core::primitive::usize) -> ::core::option::Option<Self::Item>
+
+trait iter FusedIterator
+path ::core::iter::FusedIterator
+since 1.26
+std no
+derive no
+unsafe no
+head : ::core::iter::Iterator
+
+trait iter ExactSizeIterator
+path ::core::iter::ExactSizeIterator
+since 1.0
+std no
+derive no
+unsafe no
+head : ::core::iter::Iterator
+item 1.0 provided fn len(&self) -> ::core::primitive::usize
+
+trait iter DoubleEndedIterator
+path ::core::iter::DoubleEndedIterator
+since 1.0
+std no
+derive no
+unsafe no
+head : ::core::iter::Iterator
+item 1.0 required fn next_back(&mut self) -> ::core::option::Option<Self::Item>
+item 1.37 provided fn nth_back(&mut self, n: ::core::primitive::usize) -> ::core::option::Option<Self::Item>
+item 1.27 provided fn rfold<B, F>(self, init: B, f: F) -> B where Self: ::core::marker::Sized, F: ::core::ops::FnMut(B, Self::Item) -> B
+item 1.27 provided fn rfind<P>(&mut self, predicate: P) -> ::core::option::Option<Self::Item> where Self: ::core::marker::Sized, P: ::core::ops::FnMut(&Self::Item) -> ::core::primitive::bool
+
+trait marker Copy
+path ::core::marker::Copy
+since 1.0
+std no
+derive yes
+unsafe no
+head : ::core::clone::Clone
+fallback-trait : ::core::marker::Copy
+fallback-impl <__T: ?::core::marker::Sized + ::core::marker::Copy> Copy for __T
+
+trait net ToSocketAddrs
+path ::std::net::ToSocketAddrs
+since 1.0
+std yes
+derive no
+unsafe no
+head
+item 1.0 required type Iter: ::core::iter::Iterator<Item = ::std::net::SocketAddr>
+item 1.0 required fn to_socket_addrs(&self) -> ::std::io::Result<Self::Iter>
+
+trait ops Deref
+path ::core::ops::Deref
+since 1.0
+std no
+derive no
+unsafe no
+head
+item 1.0 required type Target: ?::core::marker::Sized
+item 1.0 required fn deref(&self) -> &Self::Target
+
+trait ops DerefMut
+path ::core::ops::DerefMut
+since 1.0
+std no
+derive no
+unsafe no
+head : ::core::ops::Deref
+item 1.0 required fn deref_mut(&mut self) -> &mut Self::Target
+
+trait ops Index
+path ::core::ops::Index
+since 1.0
+std no
+derive no
+unsafe no
+head <Idx: ?::core::marker::Sized>
+item 1.0 required type Output: ?::core::marker::Sized
+item 1.0 required fn index(&self, index: Idx) -> &Self::Output
+
+trait ops IndexMut
+path ::core::ops::IndexMut
+since 1.0
+std no
+derive no
+unsafe no
+head <Idx: ?::core::marker::Sized>: ::core::ops::Index<Idx>
+item 1.0 required fn index_mut(&mut self, index: Idx) -> &mut Self::Output
+
+trait ops Not
+path ::core::ops::Not
+since 1.0
+std no
+derive no
+unsafe no
+head
+item 1.0 required type Output
+item 1.0 required fn not(self) -> Self::Output
+
+trait ops BitAnd
+path ::core::ops::BitAnd
+since 1.0
+std no
+derive no
+unsafe no
+head <Rhs = Self>
+item 1.0 required type Output
+item 1.0 required fn bitand(self, rhs: Rhs) -> Self::Output
+
+trait ops BitOr
+path ::core::ops::BitOr
+since 1.0
+std no
+derive no
+unsafe no
+head <Rhs = Self>
+item 1.0 required type Output
+item 1.0 required fn bitor(self, rhs: Rhs) -> Self::Output
+
+trait ops BitXor
+path ::core::ops::BitXor
+since 1.0
+std no
+derive no
+unsafe no
+head <Rhs = Self>
+item 1.0 required type Output
+item 1.0 required fn bitxor(self, rhs: Rhs) -> Self::Output
+
+trait ops Shl
+path ::core::ops::Shl
+since 1.0
+std no
+derive no
+unsafe no
+head <Rhs = Self>
+item 1.0 required type Output
+item 1.0 required fn shl(self, rhs: Rhs) -> Self::Output
+
+trait ops Shr
+path ::core::ops::Shr
+since 1.0
+std no
+derive no
+unsafe no
+head <Rhs = Self>
+item 1.0 required type Output
+item 1.0 required fn shr(self, rhs: Rhs) -> Self::Output
+
+trait ops BitAndAssign
+path ::core::ops::BitAndAssign
+since 1.8
+std no
+derive no
+unsafe no
+head <Rhs = Self>
+item 1.8 required fn bitand_assign(&mut self, rhs: Rhs)
+
+trait ops BitOrAssign
+path ::core::ops::BitOrAssign
+since 1.8
+std no
+derive no
+unsafe no
+head <Rhs = Self>
+item 1.8 required fn bitor_assign(&mut self, rhs: Rhs)
+
+trait ops BitXorAssign
+path ::core::ops::BitXorAssign
+since 1.8
+std no
+derive no
+unsafe no
+head <Rhs = Self>
+item 1.8 required fn bitxor_assign(&mut self, rhs: Rhs)
+
+trait ops ShlAssign
+path ::core::ops::ShlAssign
+since 1.8
+std no
+derive no
+unsafe no
+head <Rhs = Self>
+item 1.8 required fn shl_assign(&mut self, rhs: Rhs)
+
+trait ops ShrAssign
+path ::core::ops::ShrAssign
+since 1.8
+std no
+derive no
+unsafe no
+head <Rhs = Self>
+item 1.8 required fn shr_assign(&mut self, rhs: Rhs)
+
+trait ops Add
+path ::core::ops::Add
+since 1.0
+std no
+derive no
+unsafe no
+head <Rhs = Self>
+item 1.0 required type Output
+item 1.0 required fn add(self, rhs: Rhs) -> Self::Output
+
+trait ops Sub
+path ::core::ops::Sub
+since 1.0
+std no
+derive no
+unsafe no
+head <Rhs = Self>
+item 1.0 required type Output
+item 1.0 required fn sub(self, rhs: Rhs) -> Self::Output
+
+trait ops Mul
+path ::core::ops::Mul
+since 1.0
+std no
+derive no
+unsafe no
+head <Rhs = Self>
+item 1.0 required type Output
+item 1.0 required fn mul(self, rhs: Rhs) -> Self::Output
+
+trait ops Div
+path ::core::ops::Div
+since 1.0
+std no
+derive no
+unsafe no
+head <Rhs = Self>
+item 1.0 required type Output
+item 1.0 required fn div(self, rhs: Rhs) -> Self::Output
+
+trait ops Rem
+path ::core::ops::Rem
+since 1.0
+std no
+derive no
+unsafe no
+head <Rhs = Self>
+item 1.0 required type Output
+item 1.0 required fn rem(self, rhs: Rhs) -> Self::Output
+
+trait ops Neg
+path ::core::ops::Neg
+since 1.0
+std no
+derive no
+unsafe no
+head
+item 1.0 required type Output
+item 1.0 required fn neg(self) -> Self::Output
+
+trait ops AddAssign
+path ::core::ops::AddAssign
+since 1.8
+std no
+derive no
+unsafe no
+head <Rhs = Self>
+item 1.8 required fn add_assign(&mut self, rhs: Rhs)
+
+trait ops SubAssign
+path ::core::ops::SubAssign
+since 1.8
+std no
+derive no
+unsafe no
+head <Rhs = Self>
+item 1.8 required fn sub_assign(&mut self, rhs: Rhs)
+
+trait ops MulAssign
+path ::core::ops::MulAssign
+since 1.8
+std no
+derive no
+unsafe no
+head <Rhs = Self>
+item 1.8 required fn mul_assign(&mut self, rhs: Rhs)
+
+trait ops DivAssign
+path ::core::ops::DivAssign
+since 1.8
+std no
+derive no
+unsafe no
+head <Rhs = Self>
+item 1.8 required fn div_assign(&mut self, rhs: Rhs)
+
+trait ops RemAssign
+path ::core::ops::RemAssign
+since 1.8
+std no
+derive no
+unsafe no
+head <Rhs = Self>
+item 1.8 required fn rem_assign(&mut self, rhs: Rhs)
+
+trait process Termination
+path ::std::process::Termination
+since 1.61
+std yes
+derive no
+unsafe no
+head
+item 1.61 required fn report(self) -> ::std::process::ExitCode
+
+trait string ToString
+path ::std::string::ToString
+since 1.0
+std yes
+derive no
+unsafe no
+head
+item 1.0 required fn to_string(&self) -> ::std::string::String
+
+trait task Wake
+path ::std::task::Wake
+since 1.51
+std yes
+derive no
+unsafe no
+head
+item 1.51 required fn wake(self: ::std::sync::Arc<Self>)
+item 1.51 provided fn wake_by_ref(self: &::std::sync::Arc<Self>)

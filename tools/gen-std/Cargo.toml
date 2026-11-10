@@ -1,0 +1,16 @@
+[package]
+name = "gen-std"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Reads the rust-src of a toolchain and writes announce-std/std-traits.txt"
+
+[dependencies]
+proc-macro2 = "1"
+quote = "1"
+prettyplease = "0.2"
+syn = { version = "2", features = ["full", "visit-mut", "extra-traits"] }
+
+# Standalone: not a member of the repository workspace, so the workspace and its
+# MSRV builds never see this tool.
+[workspace]

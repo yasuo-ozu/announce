@@ -110,20 +110,15 @@ fn rust_files(dir: &FsPath, out: &mut Vec<PathBuf>) {
 }
 
 /// Every definition in the source of the test suites of the repository
-/// (`tests/`, the std mocks of `announce-std`, and the sources of `announce` and
-/// `announce-core`'s `helper`, whose tests are full of items in strings that the tests
-/// below cover separately). The items are those a user could pass to `#[announce]`, and more.
+/// (`tests/`, and the sources of `announce` and `announce-core`'s `helper`, whose tests
+/// are full of items in strings that the tests below cover separately). The items are
+/// those a user could pass to `#[announce]`, and more.
 #[test]
 fn fast_path_never_accepts_more_than_the_analysis_on_the_test_suites() {
     // The repository: this package is in `tests/` of it.
     let root = FsPath::new(env!("CARGO_MANIFEST_DIR")).join("..");
     let mut files = Vec::new();
-    for dir in [
-        "tests",
-        "announce-std/src",
-        "announce-core/src/helper",
-        "src",
-    ] {
+    for dir in ["tests", "announce-core/src/helper", "src"] {
         rust_files(&root.join(dir), &mut files);
     }
     let (mut accepted, mut seen, mut parsed) = (0, 0, 0);
