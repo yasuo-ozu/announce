@@ -12,27 +12,26 @@ env:
 jobs:
   check:
     # Tests, UI tests, docs, clippy and rustfmt in one job.
+    # The UI tests are `#[subcrate(should_error = ..)]` modules in tests/ui_*.rs (the
+    # package announce-tests): its build script checks rustc's diagnostics for them.
 
     runs-on: ubuntu-latest
 
     steps:
     - uses: actions/checkout@v4
-    - name: Install nightly Rust (for the UI tests)
-      run: rustup toolchain install nightly --profile minimal
     - name: Build
       run: cargo build --workspace --verbose
-    - name: Run tests (every workspace member, README doctests included)
+    - name: Run tests (every workspace member, UI tests and README doctests included)
       run: cargo test --workspace --verbose
     - name: Test announce without its default feature
       run: cargo test -p announce --no-default-features --verbose
-    - name: Build no_std definers for a target without std
+    - name: Build announce for a target without std
       # `announce` without the default feature `proc-macro-api` has no proc-macro2
       # or syn in the graph of the target. `-p` keeps the other members, which turn
-      # the feature on, out of the build. The tests of the trampolines of
-      # tests/nostd run in `cargo test --workspace` above.
+      # the feature on, out of the build. The `#![no_std]` definer of tests/nostd.rs
+      # is built for the host by `cargo test --workspace` above.
       run: |
         rustup target add x86_64-unknown-none
-        cargo build -p announce-test-nostd --target x86_64-unknown-none --verbose
         cargo build -p announce -p announce-std --no-default-features --target x86_64-unknown-none --verbose
     - name: Run the renamed-dependency tests (a separate workspace)
       working-directory: tests/renamed-ws
@@ -40,12 +39,6 @@ jobs:
     - name: Run the compat test (a callback built with announce 0.2 from crates.io, a separate workspace)
       working-directory: tests/compat-0.2
       run: cargo test --verbose
-    - name: Run the UI tests
-      # trybuild compares compiler output with the snapshots in tests/ui/tests/ui,
-      # which were recorded with a nightly rustc; other versions word some errors
-      # differently.
-      working-directory: tests/ui
-      run: cargo +nightly test --verbose
     - name: Build docs
       run: |
         cargo doc --no-deps -p announce -p announce-core -p announce-macros -p announce-std --verbose
@@ -59,8 +52,9 @@ jobs:
 
   msrv:
     # 1.57: announce, announce-core (with announce::helper), announce-macros,
-    # announce-std, the cross-crate tests with subcrate (tests/subcrate), announce
-    # without its default feature; 1.59: the whole workspace (a `repeater` needs 1.59);
+    # announce-std, announce without its default feature; 1.59: the whole workspace
+    # (a `repeater` needs 1.59), without the UI tests, whose texts are those of a
+    # current rustc;
     # 1.78: announce and announce-core with `#[diagnostic::on_unimplemented]` and without
     # `#[diagnostic::do_not_recommend]` (1.85), the path the other toolchains here do not take.
     # tools/msrv.sh builds a scratch copy with an MSRV-compatible lock file.

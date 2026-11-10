@@ -1,13 +1,12 @@
 //! Every public item of the former `announce-helper` crate is reachable as
-//! `announce::helper::*`, from a crate that depends on `announce` alone (this one:
-//! `announce-core`, which holds the code, is not a dependency here).
+//! `announce::helper::*`, from a crate that does not depend on `announce-core`, which
+//! holds the code.
 //!
 //! The functions `callback` and `transformer` take and return `proc_macro2` streams, so
 //! they are called here directly. The macros `callback!` and `transformer!` of the same
 //! names (kept for compatibility) define `#[proc_macro]` functions, so they can only be
-//! expanded in a proc-macro crate. `tests/derive` does that, also with `announce` as its
-//! only link to the code. Here their paths are resolved.
-#![cfg(feature = "proc-macro-api")]
+//! expanded in a proc-macro crate. The subcrate `derive` (src/lib.rs) does that, also
+//! with `announce` as its only link to the code. Here their paths are resolved.
 
 use announce::helper::{
     // Functions.
@@ -46,7 +45,7 @@ use announce::helper::{attrs, leak, type_leak};
 // `#[macro_export]` in `announce-core`, re-exported by `helper`): a function and a macro
 // of one name are in different namespaces, so one `use` imports both. The macros are not
 // expanded here (they emit `#[proc_macro]`); `callback!` and `transformer!` are tested in
-// `tests/user` through `tests/derive`.
+// the test files through the subcrate `derive`.
 
 use proc_macro2::TokenStream;
 use syn::parse::ParseStream;

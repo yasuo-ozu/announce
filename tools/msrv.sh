@@ -1,10 +1,10 @@
 #!/bin/sh
 # Builds and tests announce on its minimum Rust versions, in a scratch copy:
-#   1.57   announce, announce-core (with `announce::helper`), announce-macros,
-#          announce-std and the tests without a `repeater` (derive, machinery*,
-#          subcrate: the cross-crate tests with `subcrate`); announce without its
-#          default feature `proc-macro-api`
-#   1.59   the whole workspace
+#   1.57   announce, announce-core (with `announce::helper`), announce-macros and
+#          announce-std; announce without its default feature `proc-macro-api`. Not
+#          the tests (announce-tests, renamed): their definers use `repeater`s
+#   1.59   the whole workspace, without the UI tests: `tests/ui_*.rs` are emptied in
+#          the copy, as they assert the texts of a current rustc
 #   1.78   announce and announce-core, and the texts of a failing `announce::same_context!`:
 #          1.78 has `#[diagnostic::on_unimplemented]` and not yet `do_not_recommend` (1.85).
 #          The other steps here have neither, and stable and nightly have both
@@ -44,11 +44,12 @@ run() {
     cargo "+$@" --offline
 }
 
-run 1.57.0 test -p announce -p announce-core -p announce-macros -p announce-std \
-    -p announce-test-derive -p announce-test-machinery -p announce-test-machinery-lib \
-    -p announce-test-machinery-user -p announce-test-subcrate
+run 1.57.0 test -p announce -p announce-core -p announce-macros -p announce-std
 run 1.57.0 build -p announce-std --no-default-features
 run 1.57.0 build -p announce --no-default-features
+for f in tests/ui_*.rs; do
+    : >"$f"
+done
 run 1.59.0 test --workspace
 run 1.78.0 test -p announce -p announce-core
 

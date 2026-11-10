@@ -343,6 +343,15 @@ fn read_dummy(input: TokenStream) -> syn::Result<Dummy> {
     }
 }
 
+/// What `fastpath::accepts` says of `item`, checked against the full analysis of the
+/// same item (which does not use the fast path). `Ok(accepted)` when they agree; `Err`
+/// with a message when the fast path accepted an item that the analysis needs an entry
+/// for or rejects. For the tests of this repository (`tests/fast_path.rs`), not API.
+#[doc(hidden)]
+pub fn check_fast_path(item: &syn::Item, opts: &Options) -> Result<bool, String> {
+    fastpath::compare(item, opts, &leak::analyze_full(item, opts))
+}
+
 /// The body of the hidden `Capture` derive that `#[announce]` expands to.
 /// Not part of the API.
 ///
