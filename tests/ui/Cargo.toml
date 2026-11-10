@@ -13,6 +13,7 @@ announce = { path = "../.." }
 announce-test-defs = { path = "../defs" }
 announce-test-derive = { path = "../derive" }
 announce-test-machinery-lib = { path = "../machinery-lib" }
+announce-test-ui-lib = { path = "recorded-lib" }
 
 [dev-dependencies]
 trybuild = "1"

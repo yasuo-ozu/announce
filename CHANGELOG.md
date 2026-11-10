@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.3.0 (unreleased)
+
+### Added
+
+- `#[announce(strict = false)]` (`strict` is a bool, default `true`; merged announcements are
+  strict unless one says `false`). A type or path that cannot be named outside its module is an
+  error at the definition, as in 0.2. With `strict = false` the definition records it in the
+  `META` instead (`type_leak_error(..)`, below) and emits a private marker that only the module
+  of the item can see, and the call checks it. Mistakes in the options stay errors.
+- `announce::same_context!`, a callback for the chain of a trampoline call that requires the
+  call to be in the module of the items it receives (their function bodies and `use super::*`
+  submodules too). It gives one error for each cause, at the type or path in the definition
+  (all of it underlined) and worded like the errors of type-leak, with the call in rustc's
+  note about the bound. The texts need Rust 1.78 (`#[diagnostic::on_unimplemented]`); 1.85
+  shortens the error. The check is a `const _` item: put it beside an `impl`, not in it. A
+  callback later in the chain that emits the item outside its module gets rustc's own "cannot
+  find type" errors first, and with a relative trait path in a bound only rustc's error appears.
+- `announce::helper::LeakFailure` and `LeakError`, read from the new `META` element
+  `type_leak_error(id = R, errors = [(TOKENS) "reason" { message = "..", notes = [".."],
+  help = ".." }, ..], krate = "..")`, with `Entry::leak_failure()`, `Entry::item_resolved(&krate)`
+  (the item, and the check of `LeakFailure::assume_success` for a record) and `same_context`,
+  the function behind the macro. `Entry::type_leak()` returns a record as an error, one line
+  for each cause (``this macro cannot use `m::Item`: `Local` cannot be named outside its module;
+  ..``). `krate` is the definer's crate as Cargo names it, which the texts use for a call
+  written through `$crate` (left out when unknown). A reader skips keys and tokens it does not
+  know.
+- The record is the only difference from any other call: `ANNOUNCE_FORMAT` is still `"1"`. A
+  callback built with announce 0.2 ignores it and takes the item for one that resolves
+  everywhere, which works in the module of the item; elsewhere rustc reports the names it
+  cannot find.
+
+### Changed
+
+- The definition error for a failure of the analysis is one error for each offending type or
+  path, at its tokens in the item, saying what the definer can do (``add `repeater = ..` to
+  the `#[announce]`, or write the path absolutely``; for a const generic that is not of a
+  primitive type, to use a primitive type). All the causes of an item are reported at once (also
+  in the record of `strict = false`): a relative trait path or value path no longer hides the
+  relative types and the refused types of the item.
+
 ## 0.2.0
 
 ### Merging

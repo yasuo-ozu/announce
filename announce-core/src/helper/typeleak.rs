@@ -39,6 +39,10 @@ use type_leak::{ContextId, Referrer, RepeaterSlots, UseSite};
 /// encoded too (`&'a T`), and the impl does not declare it. [`apply`](Self::apply)
 /// rewrites an item that way.
 ///
+/// A definition with no table (a failure it could not carry) has `type_leak_error(..)` instead
+/// ([`LeakFailure`](crate::helper::LeakFailure)); [`Entry::type_leak`](crate::helper::Entry::type_leak)
+/// returns that as an error.
+///
 /// The META element is
 ///
 /// ```text

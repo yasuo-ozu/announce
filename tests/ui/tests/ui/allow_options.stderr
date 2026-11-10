@@ -1,4 +1,4 @@
-error: announce: this type does not resolve outside the defining crate; add `#[announce(repeater = crate::path::to::Repeater)]` (define the trait with `announce::define_repeater!(pub Repeater);`), or write it as an absolute path (`crate::..`, `::std::vec::Vec<..>`, `::other_crate::..`; std prelude names count as relative)
+error: `u8` cannot be named outside its module: add `repeater = ..` to the `#[announce]`, or write the path absolutely
  --> tests/ui/allow_options.rs:4:12
   |
 4 |     pub a: u8,

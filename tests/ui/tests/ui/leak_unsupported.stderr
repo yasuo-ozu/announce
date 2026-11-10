@@ -1,4 +1,4 @@
-error: announce: a const generic that a carried (`repeater`) type uses must have a primitive type (`bool`, `char`, `u8`..`u128`, `i8`..`i128`, `usize`, `isize`); a type alias or another type cannot be encoded
+error: `crate::Idx` cannot be named outside its module (a const generic that is not of a primitive type): use a primitive type for the const parameter
   --> tests/ui/leak_unsupported.rs:13:32
    |
 13 | pub struct AliasConst<const N: crate::Idx>(pub Arr<N>);

@@ -1,28 +1,28 @@
-error: announce: trait paths must be absolute (`::core::fmt::Display`, `crate::Base`; `Sized` and `?Sized` may be bare); a repeater only covers types, not traits
+error: `Rel` cannot be named outside its module (a relative trait path in a bound): write the path absolutely
  --> tests/ui/trait_paths_relative.rs:8:8
   |
 8 |     T: Rel,
   |        ^^^
 
-error: announce: trait paths must be absolute (`::core::fmt::Display`, `crate::Base`; `Sized` and `?Sized` may be bare); a repeater only covers types, not traits
+error: `Rel` cannot be named outside its module (a relative trait path in a bound): write the path absolutely
   --> tests/ui/trait_paths_relative.rs:16:25
    |
 16 |     fn f(&self, x: impl Rel);
    |                         ^^^
 
-error: announce: trait paths must be absolute (`::core::fmt::Display`, `crate::Base`; `Sized` and `?Sized` may be bare); a repeater only covers types, not traits
+error: `Rel` cannot be named outside its module (a relative trait path in a bound): write the path absolutely
   --> tests/ui/trait_paths_relative.rs:22:25
    |
 22 |     fn f(&self) -> impl Rel;
    |                         ^^^
 
-error: announce: trait paths must be absolute (`::core::fmt::Display`, `crate::Base`; `Sized` and `?Sized` may be bare); a repeater only covers types, not traits
+error: `Rel` cannot be named outside its module (a relative trait path in a bound): write the path absolutely
   --> tests/ui/trait_paths_relative.rs:28:42
    |
 28 |     fn g(&self) -> ::std::boxed::Box<dyn Rel>;
    |                                          ^^^
 
-error: announce: trait paths must be absolute (`::core::fmt::Display`, `crate::Base`; `Sized` and `?Sized` may be bare); a repeater only covers types, not traits
+error: `Rel` cannot be named outside its module (a relative trait path in a bound): write the path absolutely
   --> tests/ui/trait_paths_relative.rs:34:28
    |
 34 | pub struct WithRepeater<T: Rel>(pub T, pub Local);

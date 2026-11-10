@@ -1,0 +1,104 @@
+error[E0277]: use absolute path: 'UiLocal'
+  --> tests/ui/same_context_outside.rs:11:16
+   |
+11 |         pub a: UiLocal,
+   |                ^^^^^^^ relative type, not in scope where `m::Item!` is called
+   |
+   = help: the trait `_::InModuleOf_Item` is not implemented for `announce::__private::ThisCall`
+   = note: `m::Item` is used outside its module `m`
+   = note: write `UiLocal` with an absolute path (e.g. `crate::UiLocal`), or add `repeater = ..` to the `#[announce]` of `Item`
+note: required by a bound in `_::Check::used_outside_its_module`
+  --> tests/ui/same_context_outside.rs:37:16
+   |
+37 | m::Item! { [m::Item!, announce::same_context!] }
+   |                ^^^^ required by this bound in `Check::used_outside_its_module`
+
+error[E0277]: use absolute path: 'UiLocal'
+  --> tests/ui/same_context_outside.rs:16:16
+   |
+16 |         pub a: UiLocal,
+   |                ^^^^^^^ relative type, not in scope where `super::m::Pair!` is called
+   |
+   = help: the trait `sibling::_::InModuleOf_Pair` is not implemented for `announce::__private::ThisCall`
+   = note: `super::m::Pair` is used outside its module `super::m`
+   = note: write `UiLocal` with an absolute path (e.g. `crate::UiLocal`), or add `repeater = ..` to the `#[announce]` of `Pair`
+note: required by a bound in `sibling::_::Check::used_outside_its_module`
+  --> tests/ui/same_context_outside.rs:41:34
+   |
+41 |     super::m::Pair! { [super::m::Pair!, announce::same_context!] }
+   |                                  ^^^^ required by this bound in `Check::used_outside_its_module`
+
+error[E0277]: use absolute path: 'UiOther'
+  --> tests/ui/same_context_outside.rs:17:16
+   |
+17 |         pub b: UiOther,
+   |                ^^^^^^^ relative type, not in scope where `super::m::Pair!` is called
+   |
+   = help: the trait `sibling::_::InModuleOf_Pair` is not implemented for `announce::__private::ThisCall`
+   = note: `super::m::Pair` is used outside its module `super::m`
+   = note: write `UiOther` with an absolute path (e.g. `crate::UiOther`), or add `repeater = ..` to the `#[announce]` of `Pair`
+note: required by a bound in `sibling::_::Check::used_outside_its_module`
+  --> tests/ui/same_context_outside.rs:41:34
+   |
+41 |     super::m::Pair! { [super::m::Pair!, announce::same_context!] }
+   |                                  ^^^^ required by this bound in `Check::used_outside_its_module`
+
+error[E0277]: use absolute path: 'UiLocal'
+  --> tests/ui/same_context_outside.rs:11:16
+   |
+11 |         pub a: UiLocal,
+   |                ^^^^^^^ relative type, not in scope where `m::Item!` is called
+   |
+   = help: the trait `_::InModuleOf_Item` is not implemented for `announce::__private::ThisCall`
+   = note: `m::Item` is used outside its module `m`
+   = note: write `UiLocal` with an absolute path (e.g. `crate::UiLocal`), or add `repeater = ..` to the `#[announce]` of `Item`
+note: required by a bound in `_::Check::used_outside_its_module`
+  --> tests/ui/same_context_outside.rs:46:16
+   |
+46 | m::Item! { [m::Item!, m::Pair!, m::Plain!, announce::same_context!, announce_test_derive::leak_failures!] ROWS }
+   |                ^^^^ required by this bound in `Check::used_outside_its_module`
+
+error[E0277]: use absolute path: 'UiLocal'
+  --> tests/ui/same_context_outside.rs:16:16
+   |
+16 |         pub a: UiLocal,
+   |                ^^^^^^^ relative type, not in scope where `m::Pair!` is called
+   |
+   = help: the trait `_::InModuleOf_Pair` is not implemented for `announce::__private::ThisCall`
+   = note: `m::Pair` is used outside its module `m`
+   = note: write `UiLocal` with an absolute path (e.g. `crate::UiLocal`), or add `repeater = ..` to the `#[announce]` of `Pair`
+note: required by a bound in `_::Check::used_outside_its_module`
+  --> tests/ui/same_context_outside.rs:46:26
+   |
+46 | m::Item! { [m::Item!, m::Pair!, m::Plain!, announce::same_context!, announce_test_derive::leak_failures!] ROWS }
+   |                          ^^^^ required by this bound in `Check::used_outside_its_module`
+
+error[E0277]: use absolute path: 'UiOther'
+  --> tests/ui/same_context_outside.rs:17:16
+   |
+17 |         pub b: UiOther,
+   |                ^^^^^^^ relative type, not in scope where `m::Pair!` is called
+   |
+   = help: the trait `_::InModuleOf_Pair` is not implemented for `announce::__private::ThisCall`
+   = note: `m::Pair` is used outside its module `m`
+   = note: write `UiOther` with an absolute path (e.g. `crate::UiOther`), or add `repeater = ..` to the `#[announce]` of `Pair`
+note: required by a bound in `_::Check::used_outside_its_module`
+  --> tests/ui/same_context_outside.rs:46:26
+   |
+46 | m::Item! { [m::Item!, m::Pair!, m::Plain!, announce::same_context!, announce_test_derive::leak_failures!] ROWS }
+   |                          ^^^^ required by this bound in `Check::used_outside_its_module`
+
+error[E0277]: use absolute path: 'UiLocal'
+  --> tests/ui/same_context_outside.rs:11:16
+   |
+11 |         pub a: UiLocal,
+   |                ^^^^^^^ relative type, not in scope where `crate::m::Item!` is called
+   |
+   = help: the trait `apart::call::_::InModuleOf_Item` is not implemented for `announce::__private::ThisCall`
+   = note: `crate::m::Item` is used outside its module `crate::m`
+   = note: write `UiLocal` with an absolute path (e.g. `crate::UiLocal`), or add `repeater = ..` to the `#[announce]` of `Item`
+note: required by a bound in `apart::call::_::Check::used_outside_its_module`
+  --> tests/ui/same_context_outside.rs:51:38
+   |
+51 |         crate::m::Item! { [crate::m::Item!, announce::same_context!] }
+   |                                      ^^^^ required by this bound in `Check::used_outside_its_module`

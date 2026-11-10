@@ -1,16 +1,16 @@
-error: announce: this type does not resolve outside the defining crate; add `#[announce(repeater = crate::path::to::Repeater)]` (define the trait with `announce::define_repeater!(pub Repeater);`), or write it as an absolute path (`crate::..`, `::std::vec::Vec<..>`, `::other_crate::..`; std prelude names count as relative)
+error: `Local` cannot be named outside its module: add `repeater = ..` to the `#[announce]`, or write the path absolutely
  --> tests/ui/repeater_required.rs:9:12
   |
 9 |     pub a: Local,
   |            ^^^^^
 
-error: announce: the right-hand side of type alias `Rel` must not contain relative paths; write this type as an absolute path (`crate::..`, `$crate::..` or `::other_crate::..`)
+error: `Option<Local>` cannot be named outside its module (a relative path in a type alias): write the path absolutely
   --> tests/ui/repeater_required.rs:18:16
    |
 18 | pub type Rel = Option<Local>;
    |                ^^^^^^^^^^^^^
 
-error: announce: the right-hand side of type alias `Prelude` must not contain relative paths; write this type as an absolute path (`crate::..`, `$crate::..` or `::other_crate::..`)
+error: `Vec<u8>` cannot be named outside its module (a relative path in a type alias): write the path absolutely
   --> tests/ui/repeater_required.rs:25:20
    |
 25 | pub type Prelude = Vec<u8>;

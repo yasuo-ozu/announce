@@ -1,14 +1,10 @@
-error: announce: the prelude name `Option` is relative here, so `Option<Self::Out>` does not resolve outside the defining crate
-         = note: a relative type cannot be carried with `Self::Out` in it
-         = help: write `::core::option::Option<..>` instead of `Option<..>`, or set `allow_std_prelude = true` to accept prelude names
+error: `Option<Self::Out>` cannot be named outside its module (the relative prelude name `Option`): write the path absolutely
  --> tests/ui/prelude_assoc.rs:9:20
   |
 9 |     fn f(&self) -> Option<Self::Out>;
   |                    ^^^^^^^^^^^^^^^^^
 
-error: announce: the prelude name `Option` is relative here, so `Option<Self::Out>` does not resolve outside the defining crate
-         = note: a relative type cannot be carried with `Self::Out` in it
-         = help: write `::core::option::Option<..>` instead of `Option<..>`, or set `allow_std_prelude = true` to accept prelude names
+error: `Option<Self::Out>` cannot be named outside its module (the relative prelude name `Option`): write the path absolutely
   --> tests/ui/prelude_assoc.rs:15:20
    |
 15 |     fn f(&self) -> Option<Self::Out>;

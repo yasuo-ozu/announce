@@ -1,0 +1,59 @@
+error: this macro cannot use `announce_test_ui_lib::m::Holder`: `UiLocal` cannot be named outside its module; add `repeater = ..` to its `#[announce]`, or write the path absolutely
+  --> tests/ui/recorded_type_leak.rs:60:62
+   |
+60 | announce_test_ui_lib::m::Holder! { [announce_test_ui_lib::m::Holder!, announce_test_derive::apply_leak!] FromAnotherCrate }
+   |                                                              ^^^^^^
+
+error: this macro cannot use `m::Elided`: `UiWrap<'_>` cannot be carried; write the path absolutely
+  --> tests/ui/recorded_type_leak.rs:57:18
+   |
+57 | m::Elided! { [m::Elided!, announce_test_derive::apply_leak!] ElidedFromParent }
+   |                  ^^^^^^
+
+error: this macro cannot use `m::ConstTy`: `crate::inner::UiIdx` cannot be carried (a const generic that is not of a primitive type); use a primitive type for the const parameter
+  --> tests/ui/recorded_type_leak.rs:56:19
+   |
+56 | m::ConstTy! { [m::ConstTy!, announce_test_derive::apply_leak!] ConstFromParent }
+   |                   ^^^^^^^
+
+error: this macro cannot use `m::Sub`: `UiBase` cannot be named outside its module (a relative trait path in a bound); write the path absolutely
+  --> tests/ui/recorded_type_leak.rs:53:15
+   |
+53 | m::Sub! { [m::Sub!, announce_test_derive::apply_leak!] SubFromParent }
+   |               ^^^
+
+error: this macro cannot use `m::Pair`: `UiLocal` cannot be named outside its module; add `repeater = ..` to its `#[announce]`, or write the path absolutely
+  --> tests/ui/recorded_type_leak.rs:52:16
+   |
+52 | m::Pair! { [m::Pair!, announce_test_derive::apply_leak!] PairFromParent }
+   |                ^^^^
+
+error: this macro cannot use `m::Pair`: `UiOther` cannot be named outside its module; add `repeater = ..` to its `#[announce]`, or write the path absolutely
+  --> tests/ui/recorded_type_leak.rs:52:16
+   |
+52 | m::Pair! { [m::Pair!, announce_test_derive::apply_leak!] PairFromParent }
+   |                ^^^^
+
+error: this macro cannot use `m::Item`: `UiLocal` cannot be named outside its module; add `repeater = ..` to its `#[announce]`, or write the path absolutely
+  --> tests/ui/recorded_type_leak.rs:51:16
+   |
+51 | m::Item! { [m::Item!, announce_test_derive::apply_leak!] FromParent }
+   |                ^^^^
+
+error: this macro cannot use `Pair`: `UiLocal` cannot be named outside its module; add `repeater = ..` to its `#[announce]`, or write the path absolutely
+  --> tests/ui/recorded_type_leak.rs:46:18
+   |
+46 |         Pair! { [Pair!, announce_test_derive::apply_leak!] InFn }
+   |                  ^^^^
+
+error: this macro cannot use `Pair`: `UiOther` cannot be named outside its module; add `repeater = ..` to its `#[announce]`, or write the path absolutely
+  --> tests/ui/recorded_type_leak.rs:46:18
+   |
+46 |         Pair! { [Pair!, announce_test_derive::apply_leak!] InFn }
+   |                  ^^^^
+
+error: this macro cannot use `Item`: `UiLocal` cannot be named outside its module; add `repeater = ..` to its `#[announce]`, or write the path absolutely
+  --> tests/ui/recorded_type_leak.rs:44:14
+   |
+44 |     Item! { [Item!, announce_test_derive::apply_leak!] InModule }
+   |              ^^^^

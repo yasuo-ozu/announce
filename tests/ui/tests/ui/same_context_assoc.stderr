@@ -1,0 +1,11 @@
+error: `const` items in this context need a name
+  --> tests/ui/same_context_assoc.rs:18:18
+   |
+18 |         Item! { [Item!, announce::same_context!] }
+   |                  ^^^^ `_` is not a valid name for this `const` item
+
+error: `const` items in this context need a name
+  --> tests/ui/same_context_assoc.rs:22:18
+   |
+22 |         Item! { [Item!, announce::same_context!] }
+   |                  ^^^^ `_` is not a valid name for this `const` item

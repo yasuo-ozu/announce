@@ -19,6 +19,11 @@
 //!   [`Entry::type_leak`] reads the [`TypeLeak`] table of a definition announced with
 //!   `repeater = ..`. [`TypeLeak::apply`] rewrites an item so that its types resolve
 //!   in any crate.
+//! - Use relative types as written: an item announced with `strict = false` records what no
+//!   table carries ([`Entry::leak_failure`], [`LeakFailure`]) instead of failing at the
+//!   definition. [`Entry::item_resolved`] gives the item and [`LeakFailure::assume_success`],
+//!   the check that fails outside the item's module (`announce::same_context!` adds it to a
+//!   chain, [`same_context()`]); [`Entry::type_leak`] returns the record as an error.
 //!
 //! - Detect announce: every call that announce makes starts with the prefix
 //!   `@announce_format "1"` ([`format_prefix`], [`ANNOUNCE_FORMAT`], [`Input::format`]).
@@ -32,11 +37,16 @@
 pub mod attrs;
 mod kv;
 pub mod leak;
+mod leakfail;
 mod transformer;
 mod typeleak;
 
 pub use attrs::{remove_attributes, CheckCall, OwnedAttrs, Query};
 pub use kv::KvArgs;
+pub(crate) use leakfail::{
+    cause_path, ALIAS, NOT_PRIMITIVE, REFUSED, TRAIT_PATH, VALUE_PATH, WITHOUT_REPEATER,
+};
+pub use leakfail::{same_context, try_same_context, LeakError, LeakFailure};
 pub use transformer::{signature_only, transformer};
 /// The version of `type-leak` that [`TypeLeak`] uses. Name it through this crate,
 /// so there is never a second, incompatible copy.
@@ -440,7 +450,7 @@ impl ToTokens for Meta {
 pub struct Entry {
     /// The continuation that produced this entry, as written in the list.
     pub key: Cont,
-    /// The META elements: checks, `meta =`, `mock(..)`, `type_leak(..)`.
+    /// The META elements: checks, `meta =`, `mock(..)`, `type_leak(..)`, `type_leak_error(..)`.
     pub meta: Vec<Meta>,
     /// The raw item tokens.
     pub item: TokenStream,
@@ -471,12 +481,65 @@ impl Entry {
 
     /// The `type_leak(..)` META of an entry announced with `repeater = ..`.
     /// Unknown keys are ignored.
+    ///
+    /// A recorded failure ([`leak_failure`](Self::leak_failure)) is an error
+    /// ([`LeakFailure::to_error`]), wherever the callback is called. A callback that can use the
+    /// item as written reads [`item_resolved`](Self::item_resolved) instead.
     pub fn type_leak(&self) -> Result<Option<TypeLeak>> {
+        if let Some(failure) = self.leak_failure()? {
+            return Err(failure.to_error());
+        }
         let m = match self.find_meta("type_leak") {
             Some(m) => m,
             None => return Ok(None),
         };
         TypeLeak::from_kv(&mut m.kv()?).map(Some)
+    }
+
+    /// The `type_leak_error(..)` META of an entry announced with `strict = false` whose types do
+    /// not resolve outside its module: `Ok(None)` for an entry without it, which has no
+    /// [`TypeLeak`] table then. The record's path is the key of the entry, and the item's name
+    /// is read from the payload.
+    pub fn leak_failure(&self) -> Result<Option<LeakFailure>> {
+        let m = match self.find_meta("type_leak_error") {
+            Some(m) => m,
+            None => return Ok(None),
+        };
+        let ident = leakfail::item_ident(&self.item()?)?;
+        LeakFailure::from_kv(&mut m.kv()?, self.key.path(), ident).map(Some)
+    }
+
+    /// The item as a callback emits it, and what to emit next to it: with a type table
+    /// ([`type_leak`](Self::type_leak)) the item rewritten by [`TypeLeak::apply`]; with a
+    /// recorded failure ([`leak_failure`](Self::leak_failure)) the item as written and
+    /// [`LeakFailure::assume_success`], which fails outside the item's module; otherwise the
+    /// item as written and no tokens. The item is [`item`](Self::item), with its owned attributes.
+    /// `krate` is the path of the `announce` crate where the tokens are emitted (`::announce`).
+    ///
+    /// The check is a `const _` item, so a callback that emits into an `impl` or `trait` block
+    /// puts it beside the block.
+    ///
+    /// When the item is emitted outside its module, rustc first reports its own "cannot find
+    /// type" errors for the names of the item, at the same tokens, and the error of the check
+    /// follows. When the item has a relative trait path in a bound (`trait Sub: Base`,
+    /// `T: Base`), rustc stops at its "cannot find trait" error (E0405) before it reaches the
+    /// check, so only rustc's error appears.
+    ///
+    /// ```ignore
+    /// for entry in input.entries_in_order() {
+    ///     let (item, check) = entry.item_resolved(&krate)?;
+    ///     out.extend(quote! { #item #check });
+    /// }
+    /// ```
+    pub fn item_resolved(&self, krate: &Path) -> Result<(syn::Item, TokenStream)> {
+        let mut item = self.item()?;
+        if let Some(failure) = self.leak_failure()? {
+            return Ok((item, failure.assume_success(krate)));
+        }
+        if let Some(table) = self.type_leak()? {
+            table.try_apply(&mut item)?;
+        }
+        Ok((item, TokenStream::new()))
     }
 
     /// Whether META lists a check whose last path segment is `name`. Only the
@@ -597,7 +660,14 @@ impl ToTokens for Entry {
 /// - `path(args)`: a `meta = path(args)` entry, never called ([`Entry::find_meta`]);
 /// - `mock(path)`: the item stands in for the item at `path` ([`Entry::mock`]);
 /// - `attrs(a, b)`: the attribute names that checks own ([`Entry::owned_attrs`]);
-/// - `type_leak(..)`: the type table of a `repeater` ([`Entry::type_leak`]).
+/// - `type_leak(..)`: the type table of a `repeater` ([`Entry::type_leak`]);
+/// - `type_leak_error(id = R, errors = [(TOKENS) "reason" { .. }, ..], krate = "..")`: instead of
+///   a table, what a definer announced with `strict = false` found that does not resolve outside
+///   the item's module ([`Entry::leak_failure`]; [`LeakFailure`] has the syntax). It is the only
+///   difference from any other call: `ANNOUNCE_FORMAT` is still `"1"`, and a parser that does
+///   not know the element ignores it, so a callback built with announce 0.2 takes the item for
+///   one that resolves everywhere. That works in the item's module; elsewhere rustc reports the
+///   names it cannot find.
 ///
 /// Ignore elements you do not know.
 ///
