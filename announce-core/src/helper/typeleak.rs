@@ -13,9 +13,10 @@
 //! [`Referrer::repeater_impl_with`], which encodes the same generics, so the two
 //! sides cannot disagree.
 
-use crate::helper::KvArgs;
-use proc_macro2::TokenStream;
-use syn::{Item, LitInt, Path, Result, Type};
+use crate::helper::keys::{once, read_keys};
+use proc_macro2::{Ident, TokenStream};
+use syn::parse::{Parse, ParseStream};
+use syn::{Error, Item, LitInt, Path, Result, Type};
 use template_quote::quote;
 use type_leak::{ContextId, Referrer, RepeaterSlots, UseSite};
 
@@ -53,7 +54,9 @@ use type_leak::{ContextId, Referrer, RepeaterSlots, UseSite};
 /// format. It is opaque to announce: do not parse it yourself. Its first token is a
 /// format tag, and a version of type-leak that does not match is an error.
 /// `context` is the top-level `ContextId` of the item in it, where a callback
-/// rewrites the item. Other keys are ignored when reading.
+/// rewrites the item. `TypeLeak` implements [`syn::parse::Parse`] for it
+/// (`syn::parse2::<TypeLeak>(meta)`); `repeater`, `id`, `context` and `referrer` are required, and
+/// other keys are ignored when reading.
 #[derive(Clone, Debug)]
 pub struct TypeLeak {
     /// The repeater trait, e.g. `$crate::Repeater`.
@@ -179,41 +182,63 @@ impl TypeLeak {
             type_leak(repeater = #repeater, id = #id, context = #context, referrer = [#referrer])
         }
     }
+}
 
-    /// Reads the arguments of the `type_leak(..)` META element
-    /// ([`Meta::kv`](crate::helper::Meta::kv)). Unknown keys are ignored.
-    pub fn from_kv(kv: &mut KvArgs) -> Result<Self> {
-        let call_site = proc_macro2::Span::call_site();
-        let repeater = kv
-            .tokens("repeater")
-            .ok_or_else(|| syn::Error::new(call_site, "missing `repeater`"))?;
-        let repeater: Path = syn::parse2(repeater)?;
-        let id: LitInt = kv.require("id")?;
-        let missing = || {
-            syn::Error::new(
-                call_site,
+impl Parse for TypeLeak {
+    /// Reads the `type_leak(..)` META element ([`meta`](Self::meta)). Unknown keys are ignored.
+    fn parse(input: ParseStream) -> Result<Self> {
+        let name: Ident = input.parse()?;
+        if name != "type_leak" {
+            return Err(Error::new(
+                name.span(),
+                format!("expected `type_leak(..)`, found `{}`", name),
+            ));
+        }
+        let args;
+        syn::parenthesized!(args in input);
+        let (mut repeater, mut id, mut context, mut referrer) = (None, None, None, None);
+        read_keys(
+            &args,
+            &["repeater", "id", "context", "referrer"],
+            |key, input| {
+                if key == "repeater" {
+                    once(&mut repeater, key, input.parse::<Path>()?)
+                } else if key == "id" {
+                    once(&mut id, key, input.parse::<LitInt>()?)
+                } else if key == "context" {
+                    once(&mut context, key, input.parse::<ContextId>()?)
+                } else {
+                    let content;
+                    syn::bracketed!(content in input);
+                    let read: Referrer = content.parse()?;
+                    if !content.is_empty() {
+                        return Err(content.error("unexpected tokens after the Referrer"));
+                    }
+                    once(&mut referrer, key, read)
+                }
+            },
+        )?;
+        let missing = |key: &str| {
+            Error::new(
+                name.span(),
+                format!("missing `{}` in the `type_leak(..)` META", key),
+            )
+        };
+        let repeater = repeater.ok_or_else(|| missing("repeater"))?;
+        let id = id.ok_or_else(|| missing("id"))?;
+        let old = || {
+            Error::new(
+                name.span(),
                 "announce: the `type_leak(..)` META has no `context` and `referrer`: the \
                  definition was announced by an older `announce`, whose output this version \
                  cannot read",
             )
         };
-        let context: ContextId = kv.get("context")?.ok_or_else(missing)?;
-        let referrer = kv.tokens("referrer").ok_or_else(missing)?;
-        let referrer = syn::parse::Parser::parse2(
-            |input: syn::parse::ParseStream| {
-                let content;
-                syn::bracketed!(content in input);
-                let referrer: Referrer = content.parse()?;
-                if !content.is_empty() {
-                    return Err(content.error("unexpected tokens after the Referrer"));
-                }
-                Ok(referrer)
-            },
-            referrer,
-        )?;
+        let context = context.ok_or_else(old)?;
+        let referrer = referrer.ok_or_else(old)?;
         if !referrer.contexts().any(|c| c == context) {
-            return Err(syn::Error::new(
-                call_site,
+            return Err(Error::new(
+                name.span(),
                 format!(
                     "announce: the `type_leak(..)` META names the context {}, which its \
                      `referrer` does not have",
@@ -258,9 +283,7 @@ mod tests {
     }
 
     fn read(tl: &TypeLeak) -> TypeLeak {
-        let meta: crate::helper::Meta = syn::parse2(tl.meta()).unwrap();
-        let mut kv = meta.kv().unwrap();
-        TypeLeak::from_kv(&mut kv).unwrap()
+        syn::parse2(tl.meta()).unwrap()
     }
 
     #[test]
@@ -288,26 +311,51 @@ mod tests {
     fn meta_ignores_unknown_keys_and_reports_an_old_format() {
         let tl = table_of(&syn::parse_quote! { struct S { a: Local } });
         let meta = tl.meta().to_string();
-        let with_extra: crate::helper::Meta =
-            syn::parse_str(&meta.replace("id = 7u64", "id = 7u64, future = [1, 2], other"))
-                .unwrap();
-        let mut kv = with_extra.kv().unwrap();
-        assert!(TypeLeak::from_kv(&mut kv).is_ok());
+        let with_extra = meta.replace(
+            "id = 7u64",
+            "id = 7u64, future = [1, 2], other, more = Vec<u8, A>",
+        );
+        assert!(syn::parse_str::<TypeLeak>(&with_extra).is_ok());
 
-        let old: crate::helper::Meta = syn::parse_str(
-            "type_leak(repeater = ::my::R, id = 7u64, generics = [()], types = [Local])",
-        )
-        .unwrap();
-        let err = TypeLeak::from_kv(&mut old.kv().unwrap()).unwrap_err();
+        let old = "type_leak(repeater = ::my::R, id = 7u64, generics = [()], types = [Local])";
+        let err = syn::parse_str::<TypeLeak>(old).unwrap_err();
         assert!(err.to_string().contains("older `announce`"), "{}", err);
 
-        let bad: crate::helper::Meta = syn::parse_str(&format!(
+        let bad = format!(
             "type_leak(repeater = ::my::R, id = 7u64, context = 9, referrer = [\"type-leak-format-{}\" (Local)])",
             type_leak::Referrer::FORMAT_VERSION
-        ))
-        .unwrap();
-        let err = TypeLeak::from_kv(&mut bad.kv().unwrap()).unwrap_err();
+        );
+        let err = syn::parse_str::<TypeLeak>(&bad).unwrap_err();
         assert!(err.to_string().contains("context 9"), "{}", err);
+    }
+
+    #[test]
+    fn the_keys_and_the_name_of_the_element_are_checked() {
+        let tl = table_of(&syn::parse_quote! { struct S { a: Local } });
+        let (referrer, context) = (s(&tl.referrer), tl.context);
+        let meta = |repeater: &str, id: &str, extra: &str| {
+            format!(
+                "type_leak({} {} context = {}, referrer = [{} {}])",
+                repeater, id, context, referrer, extra
+            )
+        };
+        let (r, i) = ("repeater = ::my::R,", "id = 7u64,");
+        assert!(syn::parse_str::<TypeLeak>(&meta(r, i, "")).is_ok());
+        let err = |src: String| syn::parse_str::<TypeLeak>(&src).unwrap_err().to_string();
+        assert!(err(meta("", i, "")).contains("missing `repeater`"));
+        assert!(err(meta(r, "", "")).contains("missing `id`"));
+        assert!(err(meta(r, i, "extra")).contains("unexpected tokens after the Referrer"));
+        assert!(err(meta(r, "id,", "")).contains("`id` needs a value"));
+        assert!(err(meta(r, "id = 7u64, id = 8u64,", "")).contains("duplicate key `id`"));
+        assert!(err(meta(r, "id = x,", "")).contains("expected integer literal"));
+        let other = meta(r, i, "").replace("type_leak(", "type_leak_error(");
+        let msg = err(other);
+        assert!(
+            msg.contains("expected `type_leak(..)`, found `type_leak_error`"),
+            "{}",
+            msg
+        );
+        assert!(syn::parse_str::<TypeLeak>("type_leak").is_err());
     }
 
     #[test]

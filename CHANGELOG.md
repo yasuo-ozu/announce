@@ -18,14 +18,15 @@
   callback later in the chain that emits the item outside its module gets rustc's own "cannot
   find type" errors first, and with a relative trait path in a bound only rustc's error appears.
 - `announce::helper::LeakFailure` and `LeakError`, read from the new `META` element
-  `type_leak_error(id = R, errors = [(TOKENS) "reason" { message = "..", notes = [".."],
-  help = ".." }, ..], krate = "..")`, with `Entry::leak_failure()`, `Entry::item_resolved(&krate)`
-  (the item, and the check of `LeakFailure::assume_success` for a record) and `same_context`,
-  the function behind the macro. `Entry::type_leak()` returns a record as an error, one line
-  for each cause (``this macro cannot use `m::Item`: `Local` cannot be named outside its module;
-  ..``). `krate` is the definer's crate as Cargo names it, which the texts use for a call
-  written through `$crate` (left out when unknown). A reader skips keys and tokens it does not
-  know.
+  `type_leak_error(id = R, item = Name, errors = [(TOKENS) "reason" { message = "..",
+  notes = [".."], help = ".." }, ..], krate = "..")`. `LeakFailure` implements
+  `syn::parse::Parse` for it (`item` is the item's name, raw identifiers included). Also
+  `Entry::leak_failure()`, `Entry::item_resolved(&krate)` (the item, and the check of
+  `LeakFailure::assume_success` for a record) and `same_context`, the function behind the
+  macro. `Entry::type_leak()` returns a record as an error, one line for each cause
+  (``this macro cannot use `m::Item`: `Local` cannot be named outside its module; ..``).
+  `krate` is the definer's crate as Cargo names it, which the texts use for a call written
+  through `$crate` (left out when unknown). A reader skips keys and tokens it does not know.
 - The record is the only difference from any other call: `ANNOUNCE_FORMAT` is still `"1"`. A
   callback built with announce 0.2 ignores it and takes the item for one that resolves
   everywhere, which works in the module of the item; elsewhere rustc reports the names it
@@ -43,6 +44,11 @@
   carried with the type by a `repeater`, instead of being errors for their trait or value path;
   without a `repeater` they are relative types. Trait paths in bounds and `impl Trait`, and value
   paths in discriminants, const defaults and the const arguments of a bound, stay errors.
+- Breaking: `TypeLeak::from_kv` is removed. `TypeLeak` implements `syn::parse::Parse` for the
+  `type_leak(..)` META element instead: `syn::parse2::<TypeLeak>(meta.to_token_stream())`
+  (`Entry::type_leak()` is unchanged). Unknown keys are still ignored.
+- Breaking: `KvArgs` and `Meta::kv()` are removed. Parse `key = value` args with your own
+  `syn::parse::Parse` impl, through `Meta::parse_args_with`.
 
 ## 0.2.0
 
